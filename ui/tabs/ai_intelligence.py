@@ -98,12 +98,16 @@ class MultiAgentSystem:
             sent_signal = "HOLD"
             sent_confidence = random.randint(60, 75)
             sent_reasoning = "Neutral sentiment, retail vs institutional positioning balanced"
+        
+        # Fix the f-string issue on line 164
         flow_options = ['Bullish', 'Bearish', 'Neutral']
+        selected_flow = random.choice(flow_options)
+        
         results["Sentiment Analyst"] = {
             "signal": sent_signal,
             "confidence": sent_confidence,
             "reasoning": sent_reasoning,
-            "key_levels": f"Social mentions trending, options flow: {random.choice(flow_options)}"
+            "key_levels": f"Social mentions trending, options flow: {selected_flow}"
         }
         
         # Quant Researcher
@@ -138,31 +142,37 @@ class AIStorytellerEngine:
         
         direction = "surged" if price_change > 2 else "climbed" if price_change > 0.5 else "dipped" if price_change < -0.5 else "traded mixed"
         
-        story = f"""
-## 📰 **{symbol} MARKET PULSE** - {datetime.now().strftime('%I:%M %p EST')}
-
-**THE HEADLINE:** {symbol} {direction} to ${current_price:.2f} in active trading, {'+' if price_change >= 0 else ''}{price_change:.1f}% from yesterday's close as {random.choice(['institutional', 'algorithmic', 'retail'])} money flows into the name.
-
-**WHAT'S DRIVING THE ACTION:**
-The move comes as three catalysts converge: technical momentum building after last week's breakout, sector rotation favoring {random.choice(['growth', 'value', 'cyclical'])} names, and {random.choice(['options market makers chasing delta', 'institutional rebalancing', 'earnings positioning'])} ahead of key events.
-
-**THE TECHNICAL PICTURE:**
-From a chart perspective, {symbol} is {random.choice(['testing key resistance', 'finding support', 'breaking out', 'consolidating'])} at current levels. The stock has {'outperformed' if price_change > 0 else 'underperformed'} the broader market by {abs(price_change) + random.uniform(0.5, 1.5):.1f}% over the past week, with volume running {volume/avg_volume:.1f}x the 20-day average.
-
-**WHAT THE SMART MONEY IS DOING:**
-{random.choice(['Large block trades', 'Unusual options activity', 'Dark pool accumulation'])} suggests {random.choice(['hedge funds are building positions', 'institutional investors are rotating', 'systematic strategies are triggering'])}. The {random.choice(['call/put ratio', 'put/call skew', 'volatility surface'])} indicates {random.choice(['bullish positioning', 'defensive hedging', 'neutral sentiment'])}.
-
-**KEY LEVELS TO WATCH:**
-- **Immediate resistance:** ${current_price * random.uniform(1.02, 1.05):.2f} - Previous consolidation zone
-- **Support level:** ${current_price * random.uniform(0.95, 0.98):.2f} - 20-day moving average confluence  
-- **Breakout target:** ${current_price * random.uniform(1.08, 1.12):.2f} - Measured move projection
-
-**WHAT HAPPENS NEXT:**
-The next catalyst watch: {random.choice(['Tomorrow\'s volume confirmation', 'End-of-week options expiry', 'Sector peer earnings', 'Fed policy signals'])}. If {symbol} can {random.choice(['hold above', 'break through', 'consolidate near'])} ${current_price * random.uniform(0.99, 1.01):.2f}, the path of least resistance points {random.choice(['higher', 'toward range-bound trading', 'to further downside testing'])}.
-
-*Market participants should monitor after-hours action and overnight futures for additional directional clues.*
-        """
+        # Fix f-string with newlines
+        newline = "\n"
+        catalyst_options = ["Tomorrow's volume confirmation", "End-of-week options expiry", "Sector peer earnings", "Fed policy signals"]
+        action_options = ["hold above", "break through", "consolidate near"]
+        direction_options = ["higher", "toward range-bound trading", "to further downside testing"]
+        story_parts = [
+            f"## 📰 **{symbol} MARKET PULSE** - {datetime.now().strftime('%I:%M %p EST')}",
+            "",
+            f"**THE HEADLINE:** {symbol} {direction} to ${current_price:.2f} in active trading, {'+' if price_change >= 0 else ''}{price_change:.1f}% from yesterday's close as {random.choice(['institutional', 'algorithmic', 'retail'])} money flows into the name.",
+            "",
+            "**WHAT'S DRIVING THE ACTION:**",
+            f"The move comes as three catalysts converge: technical momentum building after last week's breakout, sector rotation favoring {random.choice(['growth', 'value', 'cyclical'])} names, and {random.choice(['options market makers chasing delta', 'institutional rebalancing', 'earnings positioning'])} ahead of key events.",
+            "",
+            "**THE TECHNICAL PICTURE:**",
+            f"From a chart perspective, {symbol} is {random.choice(['testing key resistance', 'finding support', 'breaking out', 'consolidating'])} at current levels. The stock has {'outperformed' if price_change > 0 else 'underperformed'} the broader market by {abs(price_change) + random.uniform(0.5, 1.5):.1f}% over the past week, with volume running {volume/avg_volume:.1f}x the 20-day average.",
+            "",
+            "**WHAT THE SMART MONEY IS DOING:**",
+            f"{random.choice(['Large block trades', 'Unusual options activity', 'Dark pool accumulation'])} suggests {random.choice(['hedge funds are building positions', 'institutional investors are rotating', 'systematic strategies are triggering'])}. The {random.choice(['call/put ratio', 'put/call skew', 'volatility surface'])} indicates {random.choice(['bullish positioning', 'defensive hedging', 'neutral sentiment'])}.",
+            "",
+            "**KEY LEVELS TO WATCH:**",
+            f"- **Immediate resistance:** ${current_price * random.uniform(1.02, 1.05):.2f} - Previous consolidation zone",
+            f"- **Support level:** ${current_price * random.uniform(0.95, 0.98):.2f} - 20-day moving average confluence",
+            f"- **Breakout target:** ${current_price * random.uniform(1.08, 1.12):.2f} - Measured move projection",
+            "",
+            "**WHAT HAPPENS NEXT:**",
+            f"The next catalyst watch: {random.choice(catalyst_options)}. If {symbol} can {random.choice(action_options)} ${current_price * random.uniform(0.99, 1.01):.2f}, the path of least resistance points {random.choice(direction_options)}."
+            "",
+            "*Market participants should monitor after-hours action and overnight futures for additional directional clues.*"
+        ]
         
+        story = newline.join(story_parts)
         return story
 
 # ============================================================================
@@ -874,10 +884,6 @@ The chart shows a {random.choice(['ascending triangle', 'bull flag', 'cup and ha
                 """, unsafe_allow_html=True)
         else:
             st.info("No significant annotations detected. Market appears to be in normal trading range.")
-
-# ============================================================================
-# ADDITIONAL FEATURES
-# ============================================================================
 
     # Bottom section: Additional AI Features
     st.markdown("---")
