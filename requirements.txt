@@ -1,0 +1,31 @@
+# Core Streamlit and Data Analysis
+streamlit>=1.28.0
+pandas>=1.5.0
+numpy>=1.24.0
+plotly>=5.15.0
+
+# Technical Analysis Libraries
+pandas-ta>=0.3.14b
+TA-Lib>=0.4.25  # For real candlestick pattern detection
+yfinance>=0.2.18
+
+# Machine Learning and Statistics
+scikit-learn>=1.3.0
+statsmodels>=0.14.0
+
+# API and Web Requests
+requests>=2.31.0
+
+# AI/LLM Integration
+langchain-openai>=0.1.0
+openai>=1.0.0
+
+# Audio Processing (for voice features)
+pyav>=10.0.0
+
+# WebRTC for real-time audio
+streamlit-webrtc>=0.47.0
+
+# Additional utilities
+python-dateutil>=2.8.2
+pytz>=2023.3
