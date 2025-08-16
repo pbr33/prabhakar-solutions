@@ -14,7 +14,7 @@ def main():
     # --- Page Configuration ---
     st.set_page_config(
         page_title="AI Trading Agents Dashboard",
-        page_icon="📈",
+        page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -25,6 +25,7 @@ def main():
         from ui.styles import apply_custom_css
         from ui.sidebar import render_sidebar
         from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard
+        from ui.tabs import ai_intelligence  # New AI tab
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
         st.error(f"Import error: {e}")
@@ -74,12 +75,22 @@ def main():
          st.warning("Please provide all Azure OpenAI credentials in the sidebar to enable AI-powered features.")
 
     # --- Main Application Tabs ---
-    tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
+    tab_ai, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
+        "🤖 AI Intelligence",      # New AI tab - placed first for prominence
         "📊 Market Analysis",
-        "📈 Pro Dashboard & Alerts",
-        "💼 HF & PE Portfolio View",
+        "📈 Pro Dashboard",
+        "💼 Portfolio View", 
         "🚀 Auto-Trading"
     ])
+
+    with tab_ai:
+        try:
+            ai_intelligence.render()
+        except Exception as e:
+            st.error(f"AI Intelligence error: {e}")
+            if st.session_state.get('debug_mode'):
+                st.exception(e)
+            st.info("AI Intelligence features require proper API configuration.")
 
     with tab_market:
         try:
