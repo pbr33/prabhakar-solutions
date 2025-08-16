@@ -17,6 +17,137 @@ def detect_real_candlestick_patterns(data: pd.DataFrame) -> List[Dict]:
         return patterns_detected
     
     try:
+        # Try to use TA-Lib for real pattern detection
+        import talib
+        
+        # Get OHLC data
+        open_prices = data['Open'].values
+        high_prices = data['High'].values
+        low_prices = data['Low'].values
+        close_prices = data['Close'].values
+        
+        # Define TA-Lib pattern functions and their descriptions
+        pattern_functions = {
+            'CDLDOJI': ('Doji', 'Neutral', 'Market indecision - open and close prices are very close'),
+            'CDLENGULFING': ('Engulfing', 'Variable', 'One candle completely engulfs the previous candle'),
+            'CDLHAMMER': ('Hammer', 'Bullish', 'Potential reversal after downtrend - long lower shadow'),
+            'CDLSHOOTINGSTAR': ('Shooting Star', 'Bearish', 'Potential reversal after uptrend - long upper shadow'),
+            'CDLMORNINGSTAR': ('Morning Star', 'Bullish', 'Three-candle reversal pattern indicating potential uptrend'),
+            'CDLEVENINGSTAR': ('Evening Star', 'Bearish', 'Three-candle reversal pattern indicating potential downtrend'),
+            'CDLDRAGONFLYDOJI': ('Dragonfly Doji', 'Bullish', 'Doji with long lower shadow - potential reversal'),
+            'CDLGRAVESTONEDOJI': ('Gravestone Doji', 'Bearish', 'Doji with long upper shadow - potential reversal'),
+            'CDLPIERCING': ('Piercing Line', 'Bullish', 'Bullish reversal pattern in downtrend'),
+            'CDLDARKCLOUDCOVER': ('Dark Cloud Cover', 'Bearish', 'Bearish reversal pattern in uptrend'),
+            'CDLMARUBOZU': ('Marubozu', 'Variable', 'Strong directional move - no wicks'),
+            'CDLSPINNINGTOP': ('Spinning Top', 'Neutral', 'Market indecision - small body with wicks'),
+        }
+        
+        # Detect patterns
+        for func_name, (pattern_name, pattern_type, description) in pattern_functions.items():
+            try:
+                pattern_func = getattr(talib, func_name)
+                pattern_result = pattern_func(open_prices, high_prices, low_prices, close_prices)
+                
+                # Find where patterns occur (non-zero values)
+                pattern_indices = np.where(pattern_result != 0)[0]
+                
+                for idx in pattern_indices[-10:]:  # Get last 10 occurrences
+                    # Determine if bullish or bearish based on pattern result value
+                    signal_strength = pattern_result[idx]
+                    if pattern_type == 'Variable':
+                        actual_type = 'Bullish' if signal_strength > 0 else 'Bearish'
+                    else:
+                        actual_type = pattern_type
+                    
+                    patterns_detected.append({
+                        "date": data.index[idx],
+                        "name": pattern_name,
+                        "type": actual_type,
+                        "description": description,
+                        "strength": abs(signal_strength),
+                        "confidence": min(abs(signal_strength) * 20, 100)  # Convert to percentage
+                    })
+            except Exception as e:
+                continue
+                
+    except ImportError:
+        # Fallback to enhanced rule-based detection
+        st.info("TA-Lib not available. Using enhanced rule-based pattern detection.")
+        patterns_detected = detect_enhanced_rule_based_patterns(data)
+    
+    # Sort by date and return most recent patterns
+    patterns_detected.sort(key=lambda x: x['date'], reverse=True)
+    return patterns_detected[:8]  # Return top 8 most recent patterns
+
+def detect_enhanced_rule_based_patterns(data: pd.DataFrame) -> List[Dict]:
+    """Enhanced rule-based pattern detection when TA-Lib is not available."""
+    patterns = []
+    
+    if len(data) < 5:
+        return patterns
+    
+    for i in range(2, len(data)):
+        current = data.iloc[i]
+        prev = data.iloc[i-1]
+        prev2 = data.iloc[i-2] if i >= 2 else None
+        
+        # Calculate candle properties
+        body_size = abs(current['Close'] - current['Open'])
+        upper_shadow = current['High'] - max(current['Open'], current['Close'])
+        lower_shadow = min(current['Open'], current['Close']) - current['Low']
+        total_range = current['High'] - current['Low']
+        
+        # Avoid division by zero
+        if total_range == 0:
+            continue
+        
+        # Doji pattern
+        if body_size < (total_range * 0.1):
+            if lower_shadow > (total_range * 0.6):
+                pattern_type = "Dragonfly Doji"
+                signal = "Bullish"
+            elif upper_shadow > (total_range * 0.6):
+                pattern_type = "Gravestone Doji"
+                signal = "Bearish"
+            else:
+                pattern_type = "Doji"
+                signal = "Neutral"
+            
+            patterns.append({
+                "date": current.name,
+                "name": pattern_type,
+                "type": signal,
+                "description": f"Market indecision with {signal.lower()} bias",
+                "strength": 1,
+                "confidence": 70
+            })
+        
+        # Hammer pattern
+        elif (lower_shadow > body_size * 2 and 
+              upper_shadow < body_size * 0.5 and
+              i >= 5 and data.iloc[i-5:i]['Close'].mean() > current['Close']):
+            patterns.append({
+                "date": current.name,
+                "name": "Hammer",
+                "type": "Bullish",
+                "description": "Potential reversal after downtrend",
+                "strength": 1,
+                "confidence": 75
+            })
+        
+        # Shooting Star pattern
+        elif (upper_shadow > body_size * 2 and 
+              lower_shadow < body_size * 0.5 and
+              i >= 5 and data.iloc[i-5:i]['Close'].mean() < current['Close']):
+            patterns.append({
+                "date": current.name,
+                "name": "Shooting Star",
+                "type": "Bearish",
+                "description": "Potential reversal after uptrend",
+                "strength": 1,
+                "confidence": 75
+            })
+        
         # Engulfing patterns
         if prev is not None:
             prev_body = abs(prev['Close'] - prev['Open'])
@@ -218,17 +349,23 @@ def generate_comprehensive_analysis_report(llm, symbol: str, patterns_detected: 
     # Get latest indicators
     latest = enhanced_data.iloc[-1]
     
-    # Format technical indicators
+    # Format technical indicators with safe value checking
+    def safe_format(value, decimals=2):
+        """Safely format numeric values."""
+        if isinstance(value, (int, float)) and not np.isnan(value):
+            return f"{value:.{decimals}f}"
+        return "N/A"
+    
     technical_str = f"""
 **Trend & Momentum:**
-- RSI (14): {latest.get('RSI_14', 'N/A'):.2f if isinstance(latest.get('RSI_14'), (int, float)) and not np.isnan(latest.get('RSI_14', np.nan)) else 'N/A'}
-- MACD Line: {latest.get('MACD_12_26_9', 'N/A'):.2f if isinstance(latest.get('MACD_12_26_9'), (int, float)) and not np.isnan(latest.get('MACD_12_26_9', np.nan)) else 'N/A'}
-- MACD Signal: {latest.get('MACDs_12_26_9', 'N/A'):.2f if isinstance(latest.get('MACDs_12_26_9'), (int, float)) and not np.isnan(latest.get('MACDs_12_26_9', np.nan)) else 'N/A'}
-- ADX (14): {latest.get('ADX_14', 'N/A'):.2f if isinstance(latest.get('ADX_14'), (int, float)) and not np.isnan(latest.get('ADX_14', np.nan)) else 'N/A'}
-- Stochastic %K: {latest.get('STOCHk_14_3_3', 'N/A'):.2f if isinstance(latest.get('STOCHk_14_3_3'), (int, float)) and not np.isnan(latest.get('STOCHk_14_3_3', np.nan)) else 'N/A'}
+- RSI (14): {safe_format(latest.get('RSI_14'))}
+- MACD Line: {safe_format(latest.get('MACD_12_26_9'))}
+- MACD Signal: {safe_format(latest.get('MACDs_12_26_9'))}
+- ADX (14): {safe_format(latest.get('ADX_14'))}
+- Stochastic %K: {safe_format(latest.get('STOCHk_14_3_3'))}
 
 **Volatility:**
-- ATR (14): {latest.get('ATR_14', 'N/A'):.2f if isinstance(latest.get('ATR_14'), (int, float)) and not np.isnan(latest.get('ATR_14', np.nan)) else 'N/A'}
+- ATR (14): {safe_format(latest.get('ATR_14'))}
 """
     
     # Add Bollinger Band position if available
@@ -243,9 +380,9 @@ def generate_comprehensive_analysis_report(llm, symbol: str, patterns_detected: 
     # Add volume indicators
     technical_str += f"""
 **Volume:**
-- OBV: {latest.get('OBV', 'N/A'):,.0f if isinstance(latest.get('OBV'), (int, float)) and not np.isnan(latest.get('OBV', np.nan)) else 'N/A'}
-- CMF (20): {latest.get('CMF_20', 'N/A'):.2f if isinstance(latest.get('CMF_20'), (int, float)) and not np.isnan(latest.get('CMF_20', np.nan)) else 'N/A'}
-- A/D Line: {latest.get('AD', 'N/A'):,.0f if isinstance(latest.get('AD'), (int, float)) and not np.isnan(latest.get('AD', np.nan)) else 'N/A'}
+- OBV: {safe_format(latest.get('OBV'), 0) if isinstance(latest.get('OBV'), (int, float)) else 'N/A'}
+- CMF (20): {safe_format(latest.get('CMF_20'))}
+- A/D Line: {safe_format(latest.get('AD'), 0) if isinstance(latest.get('AD'), (int, float)) else 'N/A'}
 """
     
     # Format fundamental data
@@ -268,7 +405,7 @@ def generate_comprehensive_analysis_report(llm, symbol: str, patterns_detected: 
     sentiment_str = f"""
 **Market Sentiment:**
 - Overall Sentiment: {sentiment_data.get('sentiment_label', 'N/A')}
-- Sentiment Score: {sentiment_data.get('sentiment_score', 'N/A'):.2f if isinstance(sentiment_data.get('sentiment_score'), (int, float)) else 'N/A'}
+- Sentiment Score: {safe_format(sentiment_data.get('sentiment_score')) if isinstance(sentiment_data.get('sentiment_score'), (int, float)) else 'N/A'}
 - Recent Headlines:
 {chr(10).join([f"  • {headline}" for headline in sentiment_data.get('recent_headlines', [])])}
 """ if sentiment_data else "**Sentiment data not available**"
@@ -420,131 +557,4 @@ def run_ma_crossover_backtest(_api_key, ticker, start_date, end_date, initial_ca
         "trade_log": pd.DataFrame(trade_log),
         "fib_levels": detect_fibonacci_levels(df),
         "error": None
-    } Try to use TA-Lib for real pattern detection
-        import talib
-        
-        # Get OHLC data
-        open_prices = data['Open'].values
-        high_prices = data['High'].values
-        low_prices = data['Low'].values
-        close_prices = data['Close'].values
-        
-        # Define TA-Lib pattern functions and their descriptions
-        pattern_functions = {
-            'CDLDOJI': ('Doji', 'Neutral', 'Market indecision - open and close prices are very close'),
-            'CDLENGULFING': ('Engulfing', 'Variable', 'One candle completely engulfs the previous candle'),
-            'CDLHAMMER': ('Hammer', 'Bullish', 'Potential reversal after downtrend - long lower shadow'),
-            'CDLSHOOTINGSTAR': ('Shooting Star', 'Bearish', 'Potential reversal after uptrend - long upper shadow'),
-            'CDLMORNINGSTAR': ('Morning Star', 'Bullish', 'Three-candle reversal pattern indicating potential uptrend'),
-            'CDLEVENINGSTAR': ('Evening Star', 'Bearish', 'Three-candle reversal pattern indicating potential downtrend'),
-            'CDLDRAGONFLYDOJI': ('Dragonfly Doji', 'Bullish', 'Doji with long lower shadow - potential reversal'),
-            'CDLGRAVESTONEDOJI': ('Gravestone Doji', 'Bearish', 'Doji with long upper shadow - potential reversal'),
-            'CDLPIERCING': ('Piercing Line', 'Bullish', 'Bullish reversal pattern in downtrend'),
-            'CDLDARKCLOUDCOVER': ('Dark Cloud Cover', 'Bearish', 'Bearish reversal pattern in uptrend'),
-            'CDLMARUBOZU': ('Marubozu', 'Variable', 'Strong directional move - no wicks'),
-            'CDLSPINNINGTOP': ('Spinning Top', 'Neutral', 'Market indecision - small body with wicks'),
-        }
-        
-        # Detect patterns
-        for func_name, (pattern_name, pattern_type, description) in pattern_functions.items():
-            try:
-                pattern_func = getattr(talib, func_name)
-                pattern_result = pattern_func(open_prices, high_prices, low_prices, close_prices)
-                
-                # Find where patterns occur (non-zero values)
-                pattern_indices = np.where(pattern_result != 0)[0]
-                
-                for idx in pattern_indices[-10:]:  # Get last 10 occurrences
-                    # Determine if bullish or bearish based on pattern result value
-                    signal_strength = pattern_result[idx]
-                    if pattern_type == 'Variable':
-                        actual_type = 'Bullish' if signal_strength > 0 else 'Bearish'
-                    else:
-                        actual_type = pattern_type
-                    
-                    patterns_detected.append({
-                        "date": data.index[idx],
-                        "name": pattern_name,
-                        "type": actual_type,
-                        "description": description,
-                        "strength": abs(signal_strength),
-                        "confidence": min(abs(signal_strength) * 20, 100)  # Convert to percentage
-                    })
-            except Exception as e:
-                continue
-                
-    except ImportError:
-        # Fallback to enhanced rule-based detection
-        st.info("TA-Lib not available. Using enhanced rule-based pattern detection.")
-        patterns_detected = detect_enhanced_rule_based_patterns(data)
-    
-    # Sort by date and return most recent patterns
-    patterns_detected.sort(key=lambda x: x['date'], reverse=True)
-    return patterns_detected[:8]  # Return top 8 most recent patterns
-
-def detect_enhanced_rule_based_patterns(data: pd.DataFrame) -> List[Dict]:
-    """Enhanced rule-based pattern detection when TA-Lib is not available."""
-    patterns = []
-    
-    if len(data) < 5:
-        return patterns
-    
-    for i in range(2, len(data)):
-        current = data.iloc[i]
-        prev = data.iloc[i-1]
-        prev2 = data.iloc[i-2] if i >= 2 else None
-        
-        # Calculate candle properties
-        body_size = abs(current['Close'] - current['Open'])
-        upper_shadow = current['High'] - max(current['Open'], current['Close'])
-        lower_shadow = min(current['Open'], current['Close']) - current['Low']
-        total_range = current['High'] - current['Low']
-        
-        # Doji pattern
-        if body_size < (total_range * 0.1) and total_range > 0:
-            if lower_shadow > (total_range * 0.6):
-                pattern_type = "Dragonfly Doji"
-                signal = "Bullish"
-            elif upper_shadow > (total_range * 0.6):
-                pattern_type = "Gravestone Doji"
-                signal = "Bearish"
-            else:
-                pattern_type = "Doji"
-                signal = "Neutral"
-            
-            patterns.append({
-                "date": current.name,
-                "name": pattern_type,
-                "type": signal,
-                "description": f"Market indecision with {signal.lower()} bias",
-                "strength": 1,
-                "confidence": 70
-            })
-        
-        # Hammer pattern
-        elif (lower_shadow > body_size * 2 and 
-              upper_shadow < body_size * 0.5 and
-              i >= 5 and data.iloc[i-5:i]['Close'].mean() > current['Close']):
-            patterns.append({
-                "date": current.name,
-                "name": "Hammer",
-                "type": "Bullish",
-                "description": "Potential reversal after downtrend",
-                "strength": 1,
-                "confidence": 75
-            })
-        
-        # Shooting Star pattern
-        elif (upper_shadow > body_size * 2 and 
-              lower_shadow < body_size * 0.5 and
-              i >= 5 and data.iloc[i-5:i]['Close'].mean() < current['Close']):
-            patterns.append({
-                "date": current.name,
-                "name": "Shooting Star",
-                "type": "Bearish",
-                "description": "Potential reversal after uptrend",
-                "strength": 1,
-                "confidence": 75
-            })
-        
-        
+    }
