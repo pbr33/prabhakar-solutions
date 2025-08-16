@@ -58,6 +58,21 @@ def pro_get_historical_data(ticker, api_key):
     except Exception:
         return pd.DataFrame()
 
+def pro_get_intraday_data(ticker, api_key, interval='1m'):
+    """Fetches intraday data from EODHD."""
+    url = f"https://eodhd.com/api/intraday/{ticker}?interval={interval}&api_token={api_key}&fmt=json"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        return df.set_index('datetime')
+    except Exception:
+        return pd.DataFrame()
+
 def pro_get_news(ticker, api_key):
     """Fetches news from EODHD."""
     url = f"https://eodhd.com/api/news?s={ticker}&api_token={api_key}&limit=5&fmt=json"

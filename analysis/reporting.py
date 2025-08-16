@@ -98,3 +98,116 @@ def generate_equity_research_report_content(llm, ticker, year, fundamentals, mar
         return response.content
     except Exception as e:
         return f"Report generation failed: {e}"
+
+def generate_investment_memo(llm, company_data, portfolio_data: pd.DataFrame):
+    """Generates an investment memo for private equity portfolio companies using an LLM."""
+    if not llm: 
+        return "LLM not initialized."
+    
+    # Extract company information
+    company_name = company_data.get('Company Name', 'Unknown Company')
+    industry = company_data.get('Industry', 'Unknown Industry')
+    invested_capital = company_data.get('Invested Capital (M)', 0)
+    current_valuation = company_data.get('Current Valuation (M)', 0)
+    irr = company_data.get('IRR (%)', 0)
+    
+    # Calculate MOIC if not present
+    moic = current_valuation / invested_capital if invested_capital > 0 else 0
+    
+    # Portfolio summary
+    portfolio_summary = ""
+    if not portfolio_data.empty:
+        total_market_value = portfolio_data['Market Value'].sum()
+        total_pnl = portfolio_data['Unrealized PNL'].sum()
+        portfolio_summary = f"""
+        Current Portfolio Overview:
+        - Total Market Value: ${total_market_value:,.2f}
+        - Total Unrealized PNL: ${total_pnl:,.2f}
+        - Number of Positions: {len(portfolio_data)}
+        """
+
+    prompt = f"""
+    Act as a Senior Investment Professional at a Private Equity firm.
+    
+    TASK: Generate a comprehensive investment memo for our portfolio company.
+    
+    COMPANY DETAILS:
+    - Company Name: {company_name}
+    - Industry: {industry}
+    - Invested Capital: ${invested_capital:.1f}M
+    - Current Valuation: ${current_valuation:.1f}M
+    - Multiple on Invested Capital (MOIC): {moic:.1f}x
+    - Internal Rate of Return (IRR): {irr:.1f}%
+    
+    {portfolio_summary}
+    
+    MEMO STRUCTURE:
+    1. Executive Summary
+    2. Investment Thesis
+    3. Financial Performance
+    4. Key Value Creation Initiatives
+    5. Risk Assessment
+    6. Exit Strategy Considerations
+    7. Recommendations for Next Steps
+    
+    Please provide a professional, detailed memo suitable for presentation to the investment committee.
+    """
+    
+    try:
+        response = llm.invoke(prompt)
+        return response.content
+    except Exception as e:
+        return f"Investment memo generation failed: {e}"
+
+def generate_board_pack_content(llm, company_data, kpi_history: pd.DataFrame):
+    """Generates board pack content for portfolio companies using an LLM."""
+    if not llm:
+        return "LLM not initialized."
+    
+    company_name = company_data.get('Company Name', 'Unknown Company')
+    industry = company_data.get('Industry', 'Unknown Industry')
+    
+    # Format KPI history for the prompt
+    kpi_summary = ""
+    if not kpi_history.empty:
+        latest_revenue = kpi_history['revenue'].iloc[-1]
+        latest_ebitda = kpi_history['ebitda'].iloc[-1]
+        revenue_growth = ((kpi_history['revenue'].iloc[-1] / kpi_history['revenue'].iloc[0]) - 1) * 100
+        kpi_summary = f"""
+        Latest Financial Metrics:
+        - Revenue: ${latest_revenue:.1f}M
+        - EBITDA: ${latest_ebitda:.1f}M
+        - Revenue Growth (YoY): {revenue_growth:.1f}%
+        
+        Quarterly Progression:
+        {kpi_history.to_string(index=False)}
+        """
+    
+    prompt = f"""
+    Act as a Chief Operating Officer preparing a board presentation.
+    
+    TASK: Create executive-level board pack content for our portfolio company.
+    
+    COMPANY: {company_name}
+    INDUSTRY: {industry}
+    
+    {kpi_summary}
+    
+    BOARD PACK SECTIONS:
+    1. Executive Dashboard (Key Metrics & KPIs)
+    2. Financial Performance Analysis
+    3. Operational Highlights
+    4. Market Position & Competitive Landscape
+    5. Strategic Initiatives Progress
+    6. Risk Management Update
+    7. Forward-Looking Guidance
+    8. Action Items for Board Consideration
+    
+    Please provide concise, data-driven content suitable for a board of directors meeting.
+    """
+    
+    try:
+        response = llm.invoke(prompt)
+        return response.content
+    except Exception as e:
+        return f"Board pack generation failed: {e}"
