@@ -13,19 +13,29 @@ from analysis.reporting import generate_investment_memo, generate_board_pack_con
 def generate_pe_portfolio_data():
     """Generates mock private equity portfolio data."""
     companies = ['InnovateTech', 'BioHealth Solutions', 'GreenEnergy Corp']
-    return [{
-        'Company Name': name,
-        'Industry': random.choice(['SaaS', 'Biotech', 'Renewables']),
-        'Invested Capital (M)': random.uniform(50, 150),
-        'Current Valuation (M)': random.uniform(200, 600),
-        'MOIC': lambda d: d['Current Valuation (M)'] / d['Invested Capital (M)'],
-        'IRR (%)': random.uniform(18, 35),
-        'KPI History': pd.DataFrame({
-            'date': pd.to_datetime(['2023-Q1', '2023-Q2', '2023-Q3', '2023-Q4']),
-            'revenue': [random.uniform(20, 30), random.uniform(30, 40), random.uniform(40, 50), random.uniform(50, 60)],
-            'ebitda': [random.uniform(5, 10), random.uniform(10, 15), random.uniform(15, 20), random.uniform(20, 25)]
-        })
-    } for name in companies]
+    portfolio_data = []
+    
+    for name in companies:
+        invested_capital = random.uniform(50, 150)
+        current_valuation = random.uniform(200, 600)
+        moic = current_valuation / invested_capital  # Calculate MOIC directly instead of using lambda
+        
+        company_data = {
+            'Company Name': name,
+            'Industry': random.choice(['SaaS', 'Biotech', 'Renewables']),
+            'Invested Capital (M)': invested_capital,
+            'Current Valuation (M)': current_valuation,
+            'MOIC': moic,
+            'IRR (%)': random.uniform(18, 35),
+            'KPI History': pd.DataFrame({
+                'date': pd.to_datetime(['2023-Q1', '2023-Q2', '2023-Q3', '2023-Q4']),
+                'revenue': [random.uniform(20, 30), random.uniform(30, 40), random.uniform(40, 50), random.uniform(50, 60)],
+                'ebitda': [random.uniform(5, 10), random.uniform(10, 15), random.uniform(15, 20), random.uniform(20, 25)]
+            })
+        }
+        portfolio_data.append(company_data)
+    
+    return portfolio_data
 
 def render():
     """Renders the Institutional Portfolio Views tab."""
@@ -39,10 +49,13 @@ def render():
     hf_portfolio = trading_engine.positions
     if not hf_portfolio:
         st.info("No positions in the hedge fund portfolio.")
+        hf_df = pd.DataFrame()  # Create empty DataFrame for later use
     else:
         live_prices = {s: pro_get_real_time_data(s, cfg['eodhd_api_key']).get('close', p['avg_price']) for s, p in hf_portfolio.items()}
         positions_data = [{
-            'Symbol': symbol, 'Quantity': pos['quantity'], 'Avg Price': pos['avg_price'],
+            'Symbol': symbol, 
+            'Quantity': pos['quantity'], 
+            'Avg Price': pos['avg_price'],
             'Current Price': live_prices.get(symbol, pos['avg_price']),
             'Market Value': pos['quantity'] * live_prices.get(symbol, pos['avg_price']),
             'Unrealized PNL': (live_prices.get(symbol, pos['avg_price']) - pos['avg_price']) * pos['quantity']
@@ -55,15 +68,33 @@ def render():
     st.markdown("### Private Equity Portfolio Monitoring")
     pe_portfolio = generate_pe_portfolio_data()
     pe_df = pd.DataFrame(pe_portfolio)
+    
+    # Remove the KPI History column for display as it contains DataFrames
+    display_df = pe_df.drop(columns=['KPI History'])
+    st.dataframe(display_df)
+    
     selected_company_name = st.selectbox("Select Portfolio Company", pe_df['Company Name'].tolist())
     selected_company_data = pe_df[pe_df['Company Name'] == selected_company_name].iloc[0]
 
-    st.dataframe(pe_df[['Company Name', 'Industry', 'Invested Capital (M)', 'Current Valuation (M)']])
+    # Display KPI history for selected company
+    st.markdown(f"#### KPI History for {selected_company_name}")
+    kpi_history = selected_company_data['KPI History']
+    st.dataframe(kpi_history)
 
     # --- AI-Powered Reporting ---
     st.markdown("---")
     st.markdown("## 🧠 AI-Powered Document Automation")
-    if st.button("Generate Investment Memo", disabled=(llm is None)):
-        with st.spinner("Generating memo..."):
-            memo = generate_investment_memo(llm, selected_company_data, hf_df if not hf_df.empty else pd.DataFrame())
-            st.text_area("Generated Memo", memo, height=300)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Generate Investment Memo", disabled=(llm is None)):
+            with st.spinner("Generating memo..."):
+                memo = generate_investment_memo(llm, selected_company_data, hf_df)
+                st.text_area("Generated Investment Memo", memo, height=300)
+    
+    with col2:
+        if st.button("Generate Board Pack", disabled=(llm is None)):
+            with st.spinner("Generating board pack..."):
+                board_pack = generate_board_pack_content(llm, selected_company_data, kpi_history)
+                st.text_area("Generated Board Pack", board_pack, height=300)
