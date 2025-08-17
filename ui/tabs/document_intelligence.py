@@ -473,6 +473,72 @@ def get_document_templates():
         }
     }
 
+def get_llm_response(llm, prompt: str) -> str:
+    """Universal LLM response handler that works with different LLM types"""
+    if not llm:
+        return "LLM not configured"
+    
+    try:
+        # Method 1: LangChain ChatOpenAI/AzureChatOpenAI with invoke
+        if hasattr(llm, 'invoke'):
+            try:
+                from langchain.schema import HumanMessage
+                messages = [HumanMessage(content=prompt)]
+                result = llm.invoke(messages)
+                
+                if hasattr(result, 'content'):
+                    return result.content
+                else:
+                    return str(result)
+            except ImportError:
+                # If langchain not available, try direct invoke
+                result = llm.invoke(prompt)
+                if hasattr(result, 'content'):
+                    return result.content
+                else:
+                    return str(result)
+        
+        # Method 2: LangChain LLM with predict
+        elif hasattr(llm, 'predict'):
+            return llm.predict(prompt)
+        
+        # Method 3: Direct callable
+        elif callable(llm):
+            result = llm(prompt)
+            if isinstance(result, str):
+                return result
+            elif hasattr(result, 'content'):
+                return result.content
+            else:
+                return str(result)
+        
+        # Method 4: OpenAI client style
+        elif hasattr(llm, 'chat') and hasattr(llm.chat, 'completions'):
+            response = llm.chat.completions.create(
+                model="gpt-3.5-turbo",  # Default model
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4000
+            )
+            return response.choices[0].message.content
+        
+        # Method 5: Generate method
+        elif hasattr(llm, 'generate'):
+            result = llm.generate([prompt])
+            if hasattr(result, 'generations') and result.generations:
+                return result.generations[0][0].text
+            else:
+                return str(result)
+        
+        # Method 6: Custom generate_response
+        elif hasattr(llm, 'generate_response'):
+            return llm.generate_response(prompt)
+        
+        else:
+            return f"Unsupported LLM type: {type(llm).__name__}. Available methods: {[m for m in dir(llm) if not m.startswith('_')][:10]}"
+    
+    except Exception as e:
+        return f"Error calling LLM: {str(e)}"
+
 def analyze_document_with_ai(content: str, document_type: str, analysis_mode: str, custom_questions: str = "", llm=None) -> str:
     """Enhanced AI analysis with proper LLM integration"""
     if not llm:
@@ -566,36 +632,57 @@ def analyze_document_with_ai(content: str, document_type: str, analysis_mode: st
         """
     
     try:
-        # Use the configured LLM to generate analysis
-        response = llm.generate_response(prompt)
+        # Use the universal LLM response handler
+        response = get_llm_response(llm, prompt)
+        
+        # Check if we got a valid response
+        if not response or response.strip() == "":
+            response = "No response generated from LLM. Please check your configuration."
         
         # Add metadata to response
         analysis_metadata = f"""
-        ═══════════════════════════════════════════════════════════════
-        📊 ANALYSIS METADATA
-        ═══════════════════════════════════════════════════════════════
-        Document Type: {document_type}
-        Analysis Mode: {analysis_mode}
-        Analysis Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-        Content Length: {len(content)} characters
-        ═══════════════════════════════════════════════════════════════
-        
-        {response}
-        """
+═══════════════════════════════════════════════════════════════
+📊 ANALYSIS METADATA
+═══════════════════════════════════════════════════════════════
+Document Type: {document_type}
+Analysis Mode: {analysis_mode}
+Analysis Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Content Length: {len(content)} characters
+LLM Type: {type(llm).__name__}
+═══════════════════════════════════════════════════════════════
+
+{response}
+"""
         
         return analysis_metadata
     
     except Exception as e:
-        return f"""
-        ❌ Error in AI Analysis
-        ═══════════════════════════════════════════════════════════════
-        Error Details: {str(e)}
-        Document Type: {document_type}
-        Analysis Mode: {analysis_mode}
-        Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        # Provide detailed error information for debugging
+        llm_type = type(llm).__name__ if llm else "None"
+        llm_methods = [method for method in dir(llm) if not method.startswith('_')] if llm else []
         
-        Please check your LLM configuration and try again.
-        """
+        return f"""
+❌ Error in AI Analysis
+═══════════════════════════════════════════════════════════════
+Error Details: {str(e)}
+Document Type: {document_type}
+Analysis Mode: {analysis_mode}
+Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+LLM Type: {llm_type}
+Available LLM Methods: {', '.join(llm_methods[:10])}...
+═══════════════════════════════════════════════════════════════
+
+Troubleshooting:
+1. Verify your LLM configuration in API settings
+2. Ensure the LLM object is properly initialized
+3. Check if the LLM has the correct invoke/predict method
+4. Verify API keys and connection settings
+
+If using Azure OpenAI, ensure the deployment is active and accessible.
+If using OpenAI directly, verify your API key is valid.
+
+Please check your LLM configuration and try again.
+"""
 
 def render_data_source_config():
     """Render data source configuration interface"""
@@ -1433,8 +1520,36 @@ def render_document_intelligence_tab(llm=None):
                 st.text_area("Document Content (Preview)", content[:1000] + "..." if len(content) > 1000 else content, height=200)
             
             # Analysis execution
-            if st.button("🔬 Analyze Document", type="primary"):
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                analyze_button = st.button("🔬 Analyze Document", type="primary")
+            
+            with col2:
+                debug_mode = st.checkbox("Debug Mode", help="Show detailed LLM information for troubleshooting")
+            
+            if analyze_button:
                 with st.spinner("Analyzing document with AI..."):
+                    # Debug information if enabled
+                    if debug_mode:
+                        st.markdown("### 🐛 Debug Information")
+                        
+                        if llm:
+                            st.write(f"**LLM Type:** {type(llm).__name__}")
+                            st.write(f"**LLM Methods:** {[m for m in dir(llm) if not m.startswith('_')][:10]}")
+                            
+                            # Test LLM with simple prompt
+                            test_prompt = "Hello, can you respond with 'LLM is working correctly'?"
+                            try:
+                                test_response = get_llm_response(llm, test_prompt)
+                                st.success(f"✅ LLM Test Response: {test_response[:100]}...")
+                            except Exception as e:
+                                st.error(f"❌ LLM Test Failed: {str(e)}")
+                        else:
+                            st.error("❌ No LLM configured")
+                        
+                        st.markdown("---")
+                    
                     content = selected_doc['result']['content']
                     analysis_result = analyze_document_with_ai(
                         content, document_type, analysis_mode, custom_questions, llm
@@ -1496,7 +1611,7 @@ Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                             "💾 Download JSON",
                             json.dumps(json_export, indent=2),
                             f"analysis_{selected_doc['result']['details']['filename']}.json"
-                        )
+                            ),
     
     # Batch Processing Tab
     with main_tabs[4]:
