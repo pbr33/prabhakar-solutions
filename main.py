@@ -4,7 +4,7 @@ import os
 import time
 import pandas as pd
 import plotly.express as px
-
+from ui.tabs import multi_agent_coordination
 # Add current directory to path to ensure imports work
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -1251,8 +1251,9 @@ def main():
     # --- Main Application Tabs ---
     # Adjust tab availability based on user type
     if user_type == 'full_access':
-        tab_ai, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
+        tab_ai, tab_multi_agent, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
             "🤖 AI Intelligence",
+            "🤖🔄 Multi-Agent Coordination",  # NEW TAB
             "📊 Market Analysis",
             "📈 Pro Dashboard",
             "💼 Portfolio View", 
@@ -1275,6 +1276,16 @@ def main():
                 if st.session_state.get('debug_mode'):
                     st.exception(e)
                 st.info("AI Intelligence features require proper API configuration.")
+
+        # NEW MULTI-AGENT COORDINATION TAB
+        with tab_multi_agent:
+            try:
+                multi_agent_coordination.render()
+            except Exception as e:
+                st.error(f"Multi-Agent Coordination error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
+                st.info("Multi-Agent Coordination features require proper API configuration.")
 
         with tab_market:
             try:
@@ -1307,6 +1318,7 @@ def main():
                 st.error(f"Auto-Trading error: {e}")
                 if st.session_state.get('debug_mode'):
                     st.exception(e)
+    
     
     else:  # Guest mode
         with tab_market:
