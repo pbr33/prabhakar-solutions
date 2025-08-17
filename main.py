@@ -1,4 +1,4 @@
-# Method 1: Update your main.py to include a landing page
+# Complete working main.py with landing page and login
 
 import streamlit as st
 import sys
@@ -23,7 +23,52 @@ def render_landing_page():
     </style>
     """, unsafe_allow_html=True)
     
-    # Your beautiful HTML landing page
+    # Load the agent image from static folder
+    avatar_img_base64 = ""
+    import base64
+    
+    # Try multiple possible filenames and extensions
+    possible_names = [
+        "agent_image.png", "agent_image.jpg", "agent_image.jpeg",
+        "agent.png", "agent.jpg", "agent.jpeg",
+        "rich.png", "rich.jpg", "rich.jpeg",
+        "avatar.png", "avatar.jpg", "avatar.jpeg"
+    ]
+    
+    avatar_loaded = False
+    for filename in possible_names:
+        try:
+            avatar_path = os.path.join(current_dir, "static", filename)
+            if os.path.exists(avatar_path):
+                with open(avatar_path, "rb") as img_file:
+                    avatar_img_base64 = base64.b64encode(img_file.read()).decode()
+                    avatar_loaded = True
+                    st.success(f"✅ Avatar image loaded: {filename}")
+                    break
+        except Exception as e:
+            continue
+    
+    if not avatar_loaded:
+        st.warning("⚠️ Avatar image not found. Please check:")
+        st.info("📁 Make sure your image is in the 'static' folder")
+        st.info("📝 Supported names: agent_image.png, agent.png, rich.png, avatar.png")
+        st.info("🖼️ Supported formats: .png, .jpg, .jpeg")
+        
+        # Show current directory and static folder contents
+        static_path = os.path.join(current_dir, "static")
+        if os.path.exists(static_path):
+            files = os.listdir(static_path)
+            st.info(f"📂 Files in static folder: {files}")
+        else:
+            st.error("❌ 'static' folder not found. Please create it and add your image.")
+
+    # Prepare avatar HTML
+    if avatar_img_base64:
+        avatar_html = f'<img src="data:image/png;base64,{avatar_img_base64}" class="avatar" alt="AI Agent RICH">'
+    else:
+        avatar_html = '<div class="avatar-icon"><i class="fas fa-user-tie"></i></div>'
+    
+    # Beautiful HTML landing page
     landing_html = """
     <!DOCTYPE html>
     <html lang="en">
@@ -184,11 +229,19 @@ def render_landing_page():
                 width: 200px;
                 height: 200px;
                 border-radius: 50%;
+                object-fit: cover;
+                border: 4px solid rgba(255, 255, 255, 0.2);
+            }
+
+            .avatar-icon {
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 font-size: 4rem;
                 color: white;
+                width: 200px;
+                height: 200px;
+                border-radius: 50%;
             }
 
             .avatar-name {
@@ -233,9 +286,7 @@ def render_landing_page():
                 </div>
                 <div class="hero-avatar">
                     <div class="avatar-container">
-                        <div class="avatar">
-                            <i class="fas fa-user-tie"></i>
-                        </div>
+                        """ + avatar_html + """
                     </div>
                     <div class="avatar-name">AI Agent RICH</div>
                 </div>
@@ -244,20 +295,119 @@ def render_landing_page():
 
         <script>
             function launchDashboard() {
-                // This will trigger the Streamlit page change
-                window.parent.postMessage({type: 'streamlit:setComponentValue', value: 'dashboard'}, '*');
+                // Create a hidden form and submit it to trigger Streamlit page change
+                window.location.href = window.location.href + '?login=true';
             }
         </script>
     </body>
     </html>
     """
     
+    # Check URL parameters for login trigger
+    query_params = st.experimental_get_query_params()
+    if 'login' in query_params:
+        st.session_state.page = 'login'
+        st.experimental_set_query_params()  # Clear the parameter
+        st.rerun()
+    
     # Display the landing page
     st.components.v1.html(landing_html, height=800, scrolling=True)
+
+def render_login_page():
+    """Render the login page"""
+    st.markdown("""
+    <style>
+        .stApp > header {
+            background-color: transparent;
+        }
+        
+        .main > div {
+            padding-top: 2rem;
+        }
+        
+        .login-container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+        }
+        
+        .login-title {
+            text-align: center;
+            color: white;
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 2rem;
+        }
+        
+        .stTextInput > div > div > input {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            color: white;
+            padding: 0.75rem;
+        }
+        
+        .stTextInput > div > div > input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .stButton > button {
+            width: 100%;
+            background: linear-gradient(45deg, #10b981, #059669);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 0.75rem;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        
+        .stButton > button:hover {
+            background: linear-gradient(45deg, #059669, #047857);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(16, 185, 129, 0.4);
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .stApp {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
-    # Listen for the dashboard launch
-    if st.button("🚀 Launch Dashboard", key="dashboard_btn", help="Enter the AI Trading Platform"):
-        st.session_state.page = 'dashboard'
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown('<h1 class="login-title">🔐 Agent RICH Login</h1>', unsafe_allow_html=True)
+    
+    # Login form
+    with st.form("login_form"):
+        username = st.text_input("Username", placeholder="Enter username")
+        password = st.text_input("Password", type="password", placeholder="Enter password")
+        login_button = st.form_submit_button("🚀 Enter Dashboard")
+        
+        if login_button:
+            if username == "genaiwithprabhakar" and password == "genaiwithprabhakar":
+                st.session_state.authenticated = True
+                st.session_state.page = 'dashboard'
+                st.success("✅ Login successful! Redirecting to dashboard...")
+                st.rerun()
+            else:
+                st.error("❌ Invalid credentials. Please try again.")
+                st.info("💡 Hint: Both username and password are the same")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Back to landing button
+    if st.button("⬅️ Back to Landing"):
+        st.session_state.page = 'landing'
         st.rerun()
 
 def main():
@@ -275,13 +425,22 @@ def main():
     # Initialize session state
     if 'page' not in st.session_state:
         st.session_state.page = 'landing'
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
 
     # Route to different pages
     if st.session_state.page == 'landing':
         render_landing_page()
         return
+    elif st.session_state.page == 'login':
+        render_login_page()
+        return
+    elif st.session_state.page == 'dashboard' and not st.session_state.authenticated:
+        # Redirect to login if trying to access dashboard without authentication
+        st.session_state.page = 'login'
+        st.rerun()
     
-    # If not landing page, continue with your existing app
+    # If not landing or login page, continue with your existing app
     # Import components locally to avoid circular imports
     try:
         from langchain_openai import AzureChatOpenAI
@@ -298,8 +457,14 @@ def main():
     # Apply custom CSS
     apply_custom_css()
 
-    # Add a back to landing button
+    # Add navigation buttons in sidebar
+    st.sidebar.markdown("---")
     if st.sidebar.button("🏠 Back to Landing"):
+        st.session_state.page = 'landing'
+        st.rerun()
+    
+    if st.sidebar.button("🔒 Logout"):
+        st.session_state.authenticated = False
         st.session_state.page = 'landing'
         st.rerun()
 
