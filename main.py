@@ -126,7 +126,7 @@ def render_landing_page():
             }}
 
             .hero {{
-                min-height: 90vh;
+                min-height: 70vh;
                 display: flex;
                 align-items: center;
                 padding: 2rem;
@@ -631,10 +631,10 @@ def render_landing_page():
     """
     
     # Display the landing page
-    st.components.v1.html(landing_html, height=2000, scrolling=True)
+    st.components.v1.html(landing_html, height=1400, scrolling=True)
     
     # FIXED: Use Streamlit button instead of JavaScript for navigation
-    st.markdown("---")
+    # st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🚀 **Launch AI Dashboard**", 
@@ -656,51 +656,64 @@ def render_login_page():
             padding-top: 2rem;
         }
         
-        .login-container {
-            max-width: 400px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 2.5rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
+        # .login-container {
+        #     max-width: 400px;
+        #     margin: 0 auto;
+        #     background: rgba(255, 255, 255, 0.1);
+        #     backdrop-filter: blur(20px);
+        #     border: 1px solid rgba(255, 255, 255, 0.1);
+        #     border-radius: 20px;
+        #     padding: 2.5rem;
+        #     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+        #     text-align: center;
+        # }
         
         .avatar-section {
             margin-bottom: 2rem;
         }
         
         .login-avatar {
-            width: 120px;
-            height: 120px;
-            border-radius: 50%;
-            background: linear-gradient(45deg, #4338ca, #7c3aed);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 1rem;
-            position: relative;
-            box-shadow: 0 15px 35px rgba(67, 56, 202, 0.4);
-            animation: glow 3s ease-in-out infinite alternate;
-        }
+           width: 140px;
+           height: 140px;
+           border-radius: 50%;
+           background: linear-gradient(135deg, #667eea, #764ba2);
+           display: inline-flex;
+           align-items: center;
+           justify-content: center;
+           position: relative;
+           box-shadow: 
+               0 0 0 8px rgba(255, 255, 255, 0.1),
+               0 0 0 16px rgba(255, 255, 255, 0.05),
+               0 20px 40px rgba(102, 126, 234, 0.4);
+           animation: avatarPulse 3s ease-in-out infinite;
+       }
         
-        @keyframes glow {
-            0% { box-shadow: 0 15px 35px rgba(67, 56, 202, 0.4); }
-            100% { box-shadow: 0 15px 35px rgba(124, 58, 237, 0.6); }
-        }
+        @keyframes avatarPulse {
+           0%, 100% { 
+               transform: scale(1);
+               box-shadow: 
+                   0 0 0 8px rgba(255, 255, 255, 0.1),
+                   0 0 0 16px rgba(255, 255, 255, 0.05),
+                   0 20px 40px rgba(102, 126, 234, 0.4);
+           }
+           50% { 
+               transform: scale(1.05);
+               box-shadow: 
+                   0 0 0 12px rgba(255, 255, 255, 0.15),
+                   0 0 0 24px rgba(255, 255, 255, 0.08),
+                   0 25px 50px rgba(102, 126, 234, 0.6);
+           }
+       }
         
         .login-avatar img {
-            width: 100px;
-            height: 100px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 3px solid rgba(255, 255, 255, 0.2);
-        }
+           width: 120px;
+           height: 120px;
+           border-radius: 50%;
+           object-fit: cover;
+       }
         
         .avatar-icon {
-            font-size: 3.5rem;
+            font-size: 4rem;
             color: white;
         }
         
@@ -745,18 +758,25 @@ def render_login_page():
             background: rgba(255, 255, 255, 0.15);
         }
         
-        .stButton > button {
-            width: 100%;
-            background: linear-gradient(45deg, #10b981, #059669);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 1rem;
-            font-weight: 600;
-            font-size: 1.1rem;
-            transition: all 0.3s ease;
-            margin: 0.5rem 0;
-        }
+       /* Button styling */
+       .stButton > button {
+           width: 100%;
+           background: linear-gradient(135deg, #10b981, #059669);
+           color: white;
+           border: none;
+           border-radius: 14px;
+           padding: 1rem;
+           height: 56px;
+           font-weight: 600;
+           font-size: 1.1rem;
+           transition: all 0.3s ease;
+           margin: 0.5rem 0;
+           cursor: pointer;
+           position: relative;
+           overflow: hidden;
+           text-transform: none;
+           letter-spacing: 0.5px;
+       }
         
         .stButton > button:hover {
             background: linear-gradient(45deg, #059669, #047857);
@@ -917,7 +937,7 @@ def render_login_page():
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
                 st.markdown('<div class="success-message">✅ Welcome! Redirecting to your dashboard...</div>', unsafe_allow_html=True)
-                st.balloons()
+                # st.balloons()
                 time.sleep(1)
                 st.rerun()
             else:
