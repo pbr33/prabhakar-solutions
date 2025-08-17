@@ -1,6 +1,9 @@
 import streamlit as st
 import sys
 import os
+import time
+import pandas as pd
+import plotly.express as px
 
 # Add current directory to path to ensure imports work
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +61,7 @@ def render_landing_page():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Agent RICH - AI-Powered Investment Capital Hub</title>
+        <title>Agent RICH - Real-time Investment Capital Hub</title>
         <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
         <style>
             * {{
@@ -359,60 +362,6 @@ def render_landing_page():
                 margin: 4rem 0;
             }}
 
-            .video-placeholder {{
-                width: 100%;
-                max-width: 800px;
-                height: 400px;
-                background: rgba(0, 0, 0, 0.3);
-                border-radius: 20px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0 auto;
-                border: 2px dashed rgba(255, 255, 255, 0.3);
-                position: relative;
-                overflow: hidden;
-            }}
-
-            .video-placeholder::before {{
-                content: '';
-                position: absolute;
-                top: 0;
-                left: -100%;
-                width: 100%;
-                height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
-                animation: shimmer 2s infinite;
-            }}
-
-            @keyframes shimmer {{
-                0% {{ left: -100%; }}
-                100% {{ left: 100%; }}
-            }}
-
-            .video-content {{
-                text-align: center;
-                z-index: 1;
-            }}
-
-            .play-button {{
-                width: 80px;
-                height: 80px;
-                background: rgba(16, 185, 129, 0.8);
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0 auto 1rem;
-                cursor: pointer;
-                transition: all 0.3s ease;
-            }}
-
-            .play-button:hover {{
-                background: rgba(16, 185, 129, 1);
-                transform: scale(1.1);
-            }}
-
             .floating-elements {{
                 position: absolute;
                 top: 0;
@@ -486,13 +435,13 @@ def render_landing_page():
             <div class="hero-container">
                 <div class="hero-content">
                     <h1 class="hero-title">Agent RICH</h1>
-                    <h2 class="hero-subtitle">AI-Powered Investment Capital Hub</h2>
+                    <h2 class="hero-subtitle">Real-time Investment Capital Hub</h2>
                     <p class="hero-description">
                         Revolutionary AI-driven trading platform that combines multi-agent intelligence, 
                         real-time market analysis, and institutional-grade portfolio management. 
                         Experience the future of investment management with our cutting-edge AI agents.
                     </p>
-                    <button class="cta-button" onclick="launchDashboard()">
+                    <button class="cta-button" id="launchBtn">
                         <i class="fas fa-rocket"></i>
                         Launch AI Dashboard
                     </button>
@@ -618,19 +567,8 @@ def render_landing_page():
                 <div class="demo-video">
                     <h3 style="margin-bottom: 2rem; font-size: 2rem;">See Agent RICH in Action</h3>
                     <div class="video-container" style="position: relative; max-width: 800px; margin: 0 auto; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">
-                        <video 
-                            width="100%" 
-                            height="400" 
-                            autoplay 
-                            muted 
-                            loop 
-                            style="border-radius: 20px; background: #000;"
-                            poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 400'%3E%3Crect width='800' height='400' fill='%23667eea'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='white' font-size='24' font-family='Arial'%3EAgent RICH Demo%3C/text%3E%3C/svg%3E">
-                            <source src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAABYhtZGF0AAACrQYF//+p3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDEyNSAtIEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMTIgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0xIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDM6MHgxMTMgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTEgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZzZXQ9LTIgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MyBiX3B5cmFtaWQ9MiBiX2FkYXB0PTEgYl9iaWFzPTAgZGlyZWN0PTEgd2VpZ2h0Yj0xIG9wZW5fZ29wPTAgd2VpZ2h0cD0yIGtleWludD0yNTAga2V5aW50X21pbj0yNSBzY2VuZWN1dD00MCBpbnRyYV9yZWZyZXNoPTAgcmNfbG9va2FoZWFkPTQwIHJjPWNyZiBtYnRyZWU9MSBjcmY9MjMuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0xOjEuMDAAgAAAAWxliIQAMv/+/q3AP4C2AQAAABhnaAKAAAAAAAAAAAAAAAAAABABAAEAAAPoATjllJQABAAD//+X" type="video/mp4">
-                            Your browser does not support the video tag.
-                        </video>
-                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none;">
-                            <div style="background: rgba(0,0,0,0.7); padding: 2rem; border-radius: 15px; backdrop-filter: blur(10px);">
+                        <div style="width: 100%; height: 400px; background: linear-gradient(45deg, #667eea, #764ba2); border-radius: 20px; display: flex; align-items: center; justify-content: center;">
+                            <div style="background: rgba(0,0,0,0.7); padding: 2rem; border-radius: 15px; backdrop-filter: blur(10px); text-align: center;">
                                 <h3 style="color: white; margin-bottom: 1rem; font-size: 1.5rem;">🎬 Demo Features</h3>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: left; color: rgba(255,255,255,0.9); font-size: 0.9rem;">
                                     <div>
@@ -661,19 +599,26 @@ def render_landing_page():
         </section>
 
         <script>
-            function launchDashboard() {{
-                // Force navigation to login page
-                const currentUrl = new URL(window.location);
-                currentUrl.searchParams.set('page', 'login');
-                window.location.href = currentUrl.toString();
-            }}
-
-            function playDemo() {{
-                alert("🎬 Demo video feature coming soon! For now, click 'Launch AI Dashboard' to explore the platform.");
-            }}
-
-            // Add smooth scrolling animation
+            // Add event listener when DOM is loaded
             document.addEventListener('DOMContentLoaded', function() {{
+                const launchBtn = document.getElementById('launchBtn');
+                if (launchBtn) {{
+                    launchBtn.addEventListener('click', function() {{
+                        // Create a custom event that Streamlit can listen to
+                        const event = new CustomEvent('launchDashboard');
+                        window.dispatchEvent(event);
+                        
+                        // Visual feedback
+                        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Launching...';
+                        this.style.background = 'linear-gradient(45deg, #7c3aed, #6366f1)';
+                        
+                        // Fallback - show message if Streamlit doesn't respond
+                        setTimeout(() => {{
+                            alert('🚀 Redirecting to login page! Click OK to continue.');
+                        }}, 500);
+                    }});
+                }}
+                
                 // Add floating animation delays
                 const floatingElements = document.querySelectorAll('.floating-element');
                 floatingElements.forEach((element, index) => {{
@@ -685,18 +630,22 @@ def render_landing_page():
     </html>
     """
     
-    # Check URL parameters for navigation
-    query_params = st.query_params
-    if 'page' in query_params and query_params['page'] == 'login':
-        st.session_state.page = 'login'
-        st.query_params.clear()  # Clear the parameter
-        st.rerun()
-    
     # Display the landing page
     st.components.v1.html(landing_html, height=2000, scrolling=True)
+    
+    # FIXED: Use Streamlit button instead of JavaScript for navigation
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 **Launch AI Dashboard**", 
+                    key="main_cta", 
+                    use_container_width=True,
+                    type="primary"):
+            st.session_state.page = 'login'
+            st.rerun()
 
 def render_login_page():
-    """Render the login page"""
+    """Render a clean and professional login page with avatar"""
     st.markdown("""
     <style>
         .stApp > header {
@@ -714,28 +663,86 @@ def render_login_page():
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 20px;
-            padding: 2rem;
+            padding: 2.5rem;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        
+        .avatar-section {
+            margin-bottom: 2rem;
+        }
+        
+        .login-avatar {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #4338ca, #7c3aed);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            position: relative;
+            box-shadow: 0 15px 35px rgba(67, 56, 202, 0.4);
+            animation: glow 3s ease-in-out infinite alternate;
+        }
+        
+        @keyframes glow {
+            0% { box-shadow: 0 15px 35px rgba(67, 56, 202, 0.4); }
+            100% { box-shadow: 0 15px 35px rgba(124, 58, 237, 0.6); }
+        }
+        
+        .login-avatar img {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .avatar-icon {
+            font-size: 3.5rem;
+            color: white;
         }
         
         .login-title {
-            text-align: center;
             color: white;
-            font-size: 2rem;
+            font-size: 2.2rem;
             font-weight: bold;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(45deg, #fff, #e0e7ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .login-subtitle {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 1rem;
             margin-bottom: 2rem;
+        }
+        
+        .form-section {
+            margin: 2rem 0;
         }
         
         .stTextInput > div > div > input {
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 10px;
+            border-radius: 12px;
             color: white;
-            padding: 0.75rem;
+            padding: 1rem;
+            font-size: 1rem;
+            transition: all 0.3s ease;
         }
         
         .stTextInput > div > div > input::placeholder {
-            color: rgba(255, 255, 255, 0.6);
+            color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .stTextInput > div > div > input:focus {
+            border-color: #10b981;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
+            background: rgba(255, 255, 255, 0.15);
         }
         
         .stButton > button {
@@ -743,16 +750,40 @@ def render_login_page():
             background: linear-gradient(45deg, #10b981, #059669);
             color: white;
             border: none;
-            border-radius: 10px;
-            padding: 0.75rem;
+            border-radius: 12px;
+            padding: 1rem;
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            margin: 0.5rem 0;
         }
         
         .stButton > button:hover {
             background: linear-gradient(45deg, #059669, #047857);
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(16, 185, 129, 0.4);
+            box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+        }
+        
+        .guest-button {
+            background: linear-gradient(45deg, #6366f1, #4f46e5) !important;
+        }
+        
+        .guest-button:hover {
+            background: linear-gradient(45deg, #4f46e5, #4338ca) !important;
+            box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4) !important;
+        }
+        
+        .back-button {
+            background: rgba(255, 255, 255, 0.1) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            color: white !important;
+            margin-top: 1rem;
+        }
+        
+        .back-button:hover {
+            background: rgba(255, 255, 255, 0.2) !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 5px 15px rgba(255, 255, 255, 0.1) !important;
         }
         
         body {
@@ -763,42 +794,286 @@ def render_login_page():
         .stApp {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
+        
+        .success-message {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            border-radius: 12px;
+            padding: 1rem;
+            color: #10b981;
+            text-align: center;
+            margin: 1rem 0;
+            font-weight: 600;
+        }
+        
+        .hint-section {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .hint-title {
+            color: #10b981;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .hint-text {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+        
+        .features-preview {
+            margin-top: 2rem;
+            text-align: center;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .feature-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .feature-icon {
+            font-size: 1.2rem;
+            margin-bottom: 0.25rem;
+            display: block;
+        }
     </style>
     """, unsafe_allow_html=True)
     
+    # Load avatar image
+    avatar_img_base64 = ""
+    import base64
+    
+    possible_names = [
+        "agent_image.png", "agent_image.jpg", "agent_image.jpeg",
+        "agent.png", "agent.jpg", "agent.jpeg",
+        "rich.png", "rich.jpg", "rich.jpeg",
+        "avatar.png", "avatar.jpg", "avatar.jpeg"
+    ]
+    
+    for filename in possible_names:
+        try:
+            avatar_path = os.path.join(current_dir, "static", filename)
+            if os.path.exists(avatar_path):
+                with open(avatar_path, "rb") as img_file:
+                    avatar_img_base64 = base64.b64encode(img_file.read()).decode()
+                    break
+        except Exception:
+            continue
+    
+    # Prepare avatar HTML
+    if avatar_img_base64:
+        avatar_html = f'<img src="data:image/png;base64,{avatar_img_base64}" alt="AI Agent RICH">'
+    else:
+        avatar_html = '<i class="fas fa-robot avatar-icon"></i>'
+    
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
-    st.markdown('<h1 class="login-title">🔐 Agent RICH Login</h1>', unsafe_allow_html=True)
+    
+    # Avatar and title section
+    st.markdown(f"""
+    <div class="avatar-section">
+        <div class="login-avatar">
+            {avatar_html}
+        </div>
+        <h1 class="login-title">Welcome Back</h1>
+        <p class="login-subtitle">Sign in to Agent RICH AI Trading Platform</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Login form
     with st.form("login_form"):
-        username = st.text_input("Username", placeholder="Enter username")
-        password = st.text_input("Password", type="password", placeholder="Enter password")
-        login_button = st.form_submit_button("🚀 Enter Dashboard")
+        st.markdown('<div class="form-section">', unsafe_allow_html=True)
+        
+        username = st.text_input("Username", placeholder="Enter your username", label_visibility="collapsed")
+        password = st.text_input("Password", type="password", placeholder="Enter your password", label_visibility="collapsed")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            login_button = st.form_submit_button("🚀 Sign In")
+        with col2:
+            guest_mode = st.form_submit_button("👀 Guest Mode")
         
         if login_button:
             if username == "genaiwithprabhakar" and password == "genaiwithprabhakar":
                 st.session_state.authenticated = True
+                st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
-                st.success("✅ Login successful! Redirecting to dashboard...")
+                st.session_state.show_hint = False
+                st.markdown('<div class="success-message">✅ Welcome! Redirecting to your dashboard...</div>', unsafe_allow_html=True)
+                st.balloons()
+                time.sleep(1)
                 st.rerun()
             else:
-                st.error("❌ Invalid credentials. Please try again.")
-                st.info("💡 Hint: Both username and password are the same")
+                st.session_state.login_attempts = st.session_state.get('login_attempts', 0) + 1
+                st.session_state.show_hint = True
+                st.error("❌ Invalid credentials. Please check your username and password.")
+                
+                # Show demo credentials after 2 failed attempts
+                if st.session_state.login_attempts >= 2:
+                    show_demo_credentials()
+                
+        if guest_mode:
+            st.session_state.authenticated = True
+            st.session_state.user_type = "guest"
+            st.session_state.page = 'dashboard'
+            st.markdown('<div class="success-message">👀 Entering Guest Mode... Limited features available.</div>', unsafe_allow_html=True)
+            st.info("💡 Guest mode provides read-only access to explore the platform.")
+            time.sleep(1)
+            st.rerun()
+    
+    # Hint section (only visible on error or first visit)
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = 0
+    
+    # Show hint after failed attempt
+    if st.session_state.get('show_hint', False):
+        st.markdown("""
+        <div class="hint-section">
+            <div class="hint-title">💡 Need Help?</div>
+            <div class="hint-text">
+                Demo credentials are available for testing.<br>
+                Contact admin for access or try Guest Mode to explore features.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Back to landing button
-    if st.button("⬅️ Back to Landing"):
+    if st.button("⬅️ Back to Landing", key="back_to_landing"):
         st.session_state.page = 'landing'
         st.rerun()
+    
+    # Features preview
+    st.markdown("""
+    <div class="features-preview">
+        <h4 style="color: rgba(255,255,255,0.9); margin-bottom: 1rem;">🌟 Platform Features</h4>
+        <div class="features-grid">
+            <div class="feature-item">
+                <span class="feature-icon">🤖</span>
+                <div>AI Trading Agents</div>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">📊</span>
+                <div>Market Analysis</div>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">💼</span>
+                <div>Portfolio Management</div>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🚀</span>
+                <div>Automated Trading</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def render_demo_portfolio():
+    """Render a demo portfolio for guest users"""
+    st.subheader("📊 Demo Portfolio Overview")
+    
+    # Sample portfolio data
+    portfolio_data = {
+        'Stock': ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN'],
+        'Shares': [50, 25, 75, 30, 40],
+        'Price': [150.25, 2500.00, 300.50, 800.00, 3200.00],
+        'Value': [7512.50, 62500.00, 22537.50, 24000.00, 128000.00],
+        'Change': [2.5, -1.2, 1.8, -3.5, 0.8]
+    }
+    
+    df = pd.DataFrame(portfolio_data)
+    df['Total Value'] = df['Shares'] * df['Price']
+    
+    # Portfolio metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            label="Total Portfolio Value",
+            value=f"${df['Total Value'].sum():,.2f}",
+            delta="$2,450.00"
+        )
+    
+    with col2:
+        st.metric(
+            label="Day Change",
+            value="$1,234.56",
+            delta="0.52%"
+        )
+    
+    with col3:
+        st.metric(
+            label="Total Positions",
+            value=len(df),
+            delta=None
+        )
+    
+    with col4:
+        st.metric(
+            label="Demo Account",
+            value="Active",
+            delta="Guest Mode"
+        )
+    
+    # Portfolio composition chart
+    fig = px.pie(
+        df, 
+        values='Total Value', 
+        names='Stock',
+        title="Portfolio Composition",
+        color_discrete_sequence=px.colors.qualitative.Set3
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Holdings table
+    st.subheader("📋 Current Holdings")
+    st.dataframe(
+        df[['Stock', 'Shares', 'Price', 'Total Value', 'Change']],
+        use_container_width=True
+    )
+    
+    # Upgrade prompt
+    st.markdown("""
+    <div style="background: linear-gradient(45deg, #667eea, #764ba2); 
+                padding: 1.5rem; border-radius: 12px; margin: 2rem 0; text-align: center;">
+        <h3 style="color: white; margin-bottom: 1rem;">🚀 Unlock Full Features</h3>
+        <p style="color: rgba(255,255,255,0.9); margin-bottom: 1rem;">
+            Get access to AI-powered trading, real-time analysis, and automated bots!
+        </p>
+        <div style="background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+            <strong style="color: #10b981;">Demo Credentials:</strong><br>
+            <span style="color: white;">Username: genaiwithprabhakar</span><br>
+            <span style="color: white;">Password: genaiwithprabhakar</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def main():
     """
-    The main function to run the Streamlit application.
+    The main function to run the Streamlit application with enhanced authentication.
     """
     # --- Page Configuration ---
     st.set_page_config(
-        page_title="Agent RICH - AI-Powered Investment Capital Hub",
+        page_title="Agent RICH - Real-time Investment Capital Hub",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="collapsed" if st.session_state.get('page') == 'landing' else "expanded"
@@ -809,6 +1084,8 @@ def main():
         st.session_state.page = 'landing'
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
+    if 'user_type' not in st.session_state:
+        st.session_state.user_type = None
 
     # Route to different pages
     if st.session_state.page == 'landing':
@@ -833,24 +1110,101 @@ def main():
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
         st.error(f"Import error: {e}")
-        st.error("Please ensure all required modules are installed and properly configured.")
-        st.stop()
+        st.info("Some modules may not be available. Creating fallback components...")
+        
+        # Create fallback functions if imports fail
+        def apply_custom_css():
+            st.markdown("""
+            <style>
+                .main-header {
+                    background: linear-gradient(45deg, #667eea, #764ba2);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    text-align: center;
+                    font-size: 3rem;
+                    font-weight: bold;
+                    margin-bottom: 2rem;
+                }
+                .stApp {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                }
+            </style>
+            """, unsafe_allow_html=True)
+        
+        def render_sidebar():
+            st.sidebar.header("⚙️ Configuration")
+            st.sidebar.info("Some features require additional modules to be installed.")
+        
+        # Create mock modules for fallback
+        class MockModule:
+            def render(self):
+                st.info("This feature requires additional dependencies. Please check your installation.")
+                st.markdown("""
+                ### 📊 Demo Feature Available
+                This is a placeholder for the actual module. The real implementation would include:
+                - Real-time market data
+                - AI-powered analysis
+                - Interactive charts and visualizations
+                - Trading capabilities
+                """)
+        
+        market_analysis = MockModule()
+        portfolio_enhanced_main = MockModule()
+        auto_trading = MockModule()
+        pro_dashboard = MockModule()
+        ai_intelligence = MockModule()
+        
+        class AutoTradingEngine:
+            pass
 
     # Apply custom CSS
     apply_custom_css()
 
-    # Add navigation buttons in sidebar
+    # Add user type indicator and navigation in sidebar
     st.sidebar.markdown("---")
-    if st.sidebar.button("🏠 Back to Landing"):
-        st.session_state.page = 'landing'
-        st.rerun()
     
-    if st.sidebar.button("🔒 Logout"):
-        st.session_state.authenticated = False
-        st.session_state.page = 'landing'
-        st.rerun()
+    # Display user status
+    user_type = st.session_state.get('user_type', 'guest')
+    if user_type == 'full_access':
+        st.sidebar.success("✅ Full Access Mode")
+        st.sidebar.markdown("**User:** genaiwithprabhakar")
+    else:
+        st.sidebar.info("👀 Guest Mode - Limited Features")
+        st.sidebar.markdown("*Use demo credentials for full access*")
+    
+    # Navigation buttons
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🏠 Landing", use_container_width=True):
+            st.session_state.page = 'landing'
+            st.rerun()
+    
+    with col2:
+        if st.button("🔒 Logout", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.user_type = None
+            st.session_state.page = 'landing'
+            st.rerun()
 
-    st.markdown('<h1 class="main-header">🤖 AI Trading Agents Dashboard</h1>', unsafe_allow_html=True)
+    # Main header with user status
+    header_col1, header_col2 = st.columns([3, 1])
+    with header_col1:
+        st.markdown('<h1 class="main-header">🤖 AI Trading Agents Dashboard</h1>', unsafe_allow_html=True)
+    with header_col2:
+        if user_type == 'guest':
+            st.markdown("""
+            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
+                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
+                <small style="color: #ff8c00;">🔓 Guest Mode</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
+                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
+                <small style="color: #10b981;">🔐 Full Access</small>
+            </div>
+            """, unsafe_allow_html=True)
 
     # --- Initialize Session State ---
     if 'trading_engine' not in st.session_state:
@@ -864,8 +1218,8 @@ def main():
     try:
         render_sidebar()
     except Exception as e:
-        st.error(f"Sidebar error: {e}")
-        st.info("Some sidebar features may not be available.")
+        st.sidebar.error(f"Sidebar error: {e}")
+        st.sidebar.info("Some sidebar features may not be available.")
 
     # --- LLM Initialization ---
     api_key = st.session_state.get('azure_api_key')
@@ -873,8 +1227,13 @@ def main():
     deployment = st.session_state.get('azure_deployment')
     api_version = st.session_state.get('azure_api_version', '2024-02-01')
 
+    # For guest mode, show limited functionality message
+    if user_type == 'guest':
+        st.info("🔔 **Guest Mode:** Some features are limited. Use demo credentials for full AI-powered functionality.")
+
     if all([api_key, endpoint, deployment, api_version]) and st.session_state.llm is None:
         try:
+            from langchain_openai import AzureChatOpenAI
             st.session_state.llm = AzureChatOpenAI(
                 api_key=api_key, 
                 api_version=api_version, 
@@ -886,58 +1245,86 @@ def main():
                 st.success("✅ LLM initialized successfully")
         except Exception as e:
             st.error(f"Failed to initialize LLM. Please check credentials. Error: {e}")
-    elif not all([api_key, endpoint, deployment, api_version]):
+    elif not all([api_key, endpoint, deployment, api_version]) and user_type == 'full_access':
          st.warning("Please provide all Azure OpenAI credentials in the sidebar to enable AI-powered features.")
 
     # --- Main Application Tabs ---
-    tab_ai, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
-        "🤖 AI Intelligence",
-        "📊 Market Analysis",
-        "📈 Pro Dashboard",
-        "💼 Portfolio View", 
-        "🚀 Auto-Trading"
-    ])
+    # Adjust tab availability based on user type
+    if user_type == 'full_access':
+        tab_ai, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
+            "🤖 AI Intelligence",
+            "📊 Market Analysis",
+            "📈 Pro Dashboard",
+            "💼 Portfolio View", 
+            "🚀 Auto-Trading"
+        ])
+    else:
+        # Limited tabs for guest users
+        tab_market, tab_portfolio = st.tabs([
+            "📊 Market Analysis (Demo)",
+            "💼 Portfolio View (Demo)"
+        ])
 
-    with tab_ai:
-        try:
-            ai_intelligence.render()
-        except Exception as e:
-            st.error(f"AI Intelligence error: {e}")
-            if st.session_state.get('debug_mode'):
-                st.exception(e)
-            st.info("AI Intelligence features require proper API configuration.")
+    # Render tabs based on user access
+    if user_type == 'full_access':
+        with tab_ai:
+            try:
+                ai_intelligence.render()
+            except Exception as e:
+                st.error(f"AI Intelligence error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
+                st.info("AI Intelligence features require proper API configuration.")
 
-    with tab_market:
-        try:
-            market_analysis.render()
-        except Exception as e:
-            st.error(f"Market Analysis error: {e}")
-            if st.session_state.get('debug_mode'):
-                st.exception(e)
+        with tab_market:
+            try:
+                market_analysis.render()
+            except Exception as e:
+                st.error(f"Market Analysis error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
 
-    with tab_pro:
-        try:
-            pro_dashboard.render()
-        except Exception as e:
-            st.error(f"Pro Dashboard error: {e}")
-            if st.session_state.get('debug_mode'):
-                st.exception(e)
+        with tab_pro:
+            try:
+                pro_dashboard.render()
+            except Exception as e:
+                st.error(f"Pro Dashboard error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
 
-    with tab_portfolio:
-        try:
-            portfolio_enhanced_main.render()
-        except Exception as e:
-            st.error(f"Portfolio error: {e}")
-            if st.session_state.get('debug_mode'):
-                st.exception(e)
+        with tab_portfolio:
+            try:
+                portfolio_enhanced_main.render()
+            except Exception as e:
+                st.error(f"Portfolio error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
 
-    with tab_autotrade:
-        try:
-            auto_trading.render()
-        except Exception as e:
-            st.error(f"Auto-Trading error: {e}")
-            if st.session_state.get('debug_mode'):
-                st.exception(e)
+        with tab_autotrade:
+            try:
+                auto_trading.render()
+            except Exception as e:
+                st.error(f"Auto-Trading error: {e}")
+                if st.session_state.get('debug_mode'):
+                    st.exception(e)
+    
+    else:  # Guest mode
+        with tab_market:
+            st.info("📊 **Demo Mode:** Market Analysis with limited features")
+            try:
+                # Render market analysis with limited functionality
+                market_analysis.render()
+                st.warning("🔒 Some advanced features require full access. Please login with demo credentials.")
+            except Exception as e:
+                st.error(f"Market Analysis error: {e}")
+
+        with tab_portfolio:
+            st.info("💼 **Demo Mode:** Portfolio View with sample data")
+            try:
+                # Show demo portfolio data
+                render_demo_portfolio()
+            except Exception as e:
+                st.error(f"Portfolio demo error: {e}")
 
 if __name__ == "__main__":
     main()
