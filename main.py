@@ -24,7 +24,7 @@ def main():
         from langchain_openai import AzureChatOpenAI
         from ui.styles import apply_custom_css
         from ui.sidebar import render_sidebar
-        from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard
+        from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard, portfolio_enhanced_main
         from ui.tabs import ai_intelligence  # New AI tab
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
@@ -110,7 +110,7 @@ def main():
 
     with tab_portfolio:
         try:
-            portfolio.render()
+            portfolio_enhanced_main.render()
         except Exception as e:
             st.error(f"Portfolio error: {e}")
             if st.session_state.get('debug_mode'):
