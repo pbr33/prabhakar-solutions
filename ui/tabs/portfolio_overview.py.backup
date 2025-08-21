@@ -9,7 +9,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import random
 
-from config import config
+from config import get_config
 from services.data_fetcher import pro_get_real_time_data
 
 def calculate_portfolio_metrics(hf_portfolio, pe_portfolio):

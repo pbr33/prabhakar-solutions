@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 import json
 
-from config import config, get_config
+from config import get_config
 
 def create_signal_visual(signal_data):
     """Create a visual representation of the AI signal instead of JSON."""
@@ -147,9 +147,10 @@ def add_pattern_annotations_to_chart(fig, patterns, data):
 def render():
     """Renders the enhanced Market Analysis tab with all missing features."""
     st.markdown("## 📊 Advanced Market Analysis & Pattern Recognition")
-    symbol = st.session_state.get('selected_symbol', 'AAPL.US')
-    llm = st.session_state.get('llm', None)
-    api_key = config.get_eodhd_api_key()
+    cfg = get_config()
+    symbol = cfg['selected_symbol']
+    llm = cfg['llm']
+    api_key = cfg['eodhd_api_key']
 
     # Import functions locally to avoid circular imports
     try:

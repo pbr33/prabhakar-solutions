@@ -4,11 +4,17 @@ import os
 import time
 import pandas as pd
 import plotly.express as px
-from ui.tabs import multi_agent_coordination
+
 # Add current directory to path to ensure imports work
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
+
+# Import configuration system
+from config import config, load_env_file
+
+# Load environment variables at startup
+load_env_file()
 
 def render_landing_page():
     """Render the enhanced landing page with all capabilities showcase"""
@@ -656,18 +662,6 @@ def render_login_page():
             padding-top: 2rem;
         }
         
-        # .login-container {
-        #     max-width: 400px;
-        #     margin: 0 auto;
-        #     background: rgba(255, 255, 255, 0.1);
-        #     backdrop-filter: blur(20px);
-        #     border: 1px solid rgba(255, 255, 255, 0.1);
-        #     border-radius: 20px;
-        #     padding: 2.5rem;
-        #     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-        #     text-align: center;
-        # }
-        
         .avatar-section {
             margin-bottom: 2rem;
         }
@@ -915,6 +909,12 @@ def render_login_page():
     </div>
     """, unsafe_allow_html=True)
     
+    # Get authentication config from our config system
+    auth_config = config.get_auth_config()
+    demo_username = auth_config.get('demo_username', 'genaiwithprabhakar')
+    demo_password = auth_config.get('demo_password', 'genaiwithprabhakar')
+    enable_guest_mode = auth_config.get('enable_guest_mode', True)
+    
     # Login form
     with st.form("login_form"):
         st.markdown('<div class="form-section">', unsafe_allow_html=True)
@@ -928,16 +928,18 @@ def render_login_page():
         with col1:
             login_button = st.form_submit_button("🚀 Sign In")
         with col2:
-            guest_mode = st.form_submit_button("👀 Guest Mode")
+            if enable_guest_mode:
+                guest_mode = st.form_submit_button("👀 Guest Mode")
+            else:
+                guest_mode = False
         
         if login_button:
-            if username == "genaiwithprabhakar" and password == "genaiwithprabhakar":
+            if username == demo_username and password == demo_password:
                 st.session_state.authenticated = True
                 st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
                 st.markdown('<div class="success-message">✅ Welcome! Redirecting to your dashboard...</div>', unsafe_allow_html=True)
-                # st.balloons()
                 time.sleep(1)
                 st.rerun()
             else:
@@ -947,9 +949,9 @@ def render_login_page():
                 
                 # Show demo credentials after 2 failed attempts
                 if st.session_state.login_attempts >= 2:
-                    show_demo_credentials()
+                    show_demo_credentials(demo_username, demo_password)
                 
-        if guest_mode:
+        if guest_mode and enable_guest_mode:
             st.session_state.authenticated = True
             st.session_state.user_type = "guest"
             st.session_state.page = 'dashboard'
@@ -1003,6 +1005,22 @@ def render_login_page():
                 <div>Automated Trading</div>
             </div>
         </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_demo_credentials(username, password):
+    """Show demo credentials after failed login attempts"""
+    st.markdown(f"""
+    <div style="background: linear-gradient(45deg, #667eea, #764ba2); 
+                padding: 1.5rem; border-radius: 12px; margin: 1rem 0; text-align: center;">
+        <h4 style="color: white; margin-bottom: 1rem;">🔐 Demo Credentials</h4>
+        <div style="background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+            <strong style="color: #10b981;">Username:</strong> <span style="color: white;">{username}</span><br>
+            <strong style="color: #10b981;">Password:</strong> <span style="color: white;">{password}</span>
+        </div>
+        <p style="color: rgba(255,255,255,0.9); font-size: 0.9rem;">
+            Copy and paste the credentials above to access full features
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1071,8 +1089,13 @@ def render_demo_portfolio():
         use_container_width=True
     )
     
+    # Get demo credentials from config
+    auth_config = config.get_auth_config()
+    demo_username = auth_config.get('demo_username', 'genaiwithprabhakar')
+    demo_password = auth_config.get('demo_password', 'genaiwithprabhakar')
+    
     # Upgrade prompt
-    st.markdown("""
+    st.markdown(f"""
     <div style="background: linear-gradient(45deg, #667eea, #764ba2); 
                 padding: 1.5rem; border-radius: 12px; margin: 2rem 0; text-align: center;">
         <h3 style="color: white; margin-bottom: 1rem;">🚀 Unlock Full Features</h3>
@@ -1081,8 +1104,8 @@ def render_demo_portfolio():
         </p>
         <div style="background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0;">
             <strong style="color: #10b981;">Demo Credentials:</strong><br>
-            <span style="color: white;">Username: genaiwithprabhakar</span><br>
-            <span style="color: white;">Password: genaiwithprabhakar</span>
+            <span style="color: white;">Username: {demo_username}</span><br>
+            <span style="color: white;">Password: {demo_password}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1126,7 +1149,7 @@ def main():
         from ui.styles import apply_custom_css
         from ui.sidebar import render_sidebar
         from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard, portfolio_enhanced_main
-        from ui.tabs import ai_intelligence_old  # New AI tab
+        from ui.tabs import ai_intelligence_old, multi_agent_coordination
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
         st.error(f"Import error: {e}")
@@ -1173,6 +1196,7 @@ def main():
         auto_trading = MockModule()
         pro_dashboard = MockModule()
         ai_intelligence_old = MockModule()
+        multi_agent_coordination = MockModule()
         
         class AutoTradingEngine:
             pass
@@ -1185,9 +1209,12 @@ def main():
     
     # Display user status
     user_type = st.session_state.get('user_type', 'guest')
+    auth_config = config.get_auth_config()
+    demo_username = auth_config.get('demo_username', 'genaiwithprabhakar')
+    
     if user_type == 'full_access':
         st.sidebar.success("✅ Full Access Mode")
-        st.sidebar.markdown("**User:** genaiwithprabhakar")
+        st.sidebar.markdown(f"**User:** {demo_username}")
     else:
         st.sidebar.info("👀 Guest Mode - Limited Features")
         st.sidebar.markdown("*Use demo credentials for full access*")
@@ -1206,11 +1233,38 @@ def main():
             st.session_state.page = 'landing'
             st.rerun()
 
-    # Main header with user status
-    header_col1, header_col2 = st.columns([3, 1])
+    # Main header with user status and configuration status
+    header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
     with header_col1:
         st.markdown('<h1 class="main-header">🤖 AI Trading Agents Dashboard</h1>', unsafe_allow_html=True)
+    
     with header_col2:
+        # Configuration status indicator
+        validation = config.validate_config()
+        if validation['eodhd'] and validation['azure_openai']:
+            st.markdown("""
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
+                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
+                <small style="color: #10b981;">🟢 All APIs Ready</small>
+            </div>
+            """, unsafe_allow_html=True)
+        elif validation['eodhd'] or validation['azure_openai']:
+            st.markdown("""
+            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
+                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
+                <small style="color: #ff8c00;">🟡 Partial Config</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="background: rgba(255, 0, 0, 0.1); border: 1px solid rgba(255, 0, 0, 0.3); 
+                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
+                <small style="color: #ff4444;">🔴 Config Needed</small>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with header_col3:
+        # User status indicator
         if user_type == 'guest':
             st.markdown("""
             <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
@@ -1241,39 +1295,54 @@ def main():
         st.sidebar.error(f"Sidebar error: {e}")
         st.sidebar.info("Some sidebar features may not be available.")
 
-    # --- LLM Initialization ---
-    api_key = st.session_state.get('azure_api_key')
-    endpoint = st.session_state.get('azure_endpoint')
-    deployment = st.session_state.get('azure_deployment')
-    api_version = st.session_state.get('azure_api_version', '2024-02-01')
-
+    # --- LLM Initialization using Config ---
+    azure_config = config.get_azure_config()
+    
     # For guest mode, show limited functionality message
     if user_type == 'guest':
         st.info("🔔 **Guest Mode:** Some features are limited. Use demo credentials for full AI-powered functionality.")
 
-    if all([api_key, endpoint, deployment, api_version]) and st.session_state.llm is None:
+    # Check if Azure OpenAI is properly configured
+    if config.is_configured('azure_openai') and st.session_state.llm is None:
         try:
             from langchain_openai import AzureChatOpenAI
             st.session_state.llm = AzureChatOpenAI(
-                api_key=api_key, 
-                api_version=api_version, 
-                azure_endpoint=endpoint,
-                deployment_name=deployment, 
-                temperature=0.7
+                api_key=azure_config['api_key'], 
+                api_version=azure_config['api_version'], 
+                azure_endpoint=azure_config['endpoint'],
+                deployment_name=azure_config['chat_deployment'], 
+                temperature=azure_config['temperature'],
+                max_tokens=azure_config['max_tokens']
             )
-            if st.session_state.get('debug_mode'):
+            if config.get('app', 'debug_mode', False):
                 st.success("✅ LLM initialized successfully")
         except Exception as e:
-            st.error(f"Failed to initialize LLM. Please check credentials. Error: {e}")
-    elif not all([api_key, endpoint, deployment, api_version]) and user_type == 'full_access':
-         st.warning("Please provide all Azure OpenAI credentials in the sidebar to enable AI-powered features.")
+            st.error(f"Failed to initialize LLM. Please check Azure OpenAI configuration. Error: {e}")
+    elif not config.is_configured('azure_openai') and user_type == 'full_access':
+        st.warning("⚠️ Azure OpenAI not configured. Please set environment variables to enable AI-powered features.")
+        
+        # Show configuration instructions
+        with st.expander("🔧 Configuration Help", expanded=False):
+            st.markdown("""
+            **Required Environment Variables:**
+            ```
+            AZURE_OPENAI_API_KEY=your_api_key_here
+            AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+            AZURE_CHAT_DEPLOYMENT=your_deployment_name
+            ```
+            
+            **Setup Instructions:**
+            1. Create a `.env` file in your project root
+            2. Add the required variables above
+            3. Restart the application
+            """)
 
     # --- Main Application Tabs ---
-    # Adjust tab availability based on user type
+    # Adjust tab availability based on user type and configuration
     if user_type == 'full_access':
         tab_ai, tab_multi_agent, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
             "🤖 AI Intelligence",
-            "🤖🔄 Multi-Agent Coordination",  # NEW TAB
+            "🤖🔄 Multi-Agent Coordination",
             "📊 Market Analysis",
             "📈 Pro Dashboard",
             "💼 Portfolio View", 
@@ -1293,17 +1362,16 @@ def main():
                 ai_intelligence_old.render()
             except Exception as e:
                 st.error(f"AI Intelligence error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
                 st.info("AI Intelligence features require proper API configuration.")
 
-        # NEW MULTI-AGENT COORDINATION TAB
         with tab_multi_agent:
             try:
                 multi_agent_coordination.render()
             except Exception as e:
                 st.error(f"Multi-Agent Coordination error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
                 st.info("Multi-Agent Coordination features require proper API configuration.")
 
@@ -1312,7 +1380,7 @@ def main():
                 market_analysis.render()
             except Exception as e:
                 st.error(f"Market Analysis error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
 
         with tab_pro:
@@ -1320,7 +1388,7 @@ def main():
                 pro_dashboard.render()
             except Exception as e:
                 st.error(f"Pro Dashboard error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
 
         with tab_portfolio:
@@ -1328,7 +1396,7 @@ def main():
                 portfolio_enhanced_main.render()
             except Exception as e:
                 st.error(f"Portfolio error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
 
         with tab_autotrade:
@@ -1336,10 +1404,8 @@ def main():
                 auto_trading.render()
             except Exception as e:
                 st.error(f"Auto-Trading error: {e}")
-                if st.session_state.get('debug_mode'):
+                if config.get('app', 'debug_mode', False):
                     st.exception(e)
-    
-    
     else:  # Guest mode
         with tab_market:
             st.info("📊 **Demo Mode:** Market Analysis with limited features")

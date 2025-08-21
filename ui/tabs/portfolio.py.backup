@@ -5,7 +5,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from config import config
+from config import get_config
 from services.data_fetcher import pro_get_real_time_data
 from analysis.reporting import generate_investment_memo, generate_board_pack_content
 

@@ -1008,7 +1008,7 @@ def run_batch_analysis(selected_indices, document_type, analysis_mode, custom_qu
     st.markdown("### 📊 Batch Analysis Results")
     
     # Get LLM from config
-    from config import config
+    from config import get_config
     cfg = get_config()
     llm = cfg.get('llm')
     

@@ -9,7 +9,7 @@ import plotly.express as px
 import numpy as np
 from datetime import datetime, timedelta
 
-from config import config
+from config import get_config
 from services.data_fetcher import pro_get_real_time_data
 
 def calculate_portfolio_risk_metrics(portfolio_df):

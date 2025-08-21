@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""
+Import Fix Script for Agent RICH
+
+This script fixes common import issues after transitioning to the new config system.
+It scans files and suggests/applies fixes for config-related imports.
+"""
+
+import os
+import re
+from pathlib import Path
+
+def find_config_imports():
+    """Find files that might have problematic config imports"""
+    
+    # Files to check
+    python_files = []
+    
+    # Get all Python files in the project
+    for root, dirs, files in os.walk('.'):
+        # Skip certain directories
+        skip_dirs = {'.git', '__pycache__', 'venv', 'env', '.venv', 'node_modules'}
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        
+        for file in files:
+            if file.endswith('.py'):
+                python_files.append(os.path.join(root, file))
+    
+    print(f"🔍 Scanning {len(python_files)} Python files for config imports...")
+    
+    problematic_files = []
+    
+    for file_path in python_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+            # Look for problematic import patterns
+            patterns = [
+                r'from config import get_config',
+                r'import config\.get_config',
+                r'config\.get_config\(',
+                r'from.*config.*import.*get_config',
+                r'get_config\(',
+            ]
+            
+            found_issues = []
+            for pattern in patterns:
+                matches = re.finditer(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    line_num = content[:match.start()].count('\n') + 1
+                    found_issues.append({
+                        'pattern': pattern,
+                        'line': line_num,
+                        'match': match.group()
+                    })
+            
+            if found_issues:
+                problematic_files.append({
+                    'file': file_path,
+                    'issues': found_issues
+                })
+                
+        except Exception as e:
+            print(f"⚠️  Could not read {file_path}: {e}")
+    
+    return problematic_files
+
+def suggest_fixes(problematic_files):
+    """Suggest fixes for the problematic imports"""
+    
+    if not problematic_files:
+        print("✅ No problematic config imports found!")
+        return
+    
+    print(f"\n❌ Found {len(problematic_files)} files with config import issues:")
+    print("=" * 60)
+    
+    for file_info in problematic_files:
+        file_path = file_info['file']
+        issues = file_info['issues']
+        
+        print(f"\n📄 File: {file_path}")
+        print("-" * 40)
+        
+        for issue in issues:
+            print(f"   Line {issue['line']}: {issue['match']}")
+        
+        print("\n💡 Suggested fixes:")
+        print("   Replace with one of these:")
+        print("   1. from config import config")
+        print("   2. from config import get_config  # (already added for compatibility)")
+        print("   3. config.get('section', 'key', default_value)")
+        print("   4. get_config().get('section', 'key', default_value)")
+
+def auto_fix_files(problematic_files):
+    """Automatically fix common import patterns"""
+    
+    if not problematic_files:
+        return
+    
+    print(f"\n🔧 Auto-fixing {len(problematic_files)} files...")
+    
+    # Common replacements
+    replacements = [
+        # Fix import statements
+        (r'from config import get_config', 'from config import config'),
+        # Fix function calls - more complex patterns would need manual review
+    ]
+    
+    for file_info in problematic_files:
+        file_path = file_info['file']
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            original_content = content
+            
+            # Apply replacements
+            for pattern, replacement in replacements:
+                content = re.sub(pattern, replacement, content)
+            
+            # Only write if changes were made
+            if content != original_content:
+                # Create backup
+                backup_path = file_path + '.backup'
+                with open(backup_path, 'w', encoding='utf-8') as f:
+                    f.write(original_content)
+                
+                # Write fixed content
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                print(f"   ✅ Fixed: {file_path} (backup: {backup_path})")
+            else:
+                print(f"   ℹ️  No auto-fixes applied: {file_path}")
+                
+        except Exception as e:
+            print(f"   ❌ Error fixing {file_path}: {e}")
+
+def create_compatibility_layer():
+    """Create additional compatibility functions if needed"""
+    
+    compatibility_code = '''
+# Additional compatibility functions for config system
+# Add these to your config.py if you need them
+
+def get_config_value(key, default=None):
+    """Get a config value using dot notation (e.g., 'eodhd.api_key')"""
+    parts = key.split('.')
+    if len(parts) == 2:
+        return config.get(parts[0], parts[1], default)
+    return default
+
+def has_config_key(key):
+    """Check if a config key exists"""
+    parts = key.split('.')
+    if len(parts) == 2:
+        section_config = config.get_section(parts[0])
+        return parts[1] in section_config
+    return False
+
+def list_config_keys():
+    """List all available config keys"""
+    keys = []
+    for section_name, section_data in config._config.items():
+        for key in section_data.keys():
+            keys.append(f"{section_name}.{key}")
+    return keys
+'''
+    
+    print("\n📝 Additional compatibility functions:")
+    print("=" * 40)
+    print("If you need additional compatibility, add these functions to config.py:")
+    print(compatibility_code)
+
+def check_environment_setup():
+    """Check if environment is properly set up"""
+    
+    print("\n🔍 Checking environment setup...")
+    print("=" * 30)
+    
+    # Check for .env file
+    env_file = Path('.env')
+    if env_file.exists():
+        print("✅ .env file exists")
+        
+        # Check if it has required variables
+        try:
+            with open('.env', 'r') as f:
+                env_content = f.read()
+            
+            required_vars = [
+                'EODHD_API_KEY',
+                'AZURE_OPENAI_API_KEY',
+                'AZURE_OPENAI_ENDPOINT',
+                'AZURE_CHAT_DEPLOYMENT'
+            ]
+            
+            for var in required_vars:
+                if var in env_content:
+                    print(f"✅ {var} found in .env")
+                else:
+                    print(f"❌ {var} missing from .env")
+                    
+        except Exception as e:
+            print(f"❌ Error reading .env: {e}")
+    else:
+        print("❌ .env file not found")
+        print("   Run: python setup.py to create one")
+    
+    # Check for required packages
+    required_packages = ['streamlit', 'python-dotenv', 'langchain-openai']
+    
+    print("\n📦 Checking required packages:")
+    for package in required_packages:
+        try:
+            __import__(package.replace('-', '_'))
+            print(f"✅ {package} installed")
+        except ImportError:
+            print(f"❌ {package} not installed")
+            print(f"   Install with: pip install {package}")
+
+def main():
+    """Main function"""
+    
+    print("🔧 Agent RICH - Import Fix Script")
+    print("=" * 40)
+    
+    # Check current directory
+    if not Path('main.py').exists():
+        print("❌ Error: Please run this script from the Agent RICH project directory")
+        return
+    
+    # Find problematic imports
+    problematic_files = find_config_imports()
+    
+    # Show suggestions
+    suggest_fixes(problematic_files)
+    
+    # Ask user what to do
+    if problematic_files:
+        print("\n🤔 What would you like to do?")
+        print("1. Auto-fix simple imports (recommended)")
+        print("2. Manual review only")
+        print("3. Show compatibility layer code")
+        print("4. Check environment setup")
+        
+        choice = input("\nEnter your choice (1-4): ").strip()
+        
+        if choice == '1':
+            auto_fix_files(problematic_files)
+        elif choice == '2':
+            print("Please review the files manually and update imports as suggested.")
+        elif choice == '3':
+            create_compatibility_layer()
+        elif choice == '4':
+            check_environment_setup()
+    
+    # Always check environment
+    check_environment_setup()
+    
+    print("\n✅ Import analysis complete!")
+    print("\n🎯 Next steps:")
+    print("1. Fix any remaining import issues manually")
+    print("2. Run: python -c 'from config import config; print(config.get_status_summary())'")
+    print("3. Start the app: streamlit run main.py")
+
+if __name__ == "__main__":
+    main()

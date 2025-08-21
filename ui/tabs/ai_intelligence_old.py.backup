@@ -9,7 +9,7 @@ import time
 import random
 from typing import List, Dict
 
-from config import config
+from config import get_config
 
 # ============================================================================
 # AI TRADING AGENTS CLASSES

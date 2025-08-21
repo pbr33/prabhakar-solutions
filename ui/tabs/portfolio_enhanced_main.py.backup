@@ -14,7 +14,7 @@ from ui.tabs.hedge_fund_analytics import render_hedge_fund_analytics_tab
 from ui.tabs.document_intelligence import render_document_intelligence_tab
 from ui.tabs.ai_report_generator import render_ai_report_generator_tab
 
-from config import config
+from config import get_config
 
 # Keep the original PE portfolio generation function
 @st.cache_data

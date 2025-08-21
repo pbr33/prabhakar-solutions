@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
-from config import config
+from config import get_config
 from services.data_fetcher import pro_get_real_time_data, pro_get_intraday_data, pro_get_news
 from analysis.technical import run_ma_crossover_backtest
 
