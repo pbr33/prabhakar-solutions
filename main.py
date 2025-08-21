@@ -1126,7 +1126,7 @@ def main():
         from ui.styles import apply_custom_css
         from ui.sidebar import render_sidebar
         from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard, portfolio_enhanced_main
-        from ui.tabs import ai_intelligence  # New AI tab
+        from ui.tabs import ai_intelligence_old  # New AI tab
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
         st.error(f"Import error: {e}")
@@ -1172,7 +1172,7 @@ def main():
         portfolio_enhanced_main = MockModule()
         auto_trading = MockModule()
         pro_dashboard = MockModule()
-        ai_intelligence = MockModule()
+        ai_intelligence_old = MockModule()
         
         class AutoTradingEngine:
             pass
@@ -1290,7 +1290,7 @@ def main():
     if user_type == 'full_access':
         with tab_ai:
             try:
-                ai_intelligence.render()
+                ai_intelligence_old.render()
             except Exception as e:
                 st.error(f"AI Intelligence error: {e}")
                 if st.session_state.get('debug_mode'):
