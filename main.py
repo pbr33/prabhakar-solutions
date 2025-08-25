@@ -12,7 +12,7 @@ if current_dir not in sys.path:
 
 # Import configuration system
 from config import config, load_env_file
-
+from ui.sidebar import t
 # Load environment variables at startup
 load_env_file()
 
@@ -1149,7 +1149,15 @@ def main():
         from ui.styles import apply_custom_css
         from ui.sidebar import render_sidebar
         from ui.tabs import market_analysis, portfolio, auto_trading, pro_dashboard, portfolio_enhanced_main
-        from ui.tabs import ai_intelligence_old, multi_agent_coordination
+        try:
+            from ui.tabs.ai_intelligence import render as ai_intelligence_render
+            ai_intelligence_available = True
+        except ImportError as e:
+            st.warning(f"AI Intelligence module not fully configured: {e}")
+            def ai_intelligence_render():
+                st.info("🤖 AI Intelligence features are being set up. Please check back soon!")
+            ai_intelligence_available = False
+        # from ui.tabs import ai_intelligence, multi_agent_coordination
         from core.trading_engine import AutoTradingEngine
     except ImportError as e:
         st.error(f"Import error: {e}")
@@ -1195,7 +1203,7 @@ def main():
         portfolio_enhanced_main = MockModule()
         auto_trading = MockModule()
         pro_dashboard = MockModule()
-        ai_intelligence_old = MockModule()
+        ai_intelligence_render = MockModule()
         multi_agent_coordination = MockModule()
         
         class AutoTradingEngine:
@@ -1236,8 +1244,8 @@ def main():
     # Main header with user status and configuration status
     header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
     with header_col1:
-        st.markdown('<h1 class="main-header">🤖 AI Trading Agents Dashboard</h1>', unsafe_allow_html=True)
-    
+        # st.markdown('<h1 class="main-header">🤖 {t(AI Trading Agents Dashboard)}</h1>', unsafe_allow_html=True)
+        st.markdown(f'<h1 class="main-header">🤖 {t("AI Trading Agents Dashboard")}</h1>', unsafe_allow_html=True)
     with header_col2:
         # Configuration status indicator
         validation = config.validate_config()
@@ -1359,7 +1367,7 @@ def main():
     if user_type == 'full_access':
         with tab_ai:
             try:
-                ai_intelligence_old.render()
+                ai_intelligence_render()
             except Exception as e:
                 st.error(f"AI Intelligence error: {e}")
                 if config.get('app', 'debug_mode', False):

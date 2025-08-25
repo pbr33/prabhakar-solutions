@@ -531,9 +531,8 @@ def render():
     st.markdown("*Advanced AI agents, storytelling, and predictive analytics for institutional-grade trading insights*")
     
     # Get configuration
-    cfg = get_config()
-    symbol = cfg['selected_symbol']
-    llm = cfg['llm']
+    symbol = st.session_state.get('selected_symbol', 'AAPL.US')
+    llm = st.session_state.get('llm', None)
     
     # Load market data
     try:

@@ -8,6 +8,9 @@ import os
 from datetime import datetime, timedelta
 import requests
 import json
+from translate import Translator
+
+
 
 def load_eci_logo():
     """Load ECI logo from static folder"""
@@ -31,15 +34,156 @@ def load_eci_logo():
         print(f"Could not load ECI logo: {e}")
     return None
 
+@st.cache_data(ttl=300)  # Cache translations for 5 minutes
+def simple_translate(text, target_language):
+    """Simple translation function with caching"""
+    try:
+        if not text or target_language == 'en':
+            return text
+        
+        translator = Translator(to_lang=target_language)
+        translated = translator.translate(text)
+        return translated
+    except Exception as e:
+        # If translation fails, return original text
+        return text
+
+def get_supported_languages():
+    """Get list of supported languages"""
+    return {
+        'en': '🇺🇸 English',
+        'es': '🇪🇸 Spanish',
+        'fr': '🇫🇷 French',
+        'de': '🇩🇪 German',
+        'it': '🇮🇹 Italian',
+        'pt': '🇵🇹 Portuguese',
+        'ru': '🇷🇺 Russian',
+        'ja': '🇯🇵 Japanese',
+        'ko': '🇰🇷 Korean',
+        'zh': '🇨🇳 Chinese',
+        'ar': '🇸🇦 Arabic',
+        'hi': '🇮🇳 Hindi',
+        'tr': '🇹🇷 Turkish',
+        'nl': '🇳🇱 Dutch',
+        'sv': '🇸🇪 Swedish',
+        'no': '🇳🇴 Norwegian',
+        'da': '🇩🇰 Danish',
+        'fi': '🇫🇮 Finnish',
+        'pl': '🇵🇱 Polish',
+        'cs': '🇨🇿 Czech'
+    }
+
+# REPLACE THIS SECTION in your sidebar.py file around line 30-70:
+
 def apply_professional_theme():
     """Apply comprehensive professional theme with advanced styling"""
     
     # Get theme settings
     theme_mode = st.session_state.get('theme_mode', 'Dark')
-    color_scheme = st.session_state.get('color_scheme', 'Professional Blue')
+    color_scheme = st.session_state.get('color_scheme', 'Claude Anthropic')
     
-    # Define comprehensive color schemes
+    # Define comprehensive color schemes - ENHANCED WITH MORE OPTIONS
     color_schemes = {
+        'Claude Anthropic': {
+            'primary': '#D97706',
+            'secondary': '#F59E0B',
+            'accent': '#B45309',
+            'success': '#059669',
+            'warning': '#D97706',
+            'danger': '#DC2626',
+            'gradient_start': '#F3F4F6',
+            'gradient_end': '#E5E7EB'
+        },
+        'Minimal White': {
+            'primary': '#6B7280',
+            'secondary': '#9CA3AF',
+            'accent': '#4B5563',
+            'success': '#10B981',
+            'warning': '#F59E0B',
+            'danger': '#EF4444',
+            'gradient_start': '#FFFFFF',
+            'gradient_end': '#F9FAFB'
+        },
+        'Soft Gray': {
+            'primary': '#6366F1',
+            'secondary': '#8B5CF6',
+            'accent': '#4F46E5',
+            'success': '#10B981',
+            'warning': '#F59E0B',
+            'danger': '#EF4444',
+            'gradient_start': '#F8FAFC',
+            'gradient_end': '#E2E8F0'
+        },
+        'Clean Slate': {
+            'primary': '#374151',
+            'secondary': '#6B7280',
+            'accent': '#1F2937',
+            'success': '#059669',
+            'warning': '#D97706',
+            'danger': '#DC2626',
+            'gradient_start': '#F1F5F9',
+            'gradient_end': '#CBD5E1'
+        },
+        'Off White': {
+            'primary': '#78716C',
+            'secondary': '#A8A29E',
+            'accent': '#57534E',
+            'success': '#16A34A',
+            'warning': '#EA580C',
+            'danger': '#DC2626',
+            'gradient_start': '#FAFAF9',
+            'gradient_end': '#F5F5F4'
+        },
+        'Pure White': {
+            'primary': '#000000',
+            'secondary': '#404040',
+            'accent': '#1A1A1A',
+            'success': '#22C55E',
+            'warning': '#F59E0B',
+            'danger': '#EF4444',
+            'gradient_start': '#FFFFFF',
+            'gradient_end': '#FFFFFF'
+        },
+        'Light Gray': {
+            'primary': '#525252',
+            'secondary': '#737373',
+            'accent': '#404040',
+            'success': '#22C55E',
+            'warning': '#F97316',
+            'danger': '#EF4444',
+            'gradient_start': '#FAFAFA',
+            'gradient_end': '#F4F4F5'
+        },
+        'Warm Gray': {
+            'primary': '#78716C',
+            'secondary': '#A8A29E',
+            'accent': '#57534E',
+            'success': '#16A34A',
+            'warning': '#EA580C',
+            'danger': '#DC2626',
+            'gradient_start': '#FAFAF9',
+            'gradient_end': '#F5F5F4'
+        },
+        'Cool Gray': {
+            'primary': '#64748B',
+            'secondary': '#94A3B8',
+            'accent': '#475569',
+            'success': '#0F766E',
+            'warning': '#C2410C',
+            'danger': '#DC2626',
+            'gradient_start': '#F8FAFC',
+            'gradient_end': '#E2E8F0'
+        },
+        'Neutral Stone': {
+            'primary': '#6B7280',
+            'secondary': '#9CA3AF',
+            'accent': '#4B5563',
+            'success': '#059669',
+            'warning': '#D97706',
+            'danger': '#DC2626',
+            'gradient_start': '#FAFAF9',
+            'gradient_end': '#E7E5E4'
+        },
         'Professional Blue': {
             'primary': '#0066ff',
             'secondary': '#4d94ff',
@@ -79,10 +223,51 @@ def apply_professional_theme():
             'danger': '#e74c3c',
             'gradient_start': '#f093fb',
             'gradient_end': '#f5576c'
+        },
+        'Deep Ocean': {
+            'primary': '#0891B2',
+            'secondary': '#06B6D4',
+            'accent': '#0E7490',
+            'success': '#059669',
+            'warning': '#D97706',
+            'danger': '#DC2626',
+            'gradient_start': '#0F172A',
+            'gradient_end': '#1E293B'
+        },
+        'Forest Green': {
+            'primary': '#059669',
+            'secondary': '#10B981',
+            'accent': '#047857',
+            'success': '#22C55E',
+            'warning': '#F59E0B',
+            'danger': '#EF4444',
+            'gradient_start': '#064E3B',
+            'gradient_end': '#065F46'
+        },
+        'Royal Purple': {
+            'primary': '#7C3AED',
+            'secondary': '#A855F7',
+            'accent': '#6D28D9',
+            'success': '#10B981',
+            'warning': '#F59E0B',
+            'danger': '#EF4444',
+            'gradient_start': '#581C87',
+            'gradient_end': '#7C2D92'
+        },
+        'Sunset Red': {
+            'primary': '#DC2626',
+            'secondary': '#EF4444',
+            'accent': '#B91C1C',
+            'success': '#10B981',
+            'warning': '#F59E0B',
+            'danger': '#7F1D1D',
+            'gradient_start': '#7F1D1D',
+            'gradient_end': '#991B1B'
         }
     }
     
-    colors = color_schemes.get(color_scheme, color_schemes['Professional Blue'])
+    # Rest of your existing code continues unchanged...
+    colors = color_schemes.get(color_scheme, color_schemes['Claude Anthropic'])
     
     # Theme-specific colors
     if theme_mode == 'Dark':
@@ -96,15 +281,16 @@ def apply_professional_theme():
         border_color = '#404040'
         shadow_color = 'rgba(0, 0, 0, 0.5)'
     else:
+        # Enhanced light theme colors for better contrast with new color schemes
         bg_primary = '#ffffff'
-        bg_secondary = '#f8f9fa'
-        bg_tertiary = '#e9ecef'
-        bg_sidebar = '#f5f7fa'
-        text_primary = '#212529'
-        text_secondary = '#495057'
-        text_muted = '#6c757d'
-        border_color = '#dee2e6'
-        shadow_color = 'rgba(0, 0, 0, 0.1)'
+        bg_secondary = '#fafafa'
+        bg_tertiary = '#f5f5f5'
+        bg_sidebar = '#fdfdfd'
+        text_primary = '#1a1a1a'
+        text_secondary = '#4a4a4a'
+        text_muted = '#6a6a6a'
+        border_color = '#e5e5e5'
+        shadow_color = 'rgba(0, 0, 0, 0.08)'
     
     # Advanced CSS with animations and professional styling
     professional_css = f"""
@@ -1481,7 +1667,7 @@ def fetch_all_tickers(api_key: str):
     return all_tickers
 
 def render_theme_settings():
-    """Render theme configuration"""
+    """Render theme configuration with enhanced color options"""
     
     st.markdown("""
     <div class="section-header">
@@ -1504,79 +1690,155 @@ def render_theme_settings():
             st.rerun()
     
     with theme_col2:
+        # UPDATED COLOR SCHEME OPTIONS - More choices including Claude-like colors
+        color_options = [
+            "Claude Anthropic",      # Default - Claude's orange/amber theme
+            "Minimal White",         # Clean white with gray accents
+            "Soft Gray",            # Light gray with subtle colors
+            "Clean Slate",          # Professional gray tones
+            "Off White",            # Warm off-white background
+            "Pure White",           # Stark white with black accents
+            "Light Gray",           # Light gray variations
+            "Warm Gray",            # Warm gray tones
+            "Cool Gray",            # Cool gray variations
+            "Neutral Stone",        # Stone/beige neutrals
+            "Professional Blue",    # Your existing blue
+            "Financial Green",      # Your existing green
+            "Executive Purple",     # Your existing purple
+            "Energy Orange",        # Your existing orange
+            "Deep Ocean",           # Dark blue theme
+            "Forest Green",         # Dark green theme
+            "Royal Purple",         # Rich purple theme
+            "Sunset Red"            # Bold red theme
+        ]
+        
+        current_scheme = st.session_state.get('color_scheme', 'Claude Anthropic')
+        current_index = color_options.index(current_scheme) if current_scheme in color_options else 0
+        
         new_colors = st.selectbox(
             "Colors",
-            ["Professional Blue", "Financial Green", "Executive Purple", "Energy Orange"],
-            index=["Professional Blue", "Financial Green", "Executive Purple", "Energy Orange"].index(
-                st.session_state.get('color_scheme', 'Professional Blue')
-            ),
+            color_options,
+            index=current_index,
             key="color_scheme_professional"
         )
+        
         if new_colors != st.session_state.get('color_scheme'):
             st.session_state.color_scheme = new_colors
             st.rerun()
-
-def render_sidebar():
-    """Main sidebar rendering function with complete professional interface"""
     
-    # Apply professional theme first
-    apply_professional_theme()
-    
-    with st.sidebar:
-        # Professional header with logo
-        logo_base64 = load_eci_logo()
+    # Color scheme preview
+    if st.checkbox("🎨 Show Color Preview", value=False):
+        color_schemes = {
+            'Claude Anthropic': {'primary': '#D97706', 'desc': 'Claude\'s signature orange theme'},
+            'Minimal White': {'primary': '#6B7280', 'desc': 'Clean white with gray accents'},
+            'Soft Gray': {'primary': '#6366F1', 'desc': 'Soft gray with purple highlights'},
+            'Clean Slate': {'primary': '#374151', 'desc': 'Professional dark gray'},
+            'Off White': {'primary': '#78716C', 'desc': 'Warm off-white background'},
+            'Pure White': {'primary': '#000000', 'desc': 'Stark white with black'},
+            'Light Gray': {'primary': '#525252', 'desc': 'Various light gray tones'},
+            'Warm Gray': {'primary': '#78716C', 'desc': 'Warm gray variations'},
+            'Cool Gray': {'primary': '#64748B', 'desc': 'Cool gray with blue tint'},
+            'Neutral Stone': {'primary': '#6B7280', 'desc': 'Stone and beige neutrals'}
+        }
         
-        if logo_base64:
-            st.markdown(f"""
-            <div class="professional-header">
-                <img src="data:image/png;base64,{logo_base64}" class="company-logo" alt="ECI Logo">
-                <div class="company-name">ECI Solutions</div>
-                <div class="company-tagline">AI-Powered Trading Intelligence Platform</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="professional-header">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🏢</div>
-                <div class="company-name">ECI Solutions</div>
-                <div class="company-tagline">AI-Powered Trading Intelligence Platform</div>
-            </div>
-            """, unsafe_allow_html=True)
+        selected_scheme = color_schemes.get(new_colors, {'primary': '#6B7280', 'desc': 'Custom theme'})
         
-        # Theme settings (top priority for user experience)
-        render_theme_settings()
-        
-        # Professional data sources section
-        render_professional_data_sources()
-        
-        # Connection statistics
-        render_connection_statistics()
-        
-        # Market status
-        render_market_status()
-        
-        # Asset selection
-        render_asset_selection()
-        
-        # Analysis settings
-        render_analysis_settings()
-        
-        # Portfolio overview (if authenticated)
-        render_portfolio_overview()
-        
-        # Quick actions
-        render_quick_actions()
-        
-        # System status footer
-        st.markdown("---")
-        st.markdown("""
-        <div style="text-align: center; font-size: 0.75rem; color: var(--text-muted); margin: 1rem 0;">
-            <div style="margin-bottom: 0.5rem;">🟢 System Online • 🔄 Data Live • ⚡ AI Active</div>
-            <div>© 2024 ECI Solutions • Trading Platform v2.1</div>
+        st.markdown(f"""
+        <div style="
+            background: {selected_scheme['primary']}; 
+            color: white; 
+            padding: 1rem; 
+            border-radius: 8px; 
+            text-align: center; 
+            margin: 0.5rem 0;
+        ">
+            <strong>{new_colors}</strong><br>
+            <small>{selected_scheme['desc']}</small>
         </div>
         """, unsafe_allow_html=True)
+        render_translation_settings()
 
-# Additional utility functions for file handling and data management
+def render_translation_settings():
+    """Render simple language translation settings"""
+    
+    st.markdown("""
+    <div class="section-header">
+        🌐 Language Translation
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Get available languages
+    languages = get_supported_languages()
+    language_options = list(languages.values())
+    language_codes = list(languages.keys())
+    
+    # Current selection
+    current_lang = st.session_state.get('selected_language', 'en')
+    current_index = language_codes.index(current_lang) if current_lang in language_codes else 0
+    
+    # Language selector
+    selected_language = st.selectbox(
+        "Select Language",
+        language_options,
+        index=current_index,
+        key="language_selector",
+        help="Translate interface text to your preferred language"
+    )
+    
+    # Get language code
+    selected_code = language_codes[language_options.index(selected_language)]
+    
+    # Update session state if changed
+    if selected_code != st.session_state.get('selected_language'):
+        st.session_state.selected_language = selected_code
+        st.rerun()
+    
+    # Show current selection
+    st.markdown(f"""
+    <div style="
+        background: var(--bg-secondary); 
+        border: 1px solid var(--border-color); 
+        border-radius: 8px; 
+        padding: 0.8rem; 
+        text-align: center; 
+        margin: 0.5rem 0;
+    ">
+        <strong>Current: {selected_language}</strong>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Translation status
+    if selected_code != 'en':
+        st.info("🔄 Translation active - Interface text will be translated")
+        
+        # Test translation
+        if st.button("🧪 Test Translation", use_container_width=True):
+            test_text = "Welcome to ECI Trading Platform"
+            translated = simple_translate(test_text, selected_code)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Original:**")
+                st.code(test_text)
+            with col2:
+                st.markdown("**Translated:**")
+                st.code(translated)
+    else:
+        st.success("✅ English - No translation needed")
+
+# STEP 5: Add translation helper function (around line 1280):
+
+def t(text, target_lang=None):
+    """Simple translation helper function"""
+    if not target_lang:
+        target_lang = st.session_state.get('selected_language', 'en')
+    
+    if target_lang == 'en':
+        return text
+    
+    return simple_translate(text, target_lang)
+
+
 def handle_file_upload(uploaded_files, file_type):
     """Enhanced file upload handling with progress tracking"""
     if not uploaded_files:
@@ -1877,7 +2139,7 @@ def render_complete_professional_sidebar():
         # Navigation tabs for different sections
         nav_tab = st.selectbox(
             "",
-            ["🏠 Overview", "🔗 Data Sources", "📤 Upload", "📊 Analytics", "⚙️ Settings"],
+            ["🏠 Overview", "🔗 Data Sources", "📤 Upload", "📊 Analytics", "⚙️ Settings", "🌐 Language"],  # ADD "🌐 Language"
             key="sidebar_navigation",
             label_visibility="collapsed"
         )
@@ -1898,6 +2160,33 @@ def render_complete_professional_sidebar():
             
         elif nav_tab == "📊 Analytics":
             render_analysis_settings()
+
+        elif nav_tab == "🌐 Language":
+            render_translation_settings()
+            
+            # Show some example translations
+            st.markdown("### 📝 Translation Examples")
+            
+            sample_texts = [
+                "Market Analysis",
+                "Portfolio Performance", 
+                "Risk Assessment",
+                "Trading Signals",
+                "Data Sources"
+            ]
+            
+            target_lang = st.session_state.get('selected_language', 'en')
+            
+            if target_lang != 'en':
+                for text in sample_texts:
+                    translated = simple_translate(text, target_lang)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.text(text)
+                    with col2:
+                        st.text(translated)
+            else:
+                st.info("Select a language other than English to see translations")
             
         elif nav_tab == "⚙️ Settings":
             render_theme_settings()

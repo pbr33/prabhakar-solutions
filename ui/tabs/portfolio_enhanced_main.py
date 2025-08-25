@@ -243,8 +243,8 @@ def render():
     st.markdown("# 💼 Enhanced Institutional Portfolio Management")
     
     # Get configuration and data
-    cfg = get_config()
-    llm = cfg.get('llm')
+    api_key = config.get_eodhd_api_key()
+    llm = st.session_state.get('llm', None)
     trading_engine = st.session_state.get('trading_engine')
     
     # Generate PE portfolio data
