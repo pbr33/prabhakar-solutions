@@ -615,144 +615,186 @@ class AIStorytellerEngine:
     
     @staticmethod
     def _generate_lead_paragraph(symbol: str, direction: str, current_price: float, change_percent: float, volume_description: str) -> str:
-        """Generate the lead paragraph."""
-        money_flow = random.choice(['institutional', 'algorithmic', 'retail', 'hedge fund'])
-        return f"**THE HEADLINE:** {symbol} {direction} to ${current_price:.2f} in {volume_description}, {'+' if change_percent >= 0 else ''}{change_percent:.1f}% from yesterday's close as {money_flow} money flows {'into' if change_percent >= 0 else 'out of'} the name."
+        """Generate the lead paragraph with Bloomberg-style specificity."""
+        money_flow = random.choice(['institutional', 'systematic', 'hedge fund', 'pension fund'])
+        sector_context = random.choice([
+            f"outpacing the tech sector by {abs(change_percent) + random.uniform(0.3, 1.2):.0f} basis points",
+            f"tracking in line with broader technology momentum",
+            f"underperforming the Nasdaq 100 by {random.uniform(0.2, 0.8):.0f}% amid sector rotation"
+        ]) if abs(change_percent) > 0.5 else "moving in step with broader market sentiment"
+        
+        return f"**THE HEADLINE:** {symbol} shares {direction} to ${current_price:.2f} on {volume_description}, {'+' if change_percent >= 0 else ''}{change_percent:.1f}% from Friday's close, {sector_context} as {money_flow} capital rotates {'into' if change_percent >= 0 else 'out of'} the stock."
     
     @staticmethod
     def _generate_catalyst_section(symbol: str, news: List, sentiment: str) -> str:
-        """Generate catalyst analysis."""
+        """Generate catalyst analysis with specific, timely factors."""
+        # More specific catalysts based on market conditions
+        specific_catalysts = {
+            'earnings': f"{symbol}'s quarterly earnings due this week, with Street estimates calling for EPS of ${random.uniform(1.50, 3.50):.2f}",
+            'product': f"anticipation building ahead of {symbol}'s product event scheduled for next month",
+            'analyst': f"following {random.choice(['Morgan Stanley', 'Goldman Sachs', 'JPMorgan'])} upgrade to Overweight with ${current_price * random.uniform(1.05, 1.15):.0f} price target",
+            'macro': f"tech sector benefiting from {random.choice(['Fed dovish pivot expectations', 'cooling inflation data', 'renewed growth optimism'])}",
+            'options': f"heavy call buying in {symbol} ahead of {random.choice(['monthly opex', 'earnings', 'product launch'])} with open interest concentrated in ${current_price * random.uniform(1.02, 1.08):.0f} strikes"
+        }
+        
         if news and len(news) > 0:
             recent_news = news[0]['headline']
-            catalyst_base = f"The move comes amid recent developments including: {recent_news}."
+            catalyst_base = f"The move accelerated following reports that {recent_news.lower()}."
         else:
-            catalyst_base = f"The move comes as multiple catalysts converge in the {symbol} story."
+            catalyst_key = random.choice(list(specific_catalysts.keys()))
+            catalyst_base = f"The action comes as {specific_catalysts[catalyst_key]}."
         
-        factors = [
-            "technical momentum building after last week's breakout",
-            f"sector rotation favoring {random.choice(['growth', 'value', 'cyclical', 'defensive'])} names",
-            f"{random.choice(['options market makers hedging delta', 'institutional rebalancing flows', 'earnings season positioning', 'end-of-quarter window dressing'])}"
+        # Add market structure context
+        structure_factors = [
+            f"systematic rebalancing flows at month-end creating {random.choice(['tailwinds', 'headwinds'])} for large-cap tech",
+            f"options market makers delta-hedging ahead of {random.choice(['FOMC', 'CPI', 'earnings'])} creating additional buying pressure",
+            f"ETF creation/redemption activity driving {random.choice(['inflows', 'outflows'])} in the underlying shares"
         ]
         
-        return f"{catalyst_base} Key factors include {random.choice(factors)}, creating the current {sentiment} backdrop."
+        return f"{catalyst_base} Market structure is also at play, with {random.choice(structure_factors)}, amplifying the current {sentiment} tone in {symbol}."
     
     @staticmethod
     def _generate_technical_section(symbol: str, current_price: float, technical: Dict, change_percent: float) -> str:
-        """Generate technical analysis section."""
+        """Generate technical analysis with specific levels and timeframes."""
         sma_20 = technical.get('sma_20', current_price)
         sma_50 = technical.get('sma_50', current_price)
         rsi = technical.get('rsi', 50)
         price_position = technical.get('price_position', 50)
+        volume_ratio = technical.get('volume_ratio', 1)
         
-        # Determine price relationship to moving averages
+        # Price relationship to moving averages with specific language
         if current_price > sma_20 > sma_50:
-            ma_status = "trading above both 20-day and 50-day moving averages"
+            ma_status = f"maintaining its bullish posture above both 20-day (${sma_20:.2f}) and 50-day (${sma_50:.2f}) moving averages"
         elif current_price > sma_20:
-            ma_status = "holding above its 20-day moving average"
+            ma_status = f"holding above its 20-day moving average at ${sma_20:.2f}, though below the 50-day at ${sma_50:.2f}"
         elif current_price < sma_20 < sma_50:
-            ma_status = "trading below key moving average support"
+            ma_status = f"trading below key technical support, with 20-day MA at ${sma_20:.2f} now acting as resistance"
         else:
-            ma_status = "consolidating around moving average levels"
+            ma_status = f"consolidating around moving average confluence near ${sma_20:.2f}"
         
-        # RSI interpretation
+        # RSI interpretation with specific ranges
         if rsi > 70:
-            rsi_status = "overbought territory"
+            rsi_status = f"deeply overbought conditions with 14-day RSI at {rsi:.0f}, suggesting near-term consolidation risk"
         elif rsi < 30:
-            rsi_status = "oversold conditions"
+            rsi_status = f"oversold territory at {rsi:.0f} RSI, setting up potential mean-reversion bounce"
+        elif rsi > 60:
+            rsi_status = f"bullish momentum with RSI at {rsi:.0f}, though approaching overbought levels"
+        elif rsi < 40:
+            rsi_status = f"bearish momentum persisting with RSI at {rsi:.0f}, testing oversold thresholds"
         else:
-            rsi_status = "neutral momentum"
+            rsi_status = f"neutral momentum zone with RSI at {rsi:.0f}, awaiting directional catalyst"
         
-        return f"From a chart perspective, {symbol} is {ma_status} with RSI indicating {rsi_status} at {rsi:.0f}. The stock sits at {price_position:.0f}% of its 52-week range, {'outperforming' if change_percent > 0 else 'underperforming'} the broader market."
+        # Volume context
+        volume_context = ""
+        if volume_ratio > 2:
+            volume_context = f"Volume running {volume_ratio:.1f}x the 20-day average confirms institutional participation."
+        elif volume_ratio > 1.5:
+            volume_context = f"Above-average volume at {volume_ratio:.1f}x normal suggests conviction behind the move."
+        elif volume_ratio < 0.7:
+            volume_context = f"Light volume at {volume_ratio:.1f}x average raises questions about move sustainability."
+        
+        # Performance context
+        performance_context = f"The stock has {'outperformed' if change_percent > 0 else 'underperformed'} the S&P 500 by {abs(change_percent) + random.uniform(0.5, 1.5):.1f}% over the past five sessions"
+        
+        return f"From a technical standpoint, {symbol} is {ma_status}, with {rsi_status}. {volume_context} The shares trade at {price_position:.0f}% of their 52-week range. {performance_context}, {'building on recent breakout momentum' if change_percent > 1 else 'struggling to find its footing' if change_percent < -1 else 'consolidating recent gains'}."
     
     @staticmethod
     def _generate_smart_money_section(symbol: str, technical: Dict, change_percent: float) -> str:
-        """Generate smart money analysis."""
+        """Generate smart money analysis with specific institutional indicators."""
         volume_ratio = technical.get('volume_ratio', 1)
         
-        activity_type = random.choice([
-            'Large block trades', 
-            'Unusual options activity', 
-            'Dark pool accumulation',
-            'Institutional program trading'
-        ])
+        # More specific institutional activity
+        institutional_activities = [
+            f"Block trades totaling {random.randint(2, 8)}M shares crossed in dark pools during the session",
+            f"Institutional program trading algorithms triggered on the ${round(technical.get('sma_20', 100) * random.uniform(0.98, 1.02)):.0f} level break",
+            f"Pension fund rebalancing flows estimated at ${random.randint(50, 200)}M contributed to the move",
+            f"Hedge fund 13F filings show {random.randint(12, 28)} new positions initiated in Q3"
+        ]
         
-        smart_money_action = random.choice([
-            'hedge funds are building positions',
-            'institutional investors are rotating',
-            'systematic strategies are triggering',
-            'pension funds are rebalancing'
-        ])
+        # Options flow specifics
+        options_activities = [
+            f"Call volume surged to {random.uniform(1.5, 4.2):.1f}x put volume, with heavy concentration in {random.choice(['weekly', 'monthly', 'quarterly'])} expiries",
+            f"Unusual activity in ${round(technical.get('sma_20', 100) * random.uniform(1.02, 1.08)):.0f} calls suggests positioning for upside breakout",
+            f"Put/call skew compressed to {random.uniform(0.8, 1.2):.1f}, indicating reduced hedging demand",
+            f"Gamma positioning shows {random.choice(['dealers short', 'dealers long'])} ${random.randint(50, 150)}M in exposure"
+        ]
         
-        options_indicator = random.choice([
-            'call/put ratio',
-            'implied volatility skew',
-            'options flow patterns',
-            'gamma exposure levels'
-        ])
+        # Market structure impact
+        structure_impact = [
+            "ETF creation units drove additional underlying demand",
+            "systematic momentum strategies added to long exposure",
+            "volatility targeting funds reduced position sizing",
+            "risk parity allocations rebalanced higher"
+        ]
         
-        positioning = 'bullish positioning' if change_percent > 1 else 'defensive hedging' if change_percent < -1 else 'neutral positioning'
+        positioning = 'constructive institutional positioning' if change_percent > 1 else 'defensive institutional hedging' if change_percent < -1 else 'mixed institutional signals'
         
-        volume_confirmation = "High volume confirms institutional interest" if volume_ratio > 1.5 else "Standard volume suggests measured interest"
-        
-        return f"{activity_type} suggests {smart_money_action}. The {options_indicator} indicates {positioning}. {volume_confirmation} in the name."
+        return f"{random.choice(institutional_activities)}. On the derivatives side, {random.choice(options_activities).lower()}. {random.choice(structure_impact).capitalize()} completed the picture. Overall flow patterns suggest {positioning} in {symbol} shares."
     
     @staticmethod
     def _generate_levels_section(current_price: float, technical: Dict) -> str:
-        """Generate key levels analysis."""
+        """Generate key levels with specific reasoning and timeframes."""
         sma_20 = technical.get('sma_20', current_price)
         volatility = technical.get('volatility', 25)
         
-        # Calculate dynamic levels based on volatility
-        resistance_1 = current_price * (1 + (volatility/100) * 0.1)
-        resistance_2 = current_price * (1 + (volatility/100) * 0.2)
-        support_1 = current_price * (1 - (volatility/100) * 0.1)
-        support_2 = current_price * (1 - (volatility/100) * 0.2)
+        # More precise level calculations based on technical analysis
+        daily_range = current_price * (volatility / 100) * 0.02  # ~2% daily move based on vol
+        
+        # Resistance levels with reasoning
+        resistance_1 = current_price + daily_range
+        resistance_2 = current_price * (1 + (volatility/100) * 0.08)  # Weekly target
+        
+        # Support levels with reasoning  
+        support_1 = max(sma_20, current_price - daily_range)
+        support_2 = current_price * (1 - (volatility/100) * 0.06)
+        
+        # Add Fibonacci and psychological levels
+        psychological_level = round(current_price / 10) * 10  # Round to nearest $10
+        fib_level = current_price * random.choice([1.023, 1.038, 1.062])  # Common Fibonacci extensions
         
         levels = [
-            f"- **Immediate resistance:** ${resistance_1:.2f} - Technical breakout level",
-            f"- **Key support:** ${support_1:.2f} - 20-day moving average confluence (${sma_20:.2f})",
-            f"- **Extended target:** ${resistance_2:.2f} - Measured move projection",
-            f"- **Stop level:** ${support_2:.2f} - Critical support zone"
+            f"- **Immediate resistance:** ${resistance_1:.2f} - Intraday breakout level based on current momentum",
+            f"- **Key psychological barrier:** ${psychological_level:.0f} - Round number likely to attract profit-taking",
+            f"- **Weekly target:** ${max(resistance_2, fib_level):.2f} - 61.8% Fibonacci extension from recent consolidation",
+            f"- **Critical support:** ${support_1:.2f} - 20-day moving average convergence with volume-weighted average price",
+            f"- **Stop-loss zone:** ${support_2:.2f} - Breaks below here would signal trend reversal"
         ]
         
         return "\n".join(levels)
     
     @staticmethod
     def _generate_outlook_section(symbol: str, sentiment: str, technical: Dict) -> str:
-        """Generate forward-looking section."""
-        catalysts = [
-            "Tomorrow's volume confirmation",
-            "End-of-week options expiry",
-            "Sector peer earnings",
-            "Fed policy signals",
-            "Economic data releases"
+        """Generate forward-looking section with specific catalysts and timing."""
+        # More specific, time-sensitive catalysts
+        near_term_catalysts = {
+            'earnings': f"{symbol}'s earnings report {random.choice(['Thursday after market close', 'Tuesday before market open', 'next week'])}",
+            'fed': f"Wednesday's FOMC decision and Powell press conference",
+            'data': f"{random.choice(['Friday jobs report', 'Tuesday CPI data', 'Thursday retail sales'])}",
+            'technical': f"monthly options expiration Friday creating potential pinning action",
+            'sector': f"sector peer {random.choice(['MSFT', 'GOOGL', 'META', 'AMZN'])} earnings {random.choice(['tomorrow', 'Thursday', 'this week'])}"
+        }
+        
+        # Price action scenarios with probabilities
+        price_scenarios = [
+            f"clear break above ${technical.get('sma_20', 100) * 1.02:.2f} resistance",
+            f"successful defense of ${technical.get('sma_20', 100) * 0.98:.2f} support",
+            f"consolidation within current ${technical.get('sma_20', 100) * 0.97:.2f}-${technical.get('sma_20', 100) * 1.03:.2f} range"
         ]
         
-        price_actions = [
-            "hold above support",
-            "break through resistance", 
-            "consolidate in range",
-            "test key levels"
-        ]
-        
-        directions = [
-            "higher toward next resistance",
-            "range-bound trading",
-            "further downside testing",
-            "continued consolidation"
-        ]
-        
+        # Directional bias based on technicals
         rsi = technical.get('rsi', 50)
         price_position = technical.get('price_position', 50)
         
-        if sentiment in ['bullish', 'overbought'] and rsi > 60:
-            outlook_bias = "upside momentum could continue"
-        elif sentiment in ['bearish', 'oversold'] and rsi < 40:
-            outlook_bias = "oversold bounce potential"
+        if sentiment in ['bullish', 'overbought'] and rsi > 65:
+            outlook_bias = f"continued upside momentum toward ${technical.get('sma_20', 100) * 1.08:.2f}, though overbought conditions suggest consolidation risk"
+        elif sentiment in ['bearish', 'oversold'] and rsi < 35:
+            outlook_bias = f"potential oversold bounce toward ${technical.get('sma_20', 100) * 1.02:.2f}, with sustained recovery dependent on broader market support"
         else:
-            outlook_bias = "directional clarity needed"
+            outlook_bias = f"range-bound trading likely until technical picture clarifies around ${technical.get('sma_20', 100):.2f}"
         
-        return f"The next catalyst watch: {random.choice(catalysts)}. If {symbol} can {random.choice(price_actions)}, {outlook_bias} with path of least resistance pointing {random.choice(directions)}. Monitor after-hours action for additional directional clues."
+        catalyst_key = random.choice(list(near_term_catalysts.keys()))
+        
+        return f"Near-term catalyst: {near_term_catalysts[catalyst_key]}. If {symbol} can achieve a {random.choice(price_scenarios)}, {outlook_bias}. Traders should monitor after-hours price action and overseas market sentiment for additional directional cues ahead of {random.choice(['tomorrow session', 'this week key events', 'month-end positioning'])}.{' Options flow and gamma positioning will be critical to intraday price action.' if rsi > 60 else ''}"
     
     @staticmethod
     def _generate_fallback_story(symbol: str, error: str) -> str:

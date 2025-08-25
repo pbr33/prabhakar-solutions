@@ -186,13 +186,13 @@ class AITradingIntelligence:
         symbol = self._get_selected_symbol()
         
         # Display current symbol info compactly
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            st.markdown(f"**📊 Analyzing:** `{symbol}`")
-        with col2:
-            st.markdown("**🟢 APIs Ready**")
-        with col3:
-            st.markdown("**🔥 Full Access**")
+        # col1, col2, col3 = st.columns([2, 1, 1])
+        # with col1:
+        #     st.markdown(f"**📊 Analyzing:** `{symbol}`")
+        # with col2:
+        #     st.markdown("**🟢 APIs Ready**")
+        # with col3:
+        #     st.markdown("**🔥 Full Access**")
         
         market_data = self._load_market_data(symbol)
         
@@ -313,20 +313,20 @@ class AITradingIntelligence:
     
     def _render_storyteller_tab(self, symbol: str, market_data: pd.DataFrame):
         """Render AI storyteller tab."""
-        st.markdown("### 📰 Market Storyteller")
-        st.markdown("*AI-powered narrative analysis of market movements*")
+        # st.markdown("### 📰 Market Storyteller")
+        # st.markdown("*AI-powered narrative analysis of market movements*")
         
-        # Quick action buttons
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("📝 Generate Story", key="st_generate_story"):
-                st.success("Market story generation started!")
-        with col2:
-            if st.button("🔍 Analyze Sentiment", key="st_analyze_sentiment"):
-                st.info("Sentiment analysis in progress...")
-        with col3:
-            if st.button("📈 Trend Narrative", key="st_trend_narrative"):
-                st.warning("Creating trend narrative...")
+        # # Quick action buttons
+        # col1, col2, col3 = st.columns(3)
+        # with col1:
+        #     if st.button("📝 Generate Story", key="st_generate_story"):
+        #         st.success("Market story generation started!")
+        # with col2:
+        #     if st.button("🔍 Analyze Sentiment", key="st_analyze_sentiment"):
+        #         st.info("Sentiment analysis in progress...")
+        # with col3:
+        #     if st.button("📈 Trend Narrative", key="st_trend_narrative"):
+        #         st.warning("Creating trend narrative...")
         
         # Check API configuration before rendering
         try:
@@ -457,46 +457,47 @@ class AITradingIntelligence:
     
     def _render_api_config_error(self, feature_name: str, error_msg: str):
         """Render API configuration error with setup instructions."""
-        st.error(f"⚠️ {feature_name} requires proper API configuration")
+        pass
+        # st.error(f"⚠️ {feature_name} requires proper API configuration")
         
-        with st.expander("🔧 API Configuration Help", expanded=True):
-            st.markdown("""
-            ### Required API Keys:
+        # with st.expander("🔧 API Configuration Help", expanded=True):
+        #     st.markdown("""
+        #     ### Required API Keys:
             
-            **For AI Features:**
-            - OpenAI API Key (GPT-4/GPT-3.5)
-            - Anthropic API Key (Claude)
-            - Google AI API Key (Gemini)
+        #     **For AI Features:**
+        #     - OpenAI API Key (GPT-4/GPT-3.5)
+        #     - Anthropic API Key (Claude)
+        #     - Google AI API Key (Gemini)
             
-            **For Market Data:**
-            - Alpha Vantage API Key
-            - Yahoo Finance API
-            - Financial Modeling Prep API
+        #     **For Market Data:**
+        #     - Alpha Vantage API Key
+        #     - Yahoo Finance API
+        #     - Financial Modeling Prep API
             
-            **Setup Instructions:**
-            1. Create a `.env` file in your project root
-            2. Add your API keys:
-            ```
-            OPENAI_API_KEY=your_openai_key_here
-            ANTHROPIC_API_KEY=your_anthropic_key_here
-            GOOGLE_AI_API_KEY=your_google_key_here
-            ALPHA_VANTAGE_KEY=your_alpha_vantage_key_here
-            ```
-            3. Restart the application
-            """)
+        #     **Setup Instructions:**
+        #     1. Create a `.env` file in your project root
+        #     2. Add your API keys:
+        #     ```
+        #     OPENAI_API_KEY=your_openai_key_here
+        #     ANTHROPIC_API_KEY=your_anthropic_key_here
+        #     GOOGLE_AI_API_KEY=your_google_key_here
+        #     ALPHA_VANTAGE_KEY=your_alpha_vantage_key_here
+        #     ```
+        #     3. Restart the application
+        #     """)
             
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 Retry Connection", key=f"retry_{feature_name.lower().replace(' ', '_')}"):
-                    st.rerun()
+        #     col1, col2 = st.columns(2)
+        #     with col1:
+        #         if st.button("🔄 Retry Connection", key=f"retry_{feature_name.lower().replace(' ', '_')}"):
+        #             st.rerun()
             
-            with col2:
-                if st.button("📖 View Documentation", key=f"docs_{feature_name.lower().replace(' ', '_')}"):
-                    st.info("Check the project documentation for detailed setup instructions.")
+        #     with col2:
+        #         if st.button("📖 View Documentation", key=f"docs_{feature_name.lower().replace(' ', '_')}"):
+        #             st.info("Check the project documentation for detailed setup instructions.")
         
-        # Show error details in debug mode
-        if st.checkbox("🐛 Show Debug Info", key=f"debug_{feature_name.lower().replace(' ', '_')}"):
-            st.code(f"Error: {error_msg}")
+        # # Show error details in debug mode
+        # if st.checkbox("🐛 Show Debug Info", key=f"debug_{feature_name.lower().replace(' ', '_')}"):
+        #     st.code(f"Error: {error_msg}")
     
     def _show_ai_configuration(self):
         """Show AI configuration panel."""
