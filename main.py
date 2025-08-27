@@ -1154,6 +1154,16 @@ def main():
             ai_intelligence_available = True
         except ImportError as e:
             st.warning(f"AI Intelligence module not fully configured: {e}")
+
+        try:
+            from ui.tabs import multi_agent_coordination
+        except ImportError as e:
+            st.warning(f"Multi-Agent Coordination module not fully configured: {e}")
+        
+        try:
+            from ui.tabs import pro_dashboard
+        except ImportError as e:
+            st.warning(f"Pro Dashboard module not fully configured: {e}")
             def ai_intelligence_render():
                 st.info("🤖 AI Intelligence features are being set up. Please check back soon!")
             ai_intelligence_available = False

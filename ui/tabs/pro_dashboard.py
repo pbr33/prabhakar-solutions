@@ -24,9 +24,8 @@ def save_watchlist(watchlist):
 def render():
     """Renders the Pro Dashboard tab."""
     st.header("📊 Stock Dashboard with Backtesting")
-    cfg = get_config()
-    api_key = cfg['eodhd_api_key']
-    symbol = cfg['selected_symbol']
+    symbol = st.session_state.get('selected_symbol', 'AAPL.US')
+    api_key = config.get_eodhd_api_key()
 
     if not api_key:
         st.warning("EODHD API Key required for this dashboard.")

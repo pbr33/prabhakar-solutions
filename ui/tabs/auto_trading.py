@@ -7,7 +7,9 @@ from core.trading_bot import TradingBot, MockBrokerAPI
 def render():
     """Renders the Auto-Trading Control Center tab."""
     st.markdown("## 🚀 Auto-Trading Control Center")
-    cfg = get_config()
+    # cfg = get_config()
+    symbol = st.session_state.get('selected_symbol', 'AAPL.US')
+    api_key = config.get_eodhd_api_key()
     trading_engine = st.session_state.trading_engine
     
     # --- Deploy New Agent Form ---
@@ -16,7 +18,7 @@ def render():
             st.markdown("#### Agent Configuration")
             c1, c2, c3 = st.columns(3)
             bot_id = c1.text_input("Agent Name", f"Agent-{len(st.session_state.trading_bots) + 1}")
-            bot_symbol = c2.text_input("Symbol", cfg['selected_symbol'])
+            bot_symbol = c2.text_input("Symbol", symbol)
             bot_trade_qty = c3.number_input("Trade Quantity", min_value=1, value=10)
             
             st.markdown("#### Strategy: MA Crossover")
@@ -33,7 +35,7 @@ def render():
                     strategy = {'type': 'ma_crossover', 'short_window': short_window, 'long_window': long_window}
                     new_bot = TradingBot(
                         bot_id, bot_symbol, strategy, bot_trade_qty, interval,
-                        broker, trading_engine, cfg['eodhd_api_key']
+                        broker, trading_engine, api_key
                     )
                     st.session_state.trading_bots[bot_id] = new_bot
                     st.success(f"Agent '{bot_id}' deployed for {bot_symbol}.")

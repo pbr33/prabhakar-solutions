@@ -506,11 +506,10 @@ def render():
     """Main render function for Multi-Agent Coordination tab"""
     st.markdown("# 🤖 Multi-Agent Coordination & Intelligence")
     st.markdown("*Advanced AI agent orchestration with multi-modal analysis capabilities*")
-    
+    print ("Hello")
     # Get configuration
-    cfg = get_config()
-    symbol = cfg.get('selected_symbol', 'AAPL.US')
-    llm = cfg.get('llm')
+    api_key = config.get_eodhd_api_key()
+    symbol = st.session_state.get('selected_symbol', 'AAPL.US')
     
     # Initialize orchestrator
     if 'orchestrator' not in st.session_state:
