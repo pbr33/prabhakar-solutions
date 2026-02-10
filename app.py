@@ -11,6 +11,24 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    Workbook = None
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm, inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
+
+try:
     from openai import AzureOpenAI
 except ImportError:
     AzureOpenAI = None
@@ -316,22 +334,21 @@ class AzureAI:
             return self._sanitize_time(r)
         return self._fb_time(semantic, rag)
 
-    # ── Cost ──
+    # ── Cost (Infrastructure only) ──
     def estimate_cost(self, semantic, time_est, rag):
         r = self._call(
-            "You are an ECI cost estimator. Use rate card: Architect $200/hr, Lead Dev $175, Senior Dev $155, "
-            "Dev $130, QA $110, DevOps $155, PM $160, BA $130, UX $120. Include Azure infra. "
-            "Return JSON: {\"total_cost\": int, \"margin\": str, \"pricing_model\": str, "
-            "\"breakdown\": [{\"category\": str, \"cost\": int, \"percentage\": str}], "
-            "\"resources\": [{\"role\": str, \"count\": int, \"rate\": int, \"hours\": int, \"cost\": int}], "
-            "\"azure_costs\": [{\"service\": str, \"monthly_cost\": int}], "
-            "\"third_party_costs\": [{\"name\": str, \"cost\": int}], \"roi_estimate\": str}",
-            "Calculate:\nHours: " + str(time_est.get("total_hours", 0))
-            + "\nPhases: " + json.dumps([{"name": safe_str(p.get("name")), "hours": safe_int(p.get("hours"))} for p in safe_list(time_est.get("phases"))])
+            "You are an ECI infrastructure cost estimator. Estimate ONLY Azure/cloud infrastructure costs, "
+            "NOT project labor costs. Consider compute, storage, databases, networking, security, monitoring. "
+            "Return JSON: {\"total_monthly_cost\": int, \"total_annual_cost\": int, "
+            "\"azure_costs\": [{\"service\": str, \"tier\": str, \"monthly_cost\": int, \"description\": str}], "
+            "\"third_party_costs\": [{\"name\": str, \"monthly_cost\": int, \"description\": str}], "
+            "\"cost_optimization\": [str], \"notes\": str}",
+            "Estimate infrastructure costs:\nTech: " + json.dumps(safe_list(semantic.get("technology_stack")))
             + "\nComplexity: " + str(semantic.get("complexity_score", 5))
-            + "\nBenchmark cost: " + str(rag.get("benchmark_cost", 0)),
+            + "\nType: " + safe_str(semantic.get("project_type"))
+            + "\nComponents: " + json.dumps(safe_list(semantic.get("requirements"))[:10], default=str),
         )
-        if r and isinstance(r, dict) and "total_cost" in r:
+        if r and isinstance(r, dict) and "azure_costs" in r:
             return r
         return self._fb_cost(time_est)
 
@@ -345,7 +362,7 @@ class AzureAI:
             "Assess:\nReqs: " + str(len(safe_list(semantic.get("requirements"))))
             + "\nComplexity: " + str(semantic.get("complexity_score", 5))
             + "\nHours: " + str(time_est.get("total_hours", 0))
-            + "\nCost: " + str(cost_est.get("total_cost", 0))
+            + "\nInfra Monthly: $" + str(cost_est.get("total_monthly_cost", 0))
             + "\nTech: " + json.dumps(safe_list(semantic.get("technology_stack"))),
         )
         if r and isinstance(r, dict) and "risks" in r:
@@ -384,11 +401,11 @@ class AzureAI:
         r = self._call(
             "You are an ECI presales proposal writer. Write professional proposal. "
             "Return JSON: {\"sections\": [{\"title\": str, \"content\": str}], \"quality_checks\": {str: bool}}. "
-            "Include sections: Executive Summary, Understanding & Approach, Technical Solution, Team, Timeline, Investment.",
+            "Include sections: Executive Summary, Understanding & Approach, Technical Solution, Team, Timeline, Infrastructure Costs.",
             "Generate:\nType: " + safe_str(semantic.get("project_type"))
             + "\nReqs: " + str(len(safe_list(semantic.get("requirements"))))
             + "\nHours: " + str(time_est.get("total_hours", 0))
-            + "\nCost: $" + str(cost_est.get("total_cost", 0))
+            + "\nInfra Monthly: $" + str(cost_est.get("total_monthly_cost", 0))
             + "\nRisk: " + safe_str(risk.get("overall_level"))
             + "\nArch: " + safe_str(arch.get("pattern"))
             + "\nPhases: " + json.dumps([{"name": safe_str(p.get("name")), "hours": safe_int(p.get("hours"))} for p in safe_list(time_est.get("phases"))])
@@ -492,22 +509,39 @@ class AzureAI:
         return {"total_hours": total, "duration_weeks": str(weeks) + " weeks", "confidence": "Medium (72%)", "buffer": "18%", "phases": phases, "milestones": milestones, "three_point": {"optimistic": int(total * .8), "most_likely": total, "pessimistic": int(total * 1.35)}}
 
     def _fb_cost(self, time_est):
-        rates = {"BA": 130, "PM": 160, "Architect": 200, "UX": 120, "Data Architect": 185, "Senior Dev": 155, "Frontend Dev": 135, "Developer": 130, "QA": 110, "Security": 150, "DevOps": 155, "Data Eng": 150, "Team": 140, "Support": 100, "Lead Dev": 175, "Writer": 90}
-        rh = {}
-        for p in safe_list(time_est.get("phases")):
-            for t in safe_list(safe_dict(p).get("tasks")):
-                r = safe_str(safe_dict(t).get("role", "Developer"))
-                rh[r] = rh.get(r, 0) + safe_int(safe_dict(t).get("hours", 0))
-        resources = []
-        labor = 0
-        for role, hrs in sorted(rh.items(), key=lambda x: x[1], reverse=True):
-            rate = rates.get(role, 130)
-            cost = rate * hrs
-            labor += cost
-            resources.append({"role": role, "count": max(1, hrs // 320), "rate": rate, "hours": hrs, "cost": cost})
-        azure = 2040 * max(3, safe_int(time_est.get("total_hours", 2000)) // 640)
-        total = int((labor + azure + 1300) * 1.25)
-        return {"total_cost": total, "margin": "25%", "pricing_model": "Fixed Price", "breakdown": [{"category": "Labor", "cost": labor, "percentage": str(int(labor / max(total, 1) * 100)) + "%"}, {"category": "Azure Infra", "cost": azure, "percentage": str(int(azure / max(total, 1) * 100)) + "%"}, {"category": "Licenses", "cost": 1300, "percentage": "1%"}, {"category": "Margin", "cost": total - labor - azure - 1300, "percentage": "25%"}], "resources": resources, "azure_costs": [{"service": "App Service", "monthly_cost": 450}, {"service": "SQL", "monthly_cost": 380}, {"service": "Cosmos DB", "monthly_cost": 320}], "third_party_costs": [], "roi_estimate": "3.2x ROI over 3 years"}
+        azure_costs = [
+            {"service": "Azure App Service", "tier": "Premium P1v3", "monthly_cost": 450, "description": "Web app hosting with auto-scale"},
+            {"service": "Azure SQL Database", "tier": "Standard S3", "monthly_cost": 380, "description": "Relational database with 100 DTUs"},
+            {"service": "Cosmos DB", "tier": "Autoscale 4000 RU/s", "monthly_cost": 320, "description": "NoSQL for high-throughput workloads"},
+            {"service": "Azure Functions", "tier": "Premium EP1", "monthly_cost": 180, "description": "Serverless compute for background jobs"},
+            {"service": "API Management", "tier": "Standard", "monthly_cost": 550, "description": "API gateway with rate limiting"},
+            {"service": "Azure Front Door", "tier": "Standard", "monthly_cost": 280, "description": "CDN and global load balancing"},
+            {"service": "Azure Service Bus", "tier": "Standard", "monthly_cost": 95, "description": "Message queuing and event-driven"},
+            {"service": "Azure Key Vault", "tier": "Standard", "monthly_cost": 15, "description": "Secrets and certificate management"},
+            {"service": "Azure Monitor + App Insights", "tier": "Pay-as-you-go", "monthly_cost": 120, "description": "Logging, monitoring, alerting"},
+            {"service": "Azure AD B2C", "tier": "Premium P1", "monthly_cost": 130, "description": "Identity and access management"},
+            {"service": "Azure Blob Storage", "tier": "Hot LRS", "monthly_cost": 60, "description": "File and document storage"},
+            {"service": "Azure Redis Cache", "tier": "Standard C1", "monthly_cost": 160, "description": "In-memory caching"},
+        ]
+        third_party = [
+            {"name": "SendGrid (Email)", "monthly_cost": 45, "description": "Transactional email service"},
+            {"name": "SSL Certificates", "monthly_cost": 15, "description": "Custom domain SSL"},
+        ]
+        total_monthly = sum(a["monthly_cost"] for a in azure_costs) + sum(t["monthly_cost"] for t in third_party)
+        return {
+            "total_monthly_cost": total_monthly,
+            "total_annual_cost": total_monthly * 12,
+            "azure_costs": azure_costs,
+            "third_party_costs": third_party,
+            "cost_optimization": [
+                "Use Reserved Instances for 36% savings on App Service and SQL",
+                "Enable auto-shutdown for non-production environments",
+                "Use Azure Hybrid Benefit if existing Windows Server licenses",
+                "Monitor Cosmos DB RU consumption and right-size",
+                "Use Azure Cost Management alerts at 80% and 100% budget",
+            ],
+            "notes": "Estimates based on production environment. Dev/staging adds ~40% of prod costs.",
+        }
 
     def _fb_risk(self, semantic):
         c = safe_int(semantic.get("complexity_score", 7))
@@ -538,13 +572,15 @@ class AzureAI:
     def _fb_proposal(self, sem, te, ce, ri, ar):
         d = datetime.now().strftime("%B %d, %Y")
         reqs = safe_list(sem.get("requirements"))
+        monthly = safe_int(ce.get("total_monthly_cost"))
+        annual = safe_int(ce.get("total_annual_cost"))
         return {"sections": [
-            {"title": "Executive Summary", "content": "**Date:** " + d + "\n\nECI proposes a " + safe_str(sem.get("project_type")) + " solution. **" + str(len(reqs)) + " requirements** identified.\n\n- Effort: **" + str(te.get("total_hours", 0)) + "h** over **" + safe_str(te.get("duration_weeks")) + "**\n- Investment: **$" + str(ce.get("total_cost", 0)) + "**\n- Risk: **" + safe_str(ri.get("overall_level")) + "**"},
+            {"title": "Executive Summary", "content": "**Date:** " + d + "\n\nECI proposes a " + safe_str(sem.get("project_type")) + " solution. **" + str(len(reqs)) + " requirements** identified.\n\n- Effort: **" + str(te.get("total_hours", 0)) + "h** over **" + safe_str(te.get("duration_weeks")) + "**\n- Infrastructure: **$" + str(monthly) + "/month** ($" + str(annual) + "/year)\n- Risk: **" + safe_str(ri.get("overall_level")) + "**"},
             {"title": "Understanding & Approach", "content": "ECI follows Discovery, Design, Development, Testing, Deployment with hypercare."},
             {"title": "Technical Solution", "content": "**Pattern:** " + safe_str(ar.get("pattern")) + "\n\n" + "\n".join("- **" + safe_str(safe_dict(c).get("name")) + "**: " + safe_str(safe_dict(c).get("azure_service")) for c in safe_list(ar.get("components")))},
-            {"title": "Team", "content": "\n".join("- **" + safe_str(safe_dict(r).get("role")) + "** x" + str(safe_int(safe_dict(r).get("count", 1))) + " — " + str(safe_int(safe_dict(r).get("hours"))) + "h" for r in safe_list(ce.get("resources")))},
+            {"title": "Team & Delivery", "content": "ECI will deploy a cross-functional team including Architects, Lead Developers, Senior Developers, QA Engineers, DevOps Engineers, and a Project Manager.\n\nDelivery follows an Agile methodology with bi-weekly sprints and milestone reviews."},
             {"title": "Timeline", "content": "\n".join("- **" + safe_str(safe_dict(p).get("name")) + "** — " + str(safe_int(safe_dict(p).get("hours"))) + "h (" + safe_str(safe_dict(p).get("percentage")) + ")" for p in safe_list(te.get("phases")))},
-            {"title": "Investment", "content": "**Total:** $" + str(ce.get("total_cost", 0)) + "\n\n" + "\n".join("- **" + safe_str(safe_dict(b).get("category")) + ":** $" + str(safe_int(safe_dict(b).get("cost"))) for b in safe_list(ce.get("breakdown")))},
+            {"title": "Infrastructure Costs", "content": "**Monthly:** $" + str(monthly) + "  |  **Annual:** $" + str(annual) + "\n\n" + "\n".join("- **" + safe_str(safe_dict(a).get("service")) + "** (" + safe_str(safe_dict(a).get("tier", "")) + "): $" + str(safe_int(safe_dict(a).get("monthly_cost"))) + "/mo" for a in safe_list(ce.get("azure_costs")))},
         ], "quality_checks": {"ECI Tone": True, "Personalization": True, "Terminology": True, "Value Proposition": True, "Structure": True}}
 
 
@@ -629,7 +665,7 @@ class Mailer:
         ce = safe_dict(results.get("cost_estimate"))
         ri = safe_dict(results.get("risk_assessment"))
         subj = "Agent BELAL Proposal " + datetime.now().strftime("%Y-%m-%d %H:%M")
-        body = "<h2>Agent BELAL</h2><p>Hours: " + str(te.get("total_hours", 0)) + " | Cost: $" + str(ce.get("total_cost", 0)) + " | Risk: " + safe_str(ri.get("overall_level")) + "</p>"
+        body = "<h2>Agent BELAL</h2><p>Hours: " + str(te.get("total_hours", 0)) + " | Infra Cost: $" + str(ce.get("total_monthly_cost", 0)) + "/mo | Risk: " + safe_str(ri.get("overall_level")) + "</p>"
         if self.smtp and self.sender and self.pw:
             try:
                 parts = (self.smtp + ":587").split(":")
@@ -648,6 +684,516 @@ class Mailer:
             except Exception as e:
                 return False, str(e)[:200]
         return False, "Email not configured."
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  EXCEL TIME ESTIMATE GENERATOR
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_time_excel(time_est, semantic):
+    if not Workbook:
+        return None
+    wb = Workbook()
+
+    # ── Styles ──
+    hdr_font = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
+    hdr_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    sub_font = Font(name="Calibri", bold=True, size=10, color="1B3A5C")
+    sub_fill = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    normal_font = Font(name="Calibri", size=10)
+    bold_font = Font(name="Calibri", bold=True, size=10)
+    total_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    total_font = Font(name="Calibri", bold=True, size=11, color="1B3A5C")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    center = Alignment(horizontal="center", vertical="center")
+    wrap = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    def style_header_row(ws, row, cols):
+        for c in range(1, cols + 1):
+            cell = ws.cell(row=row, column=c)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = center
+            cell.border = thin_border
+
+    def style_cell(ws, row, col, font=normal_font, fill=None, align=None):
+        cell = ws.cell(row=row, column=col)
+        cell.font = font
+        cell.border = thin_border
+        if fill:
+            cell.fill = fill
+        if align:
+            cell.alignment = align
+        return cell
+
+    # ═══ Sheet 1: Summary ═══
+    ws1 = wb.active
+    ws1.title = "Summary"
+    ws1.sheet_properties.tabColor = "1B3A5C"
+
+    # Title
+    ws1.merge_cells("A1:F1")
+    title_cell = ws1["A1"]
+    title_cell.value = "ECI — Project Time Estimation Summary"
+    title_cell.font = Font(name="Calibri", bold=True, size=16, color="1B3A5C")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 40
+
+    ws1.merge_cells("A2:F2")
+    ws1["A2"].value = "Generated: " + datetime.now().strftime("%B %d, %Y %H:%M")
+    ws1["A2"].font = Font(name="Calibri", size=9, color="666666")
+    ws1["A2"].alignment = Alignment(horizontal="center")
+
+    # Project Info
+    row = 4
+    ws1.cell(row=row, column=1, value="Project Type").font = bold_font
+    ws1.cell(row=row, column=2, value=safe_str(semantic.get("project_type", "N/A"))).font = normal_font
+    row += 1
+    ws1.cell(row=row, column=1, value="Complexity Score").font = bold_font
+    ws1.cell(row=row, column=2, value=str(semantic.get("complexity_score", "N/A")) + " / 10").font = normal_font
+    row += 1
+    ws1.cell(row=row, column=1, value="Total Requirements").font = bold_font
+    ws1.cell(row=row, column=2, value=len(safe_list(semantic.get("requirements")))).font = normal_font
+
+    # Summary metrics
+    row = 8
+    headers = ["Metric", "Value"]
+    for c, h in enumerate(headers, 1):
+        ws1.cell(row=row, column=c, value=h)
+    style_header_row(ws1, row, len(headers))
+    row += 1
+    metrics = [
+        ("Total Hours", str(safe_int(time_est.get("total_hours"))) + " hours"),
+        ("Duration", safe_str(time_est.get("duration_weeks"))),
+        ("Confidence", safe_str(time_est.get("confidence"))),
+        ("Buffer", safe_str(time_est.get("buffer"))),
+    ]
+    for label, val in metrics:
+        style_cell(ws1, row, 1, font=bold_font).value = label
+        style_cell(ws1, row, 2).value = val
+        row += 1
+
+    # Three-point estimation
+    tp = safe_dict(time_est.get("three_point"))
+    if tp:
+        row += 1
+        ws1.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        ws1.cell(row=row, column=1, value="Three-Point Estimation").font = Font(name="Calibri", bold=True, size=12, color="1B3A5C")
+        row += 1
+        headers_tp = ["Scenario", "Hours"]
+        for c, h in enumerate(headers_tp, 1):
+            ws1.cell(row=row, column=c, value=h)
+        style_header_row(ws1, row, len(headers_tp))
+        row += 1
+        for label, key in [("Optimistic", "optimistic"), ("Most Likely", "most_likely"), ("Pessimistic", "pessimistic")]:
+            style_cell(ws1, row, 1, font=bold_font).value = label
+            style_cell(ws1, row, 2, align=center).value = safe_int(tp.get(key))
+            row += 1
+
+    ws1.column_dimensions["A"].width = 22
+    ws1.column_dimensions["B"].width = 30
+
+    # ═══ Sheet 2: Phase Breakdown ═══
+    ws2 = wb.create_sheet("Phase Breakdown")
+    ws2.sheet_properties.tabColor = "00B4D8"
+
+    ws2.merge_cells("A1:F1")
+    ws2["A1"].value = "Phase-wise Effort Breakdown"
+    ws2["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws2["A1"].alignment = Alignment(horizontal="center")
+    ws2.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["Phase", "Task", "Role", "Hours", "% of Total", "Notes"]
+    for c, h in enumerate(headers, 1):
+        ws2.cell(row=row, column=c, value=h)
+    style_header_row(ws2, row, len(headers))
+    row += 1
+
+    total_hours = safe_int(time_est.get("total_hours", 1))
+    for phase in safe_list(time_est.get("phases")):
+        phase = safe_dict(phase)
+        phase_name = safe_str(phase.get("name"))
+        phase_hours = safe_int(phase.get("hours"))
+        tasks = safe_list(phase.get("tasks"))
+        if not tasks:
+            style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_name
+            style_cell(ws2, row, 2, fill=sub_fill)
+            style_cell(ws2, row, 3, fill=sub_fill)
+            style_cell(ws2, row, 4, font=sub_font, fill=sub_fill, align=center).value = phase_hours
+            style_cell(ws2, row, 5, fill=sub_fill, align=center).value = safe_str(phase.get("percentage"))
+            style_cell(ws2, row, 6, fill=sub_fill)
+            row += 1
+        else:
+            first_task = True
+            for task in tasks:
+                task = safe_dict(task)
+                if first_task:
+                    style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_name
+                    first_task = False
+                else:
+                    style_cell(ws2, row, 1, fill=None)
+                style_cell(ws2, row, 2).value = safe_str(task.get("name"))
+                style_cell(ws2, row, 3).value = safe_str(task.get("role"))
+                style_cell(ws2, row, 4, align=center).value = safe_int(task.get("hours"))
+                pct = safe_int(task.get("hours")) / max(total_hours, 1) * 100
+                style_cell(ws2, row, 5, align=center).value = str(round(pct, 1)) + "%"
+                style_cell(ws2, row, 6)
+                row += 1
+            # Phase subtotal
+            style_cell(ws2, row, 1, font=bold_font, fill=total_fill)
+            style_cell(ws2, row, 2, font=bold_font, fill=total_fill).value = "Subtotal — " + phase_name
+            style_cell(ws2, row, 3, fill=total_fill)
+            style_cell(ws2, row, 4, font=bold_font, fill=total_fill, align=center).value = phase_hours
+            style_cell(ws2, row, 5, font=bold_font, fill=total_fill, align=center).value = safe_str(phase.get("percentage"))
+            style_cell(ws2, row, 6, fill=total_fill)
+            row += 1
+
+    # Grand total
+    row += 1
+    style_cell(ws2, row, 1, font=total_font, fill=total_fill)
+    style_cell(ws2, row, 2, font=total_font, fill=total_fill).value = "GRAND TOTAL"
+    style_cell(ws2, row, 3, fill=total_fill)
+    style_cell(ws2, row, 4, font=total_font, fill=total_fill, align=center).value = total_hours
+    style_cell(ws2, row, 5, font=total_font, fill=total_fill, align=center).value = "100%"
+    style_cell(ws2, row, 6, fill=total_fill)
+
+    for c, w in [(1, 18), (2, 28), (3, 18), (4, 12), (5, 12), (6, 25)]:
+        ws2.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 3: Milestones ═══
+    ws3 = wb.create_sheet("Milestones")
+    ws3.sheet_properties.tabColor = "00D4AA"
+
+    ws3.merge_cells("A1:D1")
+    ws3["A1"].value = "Project Milestones"
+    ws3["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws3["A1"].alignment = Alignment(horizontal="center")
+    ws3.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["#", "Milestone", "Week", "Description"]
+    for c, h in enumerate(headers, 1):
+        ws3.cell(row=row, column=c, value=h)
+    style_header_row(ws3, row, len(headers))
+    row += 1
+    for i, m in enumerate(safe_list(time_est.get("milestones")), 1):
+        m = safe_dict(m)
+        style_cell(ws3, row, 1, align=center).value = i
+        style_cell(ws3, row, 2, font=bold_font).value = safe_str(m.get("name"))
+        style_cell(ws3, row, 3, align=center).value = safe_int(m.get("week"))
+        style_cell(ws3, row, 4, align=wrap).value = safe_str(m.get("description"))
+        row += 1
+
+    for c, w in [(1, 6), (2, 30), (3, 10), (4, 45)]:
+        ws3.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 4: Three-Point Detail ═══
+    ws4 = wb.create_sheet("Three-Point Estimation")
+    ws4.sheet_properties.tabColor = "7B61FF"
+
+    ws4.merge_cells("A1:E1")
+    ws4["A1"].value = "Three-Point Estimation Detail"
+    ws4["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws4["A1"].alignment = Alignment(horizontal="center")
+    ws4.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["Phase", "Optimistic (hrs)", "Most Likely (hrs)", "Pessimistic (hrs)", "PERT Estimate (hrs)"]
+    for c, h in enumerate(headers, 1):
+        ws4.cell(row=row, column=c, value=h)
+    style_header_row(ws4, row, len(headers))
+    row += 1
+    total_o, total_m, total_p, total_pert = 0, 0, 0, 0
+    for phase in safe_list(time_est.get("phases")):
+        phase = safe_dict(phase)
+        ph_hours = safe_int(phase.get("hours"))
+        opt = int(ph_hours * 0.8)
+        ml = ph_hours
+        pes = int(ph_hours * 1.35)
+        pert = int((opt + 4 * ml + pes) / 6)
+        total_o += opt
+        total_m += ml
+        total_p += pes
+        total_pert += pert
+        style_cell(ws4, row, 1, font=bold_font).value = safe_str(phase.get("name"))
+        style_cell(ws4, row, 2, align=center).value = opt
+        style_cell(ws4, row, 3, align=center).value = ml
+        style_cell(ws4, row, 4, align=center).value = pes
+        style_cell(ws4, row, 5, align=center, font=bold_font).value = pert
+        row += 1
+
+    # Totals
+    style_cell(ws4, row, 1, font=total_font, fill=total_fill).value = "TOTAL"
+    style_cell(ws4, row, 2, font=total_font, fill=total_fill, align=center).value = total_o
+    style_cell(ws4, row, 3, font=total_font, fill=total_fill, align=center).value = total_m
+    style_cell(ws4, row, 4, font=total_font, fill=total_fill, align=center).value = total_p
+    style_cell(ws4, row, 5, font=total_font, fill=total_fill, align=center).value = total_pert
+
+    for c, w in [(1, 22), (2, 18), (3, 18), (4, 18), (5, 20)]:
+        ws4.column_dimensions[get_column_letter(c)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PDF PROPOSAL GENERATOR (ECI Template)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _eci_styles():
+    """ECI-branded paragraph styles for reportlab."""
+    styles = getSampleStyleSheet()
+    eci_blue = rl_colors.Color(27/255, 58/255, 92/255)
+    eci_accent = rl_colors.Color(0, 180/255, 216/255)
+    styles.add(ParagraphStyle("ECITitle", parent=styles["Title"], fontSize=26, textColor=rl_colors.white, alignment=TA_CENTER, spaceAfter=6))
+    styles.add(ParagraphStyle("ECISubtitle", parent=styles["Normal"], fontSize=13, textColor=rl_colors.Color(200/255, 220/255, 240/255), alignment=TA_CENTER, spaceAfter=4))
+    styles.add(ParagraphStyle("ECIHeading", parent=styles["Heading1"], fontSize=15, textColor=eci_blue, spaceBefore=14, spaceAfter=6, borderWidth=0))
+    styles.add(ParagraphStyle("ECIBody", parent=styles["Normal"], fontSize=10, leading=14, textColor=rl_colors.Color(30/255, 30/255, 30/255), spaceAfter=4))
+    styles.add(ParagraphStyle("ECIBullet", parent=styles["Normal"], fontSize=10, leading=14, textColor=rl_colors.Color(30/255, 30/255, 30/255), leftIndent=16, bulletIndent=6, spaceAfter=2))
+    styles.add(ParagraphStyle("ECISmall", parent=styles["Normal"], fontSize=8, textColor=rl_colors.Color(100/255, 100/255, 100/255), alignment=TA_CENTER))
+    styles.add(ParagraphStyle("ECIKPIVal", parent=styles["Normal"], fontSize=16, textColor=eci_blue, alignment=TA_CENTER, leading=20))
+    styles.add(ParagraphStyle("ECIKPILabel", parent=styles["Normal"], fontSize=8, textColor=rl_colors.Color(100/255, 100/255, 100/255), alignment=TA_CENTER))
+    styles.add(ParagraphStyle("ECITableCell", parent=styles["Normal"], fontSize=8, leading=10, textColor=rl_colors.Color(30/255, 30/255, 30/255)))
+    styles.add(ParagraphStyle("ECITableHeader", parent=styles["Normal"], fontSize=8, leading=10, textColor=rl_colors.white, alignment=TA_CENTER))
+    return styles
+
+
+def _eci_table(headers, rows, col_widths=None):
+    """Build a styled reportlab Table."""
+    eci_blue = rl_colors.Color(27/255, 58/255, 92/255)
+    alt_row = rl_colors.Color(245/255, 248/255, 252/255)
+    styles = _eci_styles()
+    hdr_cells = [Paragraph("<b>" + h + "</b>", styles["ECITableHeader"]) for h in headers]
+    data = [hdr_cells]
+    for row in rows:
+        data.append([Paragraph(str(v), styles["ECITableCell"]) for v in row])
+    if not col_widths:
+        col_widths = [480 / len(headers)] * len(headers)
+    tbl = Table(data, colWidths=col_widths, repeatRows=1)
+    style_cmds = [
+        ("BACKGROUND", (0, 0), (-1, 0), eci_blue),
+        ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.Color(200/255, 200/255, 200/255)),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    for i in range(1, len(data)):
+        if i % 2 == 0:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), alt_row))
+    tbl.setStyle(TableStyle(style_cmds))
+    return tbl
+
+
+def _md_to_para(text, styles):
+    """Convert simple markdown text to a list of Paragraph flowables."""
+    elements = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            elements.append(Spacer(1, 4))
+            continue
+        # Bold markers
+        cleaned = line.replace("**", "<b>", 1)
+        while "**" in cleaned:
+            cleaned = cleaned.replace("**", "</b>", 1)
+            if "**" in cleaned:
+                cleaned = cleaned.replace("**", "<b>", 1)
+        # Italic markers
+        cleaned = cleaned.replace("_", "<i>", 1)
+        while "_" in cleaned:
+            cleaned = cleaned.replace("_", "</i>", 1)
+            if "_" in cleaned:
+                cleaned = cleaned.replace("_", "<i>", 1)
+        if line.startswith("- "):
+            elements.append(Paragraph(cleaned[2:], styles["ECIBullet"], bulletText="\u2022"))
+        else:
+            elements.append(Paragraph(cleaned, styles["ECIBody"]))
+    return elements
+
+
+def generate_proposal_pdf(results):
+    if not HAS_REPORTLAB:
+        return None
+    buf = io.BytesIO()
+    styles = _eci_styles()
+    eci_blue = rl_colors.Color(27/255, 58/255, 92/255)
+    eci_light = rl_colors.Color(214/255, 228/255, 240/255)
+
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=25*mm, bottomMargin=20*mm, leftMargin=18*mm, rightMargin=18*mm,
+                            title="ECI Project Proposal", author="ECI Consulting — Agent BELAL")
+    elements = []
+
+    se = safe_dict(results.get("semantic_analysis"))
+    te = safe_dict(results.get("time_estimate"))
+    ce = safe_dict(results.get("cost_estimate"))
+    ri = safe_dict(results.get("risk_assessment"))
+    ar = safe_dict(results.get("architecture"))
+    sc = safe_dict(results.get("scope"))
+    proposal = safe_dict(results.get("proposal"))
+
+    # ── Cover ──
+    elements.append(Spacer(1, 40))
+    # Blue banner table
+    banner_data = [[Paragraph("<b>PROJECT PROPOSAL</b>", styles["ECITitle"]),],
+                   [Paragraph(safe_str(se.get("project_type", "Technology Solution")), styles["ECISubtitle"]),],
+                   [Paragraph("Prepared by ECI Consulting  |  Agent BELAL", styles["ECISubtitle"]),],
+                   [Paragraph(datetime.now().strftime("%B %d, %Y"), styles["ECISubtitle"]),]]
+    banner = Table(banner_data, colWidths=[480])
+    banner.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), eci_blue),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(banner)
+    elements.append(Spacer(1, 24))
+
+    # KPI boxes
+    kpi_items = [
+        ("Requirements", str(len(safe_list(se.get("requirements"))))),
+        ("Total Hours", str(safe_int(te.get("total_hours")))),
+        ("Infra Cost/mo", "$" + str(safe_int(ce.get("total_monthly_cost")))),
+        ("Risk Level", safe_str(ri.get("overall_level", "N/A"))),
+    ]
+    kpi_cells = []
+    for label, val in kpi_items:
+        kpi_cells.append([
+            Paragraph("<b>" + val + "</b>", styles["ECIKPIVal"]),
+            Paragraph(label, styles["ECIKPILabel"]),
+        ])
+    # Transpose: each kpi is a column of 2 rows
+    kpi_data = [[kpi_cells[i][0] for i in range(4)], [kpi_cells[i][1] for i in range(4)]]
+    kpi_table = Table(kpi_data, colWidths=[120, 120, 120, 120])
+    kpi_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), eci_light),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.white),
+    ]))
+    elements.append(kpi_table)
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph("ECI CONSULTING  |  CONFIDENTIAL", styles["ECISmall"]))
+    elements.append(PageBreak())
+
+    # ── Proposal sections ──
+    for sec in safe_list(proposal.get("sections")):
+        sec = safe_dict(sec)
+        elements.append(Paragraph(safe_str(sec.get("title")), styles["ECIHeading"]))
+        elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+        elements.extend(_md_to_para(safe_str(sec.get("content")), styles))
+        elements.append(Spacer(1, 10))
+
+    elements.append(PageBreak())
+
+    # ── Requirements summary ──
+    elements.append(Paragraph("Requirements Summary", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    reqs = safe_list(se.get("requirements"))
+    fn = [r for r in reqs if isinstance(r, dict) and r.get("type") == "functional"]
+    nf = [r for r in reqs if isinstance(r, dict) and r.get("type") == "non-functional"]
+    ig = [r for r in reqs if isinstance(r, dict) and r.get("type") == "integration"]
+    elements.append(Paragraph("Functional: <b>" + str(len(fn)) + "</b>  |  Non-Functional: <b>" + str(len(nf)) + "</b>  |  Integration: <b>" + str(len(ig)) + "</b>", styles["ECIBody"]))
+    elements.append(Spacer(1, 6))
+    req_rows = [[safe_str(r.get("title")), safe_str(r.get("type")), safe_str(r.get("complexity")), safe_str(r.get("priority", ""))] for r in reqs if isinstance(r, dict)]
+    if req_rows:
+        elements.append(_eci_table(["Requirement", "Type", "Complexity", "Priority"], req_rows[:25], [200, 90, 80, 80]))
+    elements.append(PageBreak())
+
+    # ── Time estimate ──
+    elements.append(Paragraph("Time Estimation", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    elements.extend(_md_to_para(
+        "- <b>Total Hours:</b> " + str(safe_int(te.get("total_hours")))
+        + "\n- <b>Duration:</b> " + safe_str(te.get("duration_weeks"))
+        + "\n- <b>Confidence:</b> " + safe_str(te.get("confidence"))
+        + "\n- <b>Buffer:</b> " + safe_str(te.get("buffer")), styles))
+    elements.append(Spacer(1, 6))
+    phase_rows = [[safe_str(p.get("name")), str(safe_int(p.get("hours"))), safe_str(p.get("percentage"))] for p in safe_list(te.get("phases")) if isinstance(p, dict)]
+    if phase_rows:
+        elements.append(_eci_table(["Phase", "Hours", "% of Total"], phase_rows, [220, 120, 120]))
+    elements.append(PageBreak())
+
+    # ── Infrastructure costs ──
+    elements.append(Paragraph("Infrastructure Cost Estimate", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    elements.extend(_md_to_para(
+        "- <b>Monthly Cost:</b> $" + str(safe_int(ce.get("total_monthly_cost")))
+        + "\n- <b>Annual Cost:</b> $" + str(safe_int(ce.get("total_annual_cost"))), styles))
+    elements.append(Spacer(1, 6))
+    cost_rows = [[safe_str(a.get("service")), safe_str(a.get("tier", "")), "$" + str(safe_int(a.get("monthly_cost")))] for a in safe_list(ce.get("azure_costs")) if isinstance(a, dict)]
+    if cost_rows:
+        elements.append(_eci_table(["Service", "Tier", "Monthly Cost"], cost_rows, [200, 160, 100]))
+    elements.append(PageBreak())
+
+    # ── Risk ──
+    elements.append(Paragraph("Risk Assessment", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    elements.extend(_md_to_para(
+        "- <b>Overall Score:</b> " + str(safe_int(ri.get("overall_score"))) + "/10"
+        + "\n- <b>Level:</b> " + safe_str(ri.get("overall_level")), styles))
+    elements.append(Spacer(1, 6))
+    risk_rows = [[safe_str(r.get("category")), safe_str(r.get("title")), safe_str(r.get("severity")), safe_str(r.get("mitigation"))] for r in safe_list(ri.get("risks")) if isinstance(r, dict)]
+    if risk_rows:
+        elements.append(_eci_table(["Category", "Risk", "Severity", "Mitigation"], risk_rows, [70, 110, 60, 220]))
+    elements.append(PageBreak())
+
+    # ── Architecture ──
+    elements.append(Paragraph("Architecture Overview", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    elements.append(Paragraph("<b>Pattern:</b> " + safe_str(ar.get("pattern")), styles["ECIBody"]))
+    elements.append(Spacer(1, 6))
+    comp_rows = [[safe_str(c.get("name")), safe_str(c.get("type", "")), safe_str(c.get("azure_service", "")), ", ".join(safe_list(c.get("services")))] for c in safe_list(ar.get("components")) if isinstance(c, dict)]
+    if comp_rows:
+        elements.append(_eci_table(["Component", "Type", "Azure Service", "Details"], comp_rows, [80, 80, 120, 180]))
+    df = safe_list(ar.get("data_flow"))
+    if df:
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("<b>Data Flow:</b> " + " &rarr; ".join(safe_str(x) for x in df), styles["ECIBody"]))
+    elements.append(PageBreak())
+
+    # ── Scope ──
+    elements.append(Paragraph("Scope Definition", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=rl_colors.Color(0, 180/255, 216/255), spaceAfter=8))
+    elements.append(Paragraph("<b>In Scope:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("in_scope")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(Spacer(1, 6))
+    elements.append(Paragraph("<b>Out of Scope:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("out_of_scope")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(Spacer(1, 6))
+    elements.append(Paragraph("<b>Assumptions:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("assumptions")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(Spacer(1, 6))
+    elements.append(Paragraph("<b>Prerequisites:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("prerequisites")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+
+    # Build
+    def _footer(canvas, doc):
+        canvas.saveState()
+        canvas.setStrokeColor(rl_colors.Color(27/255, 58/255, 92/255))
+        canvas.line(18*mm, 15*mm, A4[0] - 18*mm, 15*mm)
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(rl_colors.Color(100/255, 100/255, 100/255))
+        canvas.drawString(18*mm, 10*mm, "ECI Consulting  |  Generated by Agent BELAL  |  " + datetime.now().strftime("%B %d, %Y"))
+        canvas.drawRightString(A4[0] - 18*mm, 10*mm, "Page " + str(canvas.getPageNumber()))
+        canvas.restoreState()
+
+    doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -818,7 +1364,7 @@ def run_pipeline(files):
     status.markdown("**6/10** Cost Calculator...")
     pb.progress(50)
     cost_est = ai.estimate_cost(semantic, time_est, rag)
-    log_agent("Cost", "$" + str(cost_est.get("total_cost", 0)))
+    log_agent("Cost", "$" + str(cost_est.get("total_monthly_cost", 0)) + "/mo")
     time.sleep(0.2)
 
     status.markdown("**7/10** Risk Analyzer...")
@@ -873,7 +1419,7 @@ def show_results():
     kpis = [
         ("📝", "Requirements", str(len(safe_list(se.get("requirements")))), "Identified"),
         ("⏱️", "Hours", str(safe_int(te.get("total_hours"))), "Person-hours"),
-        ("💰", "Cost", "$" + str(safe_int(ce.get("total_cost"))), "Estimated"),
+        ("💰", "Infra Cost", "$" + str(safe_int(ce.get("total_monthly_cost"))) + "/mo", "Azure Infrastructure"),
         ("⚠️", "Risk", str(safe_int(ri.get("overall_score"))) + "/10", safe_str(ri.get("overall_level"))),
         ("🏗️", "Components", str(len(safe_list(ar.get("components")))), "Designed"),
     ]
@@ -882,7 +1428,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Cost", "⚠️ Risk", "🏗️ Architecture", "📄 Proposal", "📌 Scope"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📄 Proposal", "📌 Scope"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -942,27 +1488,53 @@ def show_results():
         for m in milestones:
             m = safe_dict(m)
             st.markdown("- **Week " + str(safe_int(m.get("week"))) + "** — " + safe_str(m.get("name")) + ": " + safe_str(m.get("description")))
+        # Excel download
+        st.markdown("---")
+        excel_data = generate_time_excel(te, se)
+        if excel_data:
+            st.download_button(
+                "📥 Download Time Estimate (Excel)",
+                data=excel_data,
+                file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, type="primary", key="dl_time_xlsx",
+            )
 
-    # ── Cost ──
+    # ── Cost (Infrastructure) ──
     with tab_list[2]:
-        bd = safe_list(ce.get("breakdown"))
+        azure_costs = safe_list(ce.get("azure_costs"))
+        third_party = safe_list(ce.get("third_party_costs"))
         mc = st.columns(3)
         with mc[0]:
-            st.metric("Total Cost", "$" + str(safe_int(ce.get("total_cost"))))
+            st.metric("Monthly Cost", "$" + str(safe_int(ce.get("total_monthly_cost"))))
         with mc[1]:
-            st.metric("Margin", safe_str(ce.get("margin")))
+            st.metric("Annual Cost", "$" + str(safe_int(ce.get("total_annual_cost"))))
         with mc[2]:
-            st.metric("Pricing", safe_str(ce.get("pricing_model")))
-        if bd:
-            pie_vals = [safe_int(safe_dict(b).get("cost", 0)) for b in bd]
-            pie_names = [safe_str(safe_dict(b).get("category", "")) for b in bd]
-            fig = px.pie(values=pie_vals, names=pie_names, title="Cost Distribution",
-                         color_discrete_sequence=["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166"])
+            st.metric("Services", str(len(azure_costs) + len(third_party)))
+        if azure_costs:
+            pie_vals = [safe_int(safe_dict(a).get("monthly_cost", 0)) for a in azure_costs]
+            pie_names = [safe_str(safe_dict(a).get("service", "")) for a in azure_costs]
+            fig = px.pie(values=pie_vals, names=pie_names, title="Azure Infrastructure Cost Distribution (Monthly)",
+                         color_discrete_sequence=["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0", "#e9c46a", "#f4845f", "#a8dadc", "#457b9d", "#2a9d8f", "#264653"])
             fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=400)
             st.plotly_chart(fig, use_container_width=True)
-        for res in safe_list(ce.get("resources")):
-            res = safe_dict(res)
-            st.markdown("- **" + safe_str(res.get("role")) + "** x" + str(safe_int(res.get("count", 1))) + " — $" + str(safe_int(res.get("rate"))) + "/hr — " + str(safe_int(res.get("hours"))) + "h — $" + str(safe_int(res.get("cost"))))
+        st.markdown("**Azure Services:**")
+        for svc in azure_costs:
+            svc = safe_dict(svc)
+            st.markdown("- **" + safe_str(svc.get("service")) + "** (" + safe_str(svc.get("tier", "")) + ") — $" + str(safe_int(svc.get("monthly_cost"))) + "/mo — _" + safe_str(svc.get("description", "")) + "_")
+        if third_party:
+            st.markdown("**Third-Party Services:**")
+            for tp in third_party:
+                tp = safe_dict(tp)
+                st.markdown("- **" + safe_str(tp.get("name")) + "** — $" + str(safe_int(tp.get("monthly_cost"))) + "/mo — _" + safe_str(tp.get("description", "")) + "_")
+        opt_tips = safe_list(ce.get("cost_optimization"))
+        if opt_tips:
+            st.markdown("**Cost Optimization Tips:**")
+            for tip in opt_tips:
+                st.markdown("- " + safe_str(tip))
+        notes = safe_str(ce.get("notes"))
+        if notes:
+            st.info(notes)
 
     # ── Risk ──
     with tab_list[3]:
@@ -1002,6 +1574,17 @@ def show_results():
         for k, v in safe_dict(proposal.get("quality_checks")).items():
             check_icon = "pass" if v else "warn"
             st.markdown(("✅ " if v else "⚠️ ") + str(k))
+        # PDF download
+        st.markdown("---")
+        pdf_data = generate_proposal_pdf(r)
+        if pdf_data:
+            st.download_button(
+                "📥 Download Proposal (PDF)",
+                data=pdf_data,
+                file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
+                mime="application/pdf",
+                use_container_width=True, type="primary", key="dl_proposal_pdf",
+            )
 
     # ── Scope ──
     with tab_list[6]:
@@ -1025,25 +1608,46 @@ def show_results():
     # ── Delivery ──
     st.markdown("---")
     st.markdown('<div class="shdr"><span class="shdr-i">🚀</span> Delivery</div>', unsafe_allow_html=True)
-    dc = st.columns(3)
-    with dc[0]:
-        if st.button("Upload to SharePoint", use_container_width=True, type="primary", key="bsp"):
+
+    # Downloads row
+    st.markdown('<div class="shdr" style="font-size:1rem;"><span class="shdr-i">📥</span> Downloads</div>', unsafe_allow_html=True)
+    dl_cols = st.columns(3)
+    with dl_cols[0]:
+        xl_data = generate_time_excel(te, se)
+        if xl_data:
+            st.download_button("📊 Time Estimate (Excel)", data=xl_data,
+                               file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, type="primary", key="bdl_xl")
+    with dl_cols[1]:
+        pdf_data = generate_proposal_pdf(r)
+        if pdf_data:
+            st.download_button("📄 Proposal (PDF)", data=pdf_data,
+                               file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
+                               mime="application/pdf",
+                               use_container_width=True, type="primary", key="bdl_pdf")
+    with dl_cols[2]:
+        st.download_button("📋 Full Data (JSON)", data=json.dumps(r, indent=2, default=str),
+                           file_name="belal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+                           mime="application/json", use_container_width=True, key="bdl")
+
+    # Actions row
+    st.markdown('<div class="shdr" style="font-size:1rem;"><span class="shdr-i">⚡</span> Actions</div>', unsafe_allow_html=True)
+    ac_cols = st.columns(2)
+    with ac_cols[0]:
+        if st.button("Upload to SharePoint", use_container_width=True, key="bsp"):
             ok, msg = SP.from_session().upload(r)
             if ok:
                 st.success(msg)
             else:
                 st.error(msg)
-    with dc[1]:
+    with ac_cols[1]:
         if st.button("Send Alert Email", use_container_width=True, key="bem"):
             ok, msg = Mailer.from_session().send(r)
             if ok:
                 st.success(msg)
             else:
                 st.error(msg)
-    with dc[2]:
-        st.download_button("Download JSON", data=json.dumps(r, indent=2, default=str),
-                           file_name="belal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
-                           mime="application/json", key="bdl")
 
 
 # ═══════════════════════════════════════════════════════════════════════
