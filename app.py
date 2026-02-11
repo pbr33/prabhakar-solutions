@@ -770,12 +770,16 @@ def _build_dynamic_time(semantic, text=""):
     phases = []
     week_counter = 1
 
-    # Phase 1: Discovery & Design
+    # Phase 1: Discovery & Design — granular sub-tasks
     disc_tasks = [
-        {"name": "Project kickoff and requirements review", "role": "BA / PM", "hours": max(8, n_total), "justification": "Stakeholder alignment — " + str(n_total) + " requirements to review"},
-        {"name": "Document and scope analysis", "role": "BA", "hours": max(6, n_total // 2 + 4), "justification": "Analyze uploaded scope documents for " + str(n_func) + " functional requirements"},
-        {"name": "Architecture design and sign-off", "role": "Architect", "hours": max(6, len(tech) + 2), "justification": str(len(tech)) + " technologies identified — architecture blueprint needed"},
-        {"name": "Security and compliance review", "role": "Security", "hours": max(4, n_nf * 2), "justification": str(n_nf) + " non-functional requirements including security"},
+        {"name": "Stakeholder kickoff meeting", "role": "PM", "hours": 4, "justification": "Initial alignment meeting with key stakeholders and sponsors"},
+        {"name": "Requirements elicitation workshops", "role": "BA", "hours": max(4, min(8, n_total)), "justification": str(n_total) + " requirements — structured workshops to capture needs"},
+        {"name": "Requirements documentation and traceability matrix", "role": "BA", "hours": max(4, min(8, n_func)), "justification": "Document " + str(n_func) + " functional requirements with acceptance criteria"},
+        {"name": "Scope document review and gap analysis", "role": "BA", "hours": max(4, min(6, n_total // 2 + 2)), "justification": "Analyze uploaded scope documents, identify gaps"},
+        {"name": "Solution architecture design", "role": "Architect", "hours": max(4, min(8, len(tech) + 1)), "justification": str(len(tech)) + " technologies — design component interactions and data flows"},
+        {"name": "Architecture review and sign-off", "role": "Architect", "hours": 4, "justification": "Peer review, stakeholder walkthrough, and formal sign-off"},
+        {"name": "Security and compliance assessment", "role": "Security", "hours": max(4, min(8, n_nf * 2)), "justification": str(n_nf) + " non-functional requirements — security controls mapping"},
+        {"name": "Risk identification and mitigation planning", "role": "PM", "hours": 4, "justification": "Initial risk register creation and response strategies"},
     ]
     disc_total = sum(t["hours"] for t in disc_tasks)
     for t in disc_tasks:
@@ -806,34 +810,108 @@ def _build_dynamic_time(semantic, text=""):
                        "percentage": "", "tasks": infra_tasks})
         week_counter += infra_weeks
 
-    # Phase 3: Core Development
+    # Phase 3: Core Development — granular sub-tasks per requirement
+    # Break each requirement into design, develop, unit test, code review sub-tasks
     dev_tasks = []
     for r in reqs:
         r = safe_dict(r)
         if r.get("type") == "functional":
-            hrs = {"High": 40, "Medium": 30, "Low": 20}.get(safe_str(r.get("complexity")), 30)
-            dev_tasks.append({"name": "Implement: " + safe_str(r.get("title"))[:50], "role": "Senior Dev",
-                              "hours": hrs, "low_hours": int(hrs * 0.8), "high_hours": int(hrs * 1.35),
-                              "justification": safe_str(r.get("description"))[:80]})
+            title = safe_str(r.get("title"))[:40]
+            cplx = safe_str(r.get("complexity"))
+            desc = safe_str(r.get("description"))[:60]
+            # Granular breakdown by complexity — each sub-task capped at 8h
+            if cplx == "High":
+                sub = [
+                    ("Technical design: " + title, "Senior Dev", 6, "Detailed design doc, API contracts, data model for " + desc),
+                    ("Backend development: " + title, "Senior Dev", 8, "Core business logic implementation — " + desc),
+                    ("API/service layer: " + title, "Senior Dev", 8, "REST/GraphQL endpoints, service orchestration"),
+                    ("Business rules and validation: " + title, "Senior Dev", 6, "Input validation, business rule engine, edge cases"),
+                    ("Unit tests: " + title, "Senior Dev", 6, "Unit test coverage for all methods and edge cases"),
+                    ("Code review and refactor: " + title, "Senior Dev", 6, "Peer review, address feedback, refactor"),
+                ]
+            elif cplx == "Medium":
+                sub = [
+                    ("Technical design: " + title, "Senior Dev", 4, "Design doc and interface contracts for " + desc),
+                    ("Backend development: " + title, "Developer", 8, "Core implementation — " + desc),
+                    ("API/service layer: " + title, "Developer", 6, "Endpoint development and integration points"),
+                    ("Unit tests: " + title, "Developer", 6, "Automated test coverage for feature"),
+                    ("Code review and refactor: " + title, "Senior Dev", 6, "Peer review, address findings"),
+                ]
+            else:  # Low
+                sub = [
+                    ("Technical design: " + title, "Developer", 4, "Design approach for " + desc),
+                    ("Development: " + title, "Developer", 6, "Feature implementation — " + desc),
+                    ("Unit tests: " + title, "Developer", 4, "Test coverage for new functionality"),
+                    ("Code review: " + title, "Senior Dev", 6, "Review, feedback, merge"),
+                ]
+            for sname, srole, shrs, sjust in sub:
+                dev_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                                  "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                                  "justification": sjust})
+
+    # AI/ML pipeline — broken into granular sub-tasks
     if has_ai:
-        ai_hrs = max(30, n_func * 5)
-        dev_tasks.append({"name": "AI/ML pipeline and model integration", "role": "ML Engineer",
-                          "hours": ai_hrs, "low_hours": int(ai_hrs * 0.8), "high_hours": int(ai_hrs * 1.35),
-                          "justification": "Multi-model orchestration, RAG pipeline, prompt engineering"})
+        ai_sub = [
+            ("AI model selection and evaluation", "ML Engineer", 6, "Evaluate model options, benchmark performance"),
+            ("Prompt engineering and template design", "ML Engineer", 8, "Design prompt templates, few-shot examples, guardrails"),
+            ("RAG pipeline: document ingestion", "ML Engineer", 6, "Document chunking, embedding generation, vector store setup"),
+            ("RAG pipeline: retrieval and ranking", "ML Engineer", 6, "Semantic search, re-ranking, context window optimization"),
+            ("AI orchestration layer", "ML Engineer", 8, "Multi-model routing, fallback logic, response aggregation"),
+            ("AI output validation and safety", "ML Engineer", 4, "Content filtering, hallucination checks, output formatting"),
+            ("AI integration testing and tuning", "ML Engineer", 6, "End-to-end testing, latency optimization, cost monitoring"),
+        ]
+        if n_func > 8:
+            ai_sub.append(("AI scaling and caching layer", "ML Engineer", 6, "Response caching, batch processing, rate limiting"))
+        for sname, srole, shrs, sjust in ai_sub:
+            dev_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                              "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                              "justification": sjust})
+
+    # Frontend — broken into granular sub-tasks
     if has_frontend:
-        fe_hrs = max(20, n_func * 4)
-        dev_tasks.append({"name": "Frontend UI development", "role": "Frontend Dev",
-                          "hours": fe_hrs, "low_hours": int(fe_hrs * 0.8), "high_hours": int(fe_hrs * 1.35),
-                          "justification": "User interface for " + str(n_func) + " functional features"})
+        fe_sub = [
+            ("UI component library setup", "Frontend Dev", 4, "Design system, reusable components, theme configuration"),
+            ("Page layouts and navigation", "Frontend Dev", 6, "Route structure, layout components, responsive design"),
+            ("Feature UI implementation", "Frontend Dev", max(6, min(8, n_func * 2)), str(n_func) + " feature screens — forms, tables, dashboards"),
+            ("State management and API integration", "Frontend Dev", 6, "Redux/context setup, API service layer, error handling"),
+            ("Accessibility and responsive testing", "Frontend Dev", 4, "WCAG compliance, cross-browser, mobile responsiveness"),
+        ]
+        if n_func > 6:
+            fe_sub.append(("Advanced UI: data visualization and charts", "Frontend Dev", 6, "Interactive charts, dashboards, data grids"))
+        for sname, srole, shrs, sjust in fe_sub:
+            dev_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                              "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                              "justification": sjust})
+
+    # Data layer — broken into granular sub-tasks
     if has_data:
-        db_hrs = max(15, n_func * 3)
-        dev_tasks.append({"name": "Data layer and database implementation", "role": "Data Engineer",
-                          "hours": db_hrs, "low_hours": int(db_hrs * 0.8), "high_hours": int(db_hrs * 1.35),
-                          "justification": "Schema design, indexing, data pipeline setup"})
+        db_sub = [
+            ("Database schema design", "Data Engineer", 6, "Entity relationships, normalization, indexing strategy"),
+            ("Database provisioning and configuration", "Data Engineer", 4, "Instance setup, security config, backup policy"),
+            ("Data access layer (ORM/repository)", "Data Engineer", 6, "Repository pattern, query optimization, connection pooling"),
+            ("Data migration scripts", "Data Engineer", 4, "Schema migrations, seed data, rollback procedures"),
+        ]
+        if n_func > 5:
+            db_sub.append(("ETL/data pipeline development", "Data Engineer", 6, "Data transformation, scheduling, error handling"))
+        for sname, srole, shrs, sjust in db_sub:
+            dev_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                              "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                              "justification": sjust})
+
     if not dev_tasks:
-        dev_tasks.append({"name": "Core application development", "role": "Senior Dev",
-                          "hours": raw_dev, "low_hours": int(raw_dev * 0.8), "high_hours": int(raw_dev * 1.35),
-                          "justification": "Primary development based on " + str(n_total) + " requirements"})
+        # Fallback — still break into granular sub-tasks
+        fallback_sub = [
+            ("Technical design and architecture", "Senior Dev", 8, "Detailed design for " + str(n_total) + " requirements"),
+            ("Core backend development", "Senior Dev", min(8, max(6, raw_dev // 6)), "Primary business logic implementation"),
+            ("API layer development", "Developer", min(8, max(6, raw_dev // 6)), "REST endpoints and service contracts"),
+            ("Business logic and validation", "Developer", min(8, max(4, raw_dev // 8)), "Validation rules, error handling"),
+            ("Unit test development", "Developer", min(8, max(4, raw_dev // 8)), "Automated test suite creation"),
+            ("Code review and quality", "Senior Dev", min(6, max(4, raw_dev // 10)), "Peer review and quality gates"),
+        ]
+        for sname, srole, shrs, sjust in fallback_sub:
+            dev_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                              "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                              "justification": sjust})
     dev_total = sum(t["hours"] for t in dev_tasks)
     dev_weeks = max(2, dev_total // 40)
     phases.append({"name": "Core Development", "week_label": "Week " + str(week_counter) + "-" + str(week_counter + dev_weeks - 1),
@@ -841,16 +919,44 @@ def _build_dynamic_time(semantic, text=""):
                    "percentage": "", "tasks": dev_tasks})
     week_counter += dev_weeks
 
-    # Phase 4: Integration (if integration reqs exist)
+    # Phase 4: Integration — granular sub-tasks per integration requirement
     if n_int > 0:
         int_tasks = []
         for r in reqs:
             r = safe_dict(r)
             if r.get("type") == "integration":
-                hrs = {"High": 45, "Medium": 35, "Low": 25}.get(safe_str(r.get("complexity")), 35)
-                int_tasks.append({"name": "Integrate: " + safe_str(r.get("title"))[:50], "role": "Developer",
-                                  "hours": hrs, "low_hours": int(hrs * 0.8), "high_hours": int(hrs * 1.35),
-                                  "justification": safe_str(r.get("description"))[:80]})
+                title = safe_str(r.get("title"))[:40]
+                cplx = safe_str(r.get("complexity"))
+                desc = safe_str(r.get("description"))[:60]
+                if cplx == "High":
+                    sub = [
+                        ("Integration design: " + title, "Architect", 6, "API contract design, auth flow, error handling for " + desc),
+                        ("Connector development: " + title, "Developer", 8, "Build adapter/connector, data mapping, transformation"),
+                        ("Authentication and security: " + title, "Developer", 6, "OAuth/API key setup, token management, encryption"),
+                        ("Error handling and retry logic: " + title, "Developer", 6, "Circuit breaker, retry policies, dead letter handling"),
+                        ("Integration testing: " + title, "QA", 8, "End-to-end flow validation, mock services, edge cases"),
+                        ("Performance testing: " + title, "QA", 6, "Load test integration endpoints, throughput validation"),
+                        ("Documentation: " + title, "Developer", 4, "Integration guide, API docs, runbook"),
+                    ]
+                elif cplx == "Medium":
+                    sub = [
+                        ("Integration design: " + title, "Architect", 4, "API contract and data mapping for " + desc),
+                        ("Connector development: " + title, "Developer", 8, "Build adapter, request/response handling"),
+                        ("Auth and error handling: " + title, "Developer", 6, "Authentication setup, retry logic, error handling"),
+                        ("Integration testing: " + title, "QA", 8, "Validate data flow, edge cases, error scenarios"),
+                        ("Documentation: " + title, "Developer", 4, "Integration guide and troubleshooting docs"),
+                    ]
+                else:  # Low
+                    sub = [
+                        ("Integration design: " + title, "Developer", 4, "Simple API mapping for " + desc),
+                        ("Connector development: " + title, "Developer", 6, "Build adapter and data transformation"),
+                        ("Integration testing: " + title, "QA", 6, "Validate happy path and error handling"),
+                        ("Documentation: " + title, "Developer", 4, "Integration setup guide"),
+                    ]
+                for sname, srole, shrs, sjust in sub:
+                    int_tasks.append({"name": sname, "role": srole, "hours": shrs,
+                                      "low_hours": int(shrs * 0.8), "high_hours": int(shrs * 1.35),
+                                      "justification": sjust})
         int_total = sum(t["hours"] for t in int_tasks)
         int_weeks = max(1, int_total // 40)
         phases.append({"name": "Integration", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + int_weeks - 1) if int_weeks > 1 else ""),
@@ -858,24 +964,45 @@ def _build_dynamic_time(semantic, text=""):
                        "percentage": "", "tasks": int_tasks})
         week_counter += int_weeks
 
-    # Phase 5: Testing & QA
+    # Phase 5: Testing & QA — granular sub-tasks capped at 8h each
     test_base = max(40, dev_total // 3)
     test_tasks = [
-        {"name": "Unit testing (all components)", "role": "QA", "hours": int(test_base * 0.25),
-         "low_hours": int(test_base * 0.2), "high_hours": int(test_base * 0.34),
-         "justification": "Function-level tests for " + str(n_func) + " features"},
-        {"name": "Integration testing (end-to-end)", "role": "QA", "hours": int(test_base * 0.30),
-         "low_hours": int(test_base * 0.24), "high_hours": int(test_base * 0.41),
-         "justification": "Full workflow testing across " + str(len(tech)) + " components"},
-        {"name": "Performance and load testing", "role": "QA", "hours": int(test_base * 0.15),
-         "low_hours": int(test_base * 0.12), "high_hours": int(test_base * 0.20),
-         "justification": "Response time and concurrency validation"},
-        {"name": "Security testing", "role": "Security", "hours": int(test_base * 0.10),
-         "low_hours": int(test_base * 0.08), "high_hours": int(test_base * 0.14),
-         "justification": "Authentication, authorization, vulnerability scan"},
-        {"name": "UAT coordination", "role": "BA", "hours": int(test_base * 0.20),
-         "low_hours": int(test_base * 0.16), "high_hours": int(test_base * 0.27),
-         "justification": "User acceptance testing with stakeholders"},
+        {"name": "Test strategy and plan creation", "role": "QA Lead", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Define test approach, entry/exit criteria, environment needs"},
+        {"name": "Test case design and documentation", "role": "QA", "hours": min(8, max(4, int(test_base * 0.10))),
+         "low_hours": min(6, max(3, int(test_base * 0.08))), "high_hours": min(8, max(5, int(test_base * 0.14))),
+         "justification": "Write test cases for " + str(n_func) + " functional requirements"},
+        {"name": "Test environment setup and data prep", "role": "QA", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Configure test env, seed test data, mock services"},
+        {"name": "Unit test execution and defect logging", "role": "QA", "hours": min(8, max(4, int(test_base * 0.12))),
+         "low_hours": min(6, max(3, int(test_base * 0.10))), "high_hours": min(8, max(5, int(test_base * 0.16))),
+         "justification": "Execute unit tests across " + str(n_func) + " features, log defects"},
+        {"name": "Integration test execution", "role": "QA", "hours": min(8, max(4, int(test_base * 0.15))),
+         "low_hours": min(6, max(3, int(test_base * 0.12))), "high_hours": min(8, max(5, int(test_base * 0.20))),
+         "justification": "End-to-end workflow validation across " + str(len(tech)) + " components"},
+        {"name": "API and contract testing", "role": "QA", "hours": min(8, max(4, int(test_base * 0.10))),
+         "low_hours": min(6, max(3, int(test_base * 0.08))), "high_hours": min(8, max(5, int(test_base * 0.14))),
+         "justification": "Validate API contracts, request/response schemas, error codes"},
+        {"name": "Performance and load testing", "role": "QA", "hours": min(8, max(4, int(test_base * 0.10))),
+         "low_hours": min(6, max(3, int(test_base * 0.08))), "high_hours": min(8, max(5, int(test_base * 0.14))),
+         "justification": "Response time benchmarks, concurrent user load, stress testing"},
+        {"name": "Security and penetration testing", "role": "Security", "hours": min(8, max(4, int(test_base * 0.08))),
+         "low_hours": min(6, max(3, int(test_base * 0.06))), "high_hours": min(8, max(5, int(test_base * 0.11))),
+         "justification": "OWASP top 10, auth bypass, injection testing, vulnerability scan"},
+        {"name": "Regression testing", "role": "QA", "hours": min(8, max(4, int(test_base * 0.10))),
+         "low_hours": min(6, max(3, int(test_base * 0.08))), "high_hours": min(8, max(5, int(test_base * 0.14))),
+         "justification": "Verify existing functionality after changes and bug fixes"},
+        {"name": "UAT test case preparation", "role": "BA", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Create UAT scripts, acceptance criteria checklist for stakeholders"},
+        {"name": "UAT execution and feedback coordination", "role": "BA", "hours": min(8, max(4, int(test_base * 0.10))),
+         "low_hours": min(6, max(3, int(test_base * 0.08))), "high_hours": min(8, max(5, int(test_base * 0.14))),
+         "justification": "Facilitate UAT sessions, collect sign-offs, track feedback"},
+        {"name": "Defect triage and resolution support", "role": "QA", "hours": min(8, max(4, int(test_base * 0.05))),
+         "low_hours": min(6, max(3, int(test_base * 0.04))), "high_hours": min(8, max(5, int(test_base * 0.07))),
+         "justification": "Prioritize defects, verify fixes, update test results"},
     ]
     test_total = sum(t["hours"] for t in test_tasks)
     test_weeks = max(1, test_total // 40)
@@ -884,24 +1011,35 @@ def _build_dynamic_time(semantic, text=""):
                    "percentage": "", "tasks": test_tasks})
     week_counter += test_weeks
 
-    # Phase 6: Deployment
-    deploy_base = max(20, dev_total // 6)
+    # Phase 6: Deployment & Go-Live — granular sub-tasks capped at 8h
     deploy_tasks = [
-        {"name": "UAT environment deployment", "role": "DevOps", "hours": int(deploy_base * 0.20),
-         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
-         "justification": "Staging environment provisioning"},
-        {"name": "Production deployment", "role": "DevOps", "hours": int(deploy_base * 0.25),
-         "low_hours": int(deploy_base * 0.20), "high_hours": int(deploy_base * 0.34),
-         "justification": "Go-live cutover and configuration"},
-        {"name": "Monitoring and alerting setup", "role": "DevOps", "hours": int(deploy_base * 0.20),
-         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
-         "justification": "Production observability, dashboards, alerts"},
-        {"name": "Smoke testing and sign-off", "role": "QA / PM", "hours": int(deploy_base * 0.15),
-         "low_hours": int(deploy_base * 0.12), "high_hours": int(deploy_base * 0.20),
-         "justification": "Final validation and stakeholder acceptance"},
-        {"name": "Feedback incorporation and bug fixes", "role": "Dev", "hours": int(deploy_base * 0.20),
-         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
-         "justification": "Address UAT findings before production"},
+        {"name": "Deployment runbook creation", "role": "DevOps", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Step-by-step deployment guide, rollback procedures"},
+        {"name": "UAT environment provisioning", "role": "DevOps", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Staging environment setup, config, secrets management"},
+        {"name": "UAT deployment and smoke test", "role": "DevOps", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Deploy to staging, verify critical paths"},
+        {"name": "UAT defect fixing and re-deployment", "role": "Developer", "hours": 8,
+         "low_hours": 6, "high_hours": 8,
+         "justification": "Address UAT findings, re-deploy, re-verify"},
+        {"name": "Production environment provisioning", "role": "DevOps", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Production infra setup, DNS, SSL, firewall rules"},
+        {"name": "Production deployment and cutover", "role": "DevOps", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Go-live deployment, data migration, traffic switch"},
+        {"name": "Monitoring, alerting, and dashboards", "role": "DevOps", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Application Insights, log aggregation, alert rules, dashboards"},
+        {"name": "Production smoke testing", "role": "QA", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Post-deployment verification of all critical workflows"},
+        {"name": "Go-live sign-off and handover", "role": "PM", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Stakeholder sign-off, support team handover, SLA activation"},
     ]
     deploy_total = sum(t["hours"] for t in deploy_tasks)
     deploy_weeks = max(1, deploy_total // 40)
@@ -910,18 +1048,29 @@ def _build_dynamic_time(semantic, text=""):
                    "percentage": "", "tasks": deploy_tasks})
     week_counter += deploy_weeks
 
-    # Phase 7: Documentation & Training
-    doc_base = max(16, dev_total // 8)
+    # Phase 7: Documentation & Training — granular sub-tasks capped at 8h
     doc_tasks = [
-        {"name": "Architecture documentation with diagrams", "role": "Architect", "hours": int(doc_base * 0.40),
-         "low_hours": int(doc_base * 0.32), "high_hours": int(doc_base * 0.54),
-         "justification": "Technical design documentation for " + str(len(tech)) + " components"},
-        {"name": "User guide creation", "role": "Writer", "hours": int(doc_base * 0.35),
-         "low_hours": int(doc_base * 0.28), "high_hours": int(doc_base * 0.47),
-         "justification": "End-user how-to guide with screenshots"},
-        {"name": "Training session", "role": "BA", "hours": int(doc_base * 0.25),
-         "low_hours": int(doc_base * 0.20), "high_hours": int(doc_base * 0.34),
-         "justification": "Knowledge transfer to client team"},
+        {"name": "Architecture and design documentation", "role": "Architect", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "Technical design doc, component diagrams for " + str(len(tech)) + " technologies"},
+        {"name": "API documentation and developer guide", "role": "Developer", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "OpenAPI specs, code samples, integration guide"},
+        {"name": "Operations and runbook documentation", "role": "DevOps", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Incident procedures, scaling guide, troubleshooting"},
+        {"name": "End-user guide creation", "role": "Writer", "hours": 6,
+         "low_hours": 5, "high_hours": 8,
+         "justification": "User manual with screenshots, FAQ, quick-start guide"},
+        {"name": "Admin guide and configuration docs", "role": "Writer", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "System admin procedures, configuration reference"},
+        {"name": "Knowledge transfer session (technical)", "role": "Architect", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "Technical deep-dive with client development team"},
+        {"name": "Knowledge transfer session (end users)", "role": "BA", "hours": 4,
+         "low_hours": 3, "high_hours": 5,
+         "justification": "End-user training workshop with hands-on exercises"},
     ]
     doc_total = sum(t["hours"] for t in doc_tasks)
     doc_weeks = max(1, doc_total // 40)
@@ -933,15 +1082,28 @@ def _build_dynamic_time(semantic, text=""):
     # ── Calculate totals and percentages ──
     total_dev = sum(p["hours"] for p in phases)
     pm_hours = int(total_dev * 0.10)
+    # Project Management — granular sub-tasks
+    pm_tasks = [
+        {"name": "Sprint planning and backlog grooming", "role": "PM", "hours": min(8, max(4, pm_hours // 4)),
+         "justification": "Bi-weekly sprint ceremonies, backlog prioritization"},
+        {"name": "Status reporting and stakeholder updates", "role": "PM", "hours": min(8, max(4, pm_hours // 4)),
+         "justification": "Weekly status reports, steering committee updates"},
+        {"name": "Risk and issue management", "role": "PM", "hours": min(6, max(4, pm_hours // 5)),
+         "justification": "Risk register updates, issue resolution tracking"},
+        {"name": "Resource coordination and escalations", "role": "PM", "hours": min(6, max(4, pm_hours // 6)),
+         "justification": "Team allocation, dependency management, escalation handling"},
+        {"name": "Change request management", "role": "PM", "hours": 4,
+         "justification": "Evaluate scope changes, impact analysis, approval workflows"},
+    ]
+    pm_actual = sum(t["hours"] for t in pm_tasks)
+    for t in pm_tasks:
+        t["low_hours"] = int(t["hours"] * 0.8)
+        t["high_hours"] = int(t["hours"] * 1.35)
     phases.append({"name": "Project Management", "week_label": "Ongoing",
-                   "hours": pm_hours, "low_hours": int(pm_hours * 0.8), "high_hours": int(pm_hours * 1.35),
-                   "percentage": "10%", "tasks": [
-                       {"name": "Meetings, reporting, risk management", "role": "PM",
-                        "hours": pm_hours, "low_hours": int(pm_hours * 0.8), "high_hours": int(pm_hours * 1.35),
-                        "justification": "10% of dev effort — throughout project"}
-                   ]})
+                   "hours": pm_actual, "low_hours": int(pm_actual * 0.8), "high_hours": int(pm_actual * 1.35),
+                   "percentage": str(round(pm_actual / max(total_dev + pm_actual, 1) * 100)) + "%", "tasks": pm_tasks})
 
-    total = total_dev + pm_hours
+    total = total_dev + pm_actual
     for p in phases:
         if not p.get("percentage"):
             p["percentage"] = str(round(p["hours"] / max(total, 1) * 100)) + "%"
