@@ -40,6 +40,13 @@ except ImportError:
     HAS_PPTX = False
 
 try:
+    import graphviz as gv_lib
+    HAS_GRAPHVIZ = True
+except ImportError:
+    gv_lib = None
+    HAS_GRAPHVIZ = False
+
+try:
     from openai import AzureOpenAI
 except ImportError:
     AzureOpenAI = None
@@ -187,6 +194,36 @@ def safe_dict(val):
 # ═══════════════════════════════════════════════════════════════════════
 #  GRAPHVIZ DOT DIAGRAM GENERATORS
 # ═══════════════════════════════════════════════════════════════════════
+
+def render_dot_to_svg(dot_string):
+    """Render a DOT string to SVG bytes using the graphviz library.
+
+    Returns SVG bytes or None if graphviz is not available.
+    """
+    if not HAS_GRAPHVIZ or not dot_string:
+        return None
+    try:
+        src = gv_lib.Source(dot_string)
+        svg_bytes = src.pipe(format="svg")
+        return svg_bytes
+    except Exception:
+        return None
+
+
+def render_dot_to_png(dot_string):
+    """Render a DOT string to PNG bytes using the graphviz library.
+
+    Returns PNG bytes or None if graphviz is not available.
+    """
+    if not HAS_GRAPHVIZ or not dot_string:
+        return None
+    try:
+        src = gv_lib.Source(dot_string)
+        png_bytes = src.pipe(format="png")
+        return png_bytes
+    except Exception:
+        return None
+
 
 def generate_architecture_diagram(architecture_data):
     """Generate a Graphviz DOT string for an architecture diagram.
@@ -3618,6 +3655,7 @@ def show_results():
         st.markdown("**Pattern:** _" + safe_str(ar.get("pattern")) + "_")
 
         # ── Architecture Diagram (Graphviz) ──
+        arch_dot = None
         try:
             arch_dot = generate_architecture_diagram(ar)
             if arch_dot:
@@ -3625,6 +3663,39 @@ def show_results():
                 st.graphviz_chart(arch_dot, use_container_width=True)
         except Exception:
             pass
+
+        # ── Architecture Diagram Downloads ──
+        if arch_dot:
+            st.markdown("#### Download Architecture Diagram")
+            dl_arch_cols = st.columns(3)
+            with dl_arch_cols[0]:
+                arch_svg = render_dot_to_svg(arch_dot)
+                if arch_svg:
+                    st.download_button(
+                        "Download Diagram (SVG)",
+                        data=arch_svg,
+                        file_name="ECI_Architecture_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".svg",
+                        mime="image/svg+xml",
+                        use_container_width=True, type="primary", key="dl_arch_svg",
+                    )
+            with dl_arch_cols[1]:
+                arch_png = render_dot_to_png(arch_dot)
+                if arch_png:
+                    st.download_button(
+                        "Download Diagram (PNG)",
+                        data=arch_png,
+                        file_name="ECI_Architecture_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png",
+                        mime="image/png",
+                        use_container_width=True, type="primary", key="dl_arch_png",
+                    )
+            with dl_arch_cols[2]:
+                st.download_button(
+                    "Download Diagram (DOT)",
+                    data=arch_dot.encode("utf-8"),
+                    file_name="ECI_Architecture_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".dot",
+                    mime="text/plain",
+                    use_container_width=True, key="dl_arch_dot",
+                )
 
         # ── Component cards ──
         arch_cols = st.columns(3)
@@ -3639,6 +3710,7 @@ def show_results():
             st.markdown('<div class="dfv">' + flow_str + '</div>', unsafe_allow_html=True)
 
         # ── Workflow / Flow Diagram (Graphviz) ──
+        flow_dot = None
         try:
             flow_dot = generate_flow_diagram(te)
             if flow_dot:
@@ -3646,6 +3718,39 @@ def show_results():
                 st.graphviz_chart(flow_dot, use_container_width=True)
         except Exception:
             pass
+
+        # ── Workflow Diagram Downloads ──
+        if flow_dot:
+            st.markdown("#### Download Workflow Diagram")
+            dl_flow_cols = st.columns(3)
+            with dl_flow_cols[0]:
+                flow_svg = render_dot_to_svg(flow_dot)
+                if flow_svg:
+                    st.download_button(
+                        "Download Workflow (SVG)",
+                        data=flow_svg,
+                        file_name="ECI_Workflow_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".svg",
+                        mime="image/svg+xml",
+                        use_container_width=True, type="primary", key="dl_flow_svg",
+                    )
+            with dl_flow_cols[1]:
+                flow_png = render_dot_to_png(flow_dot)
+                if flow_png:
+                    st.download_button(
+                        "Download Workflow (PNG)",
+                        data=flow_png,
+                        file_name="ECI_Workflow_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png",
+                        mime="image/png",
+                        use_container_width=True, type="primary", key="dl_flow_png",
+                    )
+            with dl_flow_cols[2]:
+                st.download_button(
+                    "Download Workflow (DOT)",
+                    data=flow_dot.encode("utf-8"),
+                    file_name="ECI_Workflow_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".dot",
+                    mime="text/plain",
+                    use_container_width=True, key="dl_flow_dot",
+                )
 
         # ── Security ──
         sec_items = safe_list(ar.get("security"))
