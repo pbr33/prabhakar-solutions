@@ -185,6 +185,1048 @@ def safe_dict(val):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  GRAPHVIZ DOT DIAGRAM GENERATORS
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_architecture_diagram(architecture_data):
+    """Generate a Graphviz DOT string for an architecture diagram.
+
+    Args:
+        architecture_data: dict with keys 'pattern', 'components', 'data_flow', 'security'.
+
+    Returns:
+        A DOT language string suitable for st.graphviz_chart().
+    """
+    data = safe_dict(architecture_data)
+    pattern = safe_str(data.get("pattern"), "Solution Architecture")
+    components = safe_list(data.get("components"))
+    data_flow = safe_list(data.get("data_flow"))
+    security_items = safe_list(data.get("security"))
+
+    # ── Colour palette by tier ──
+    tier_colors = {
+        "presentation": "#00B4D8",
+        "application": "#1B3A5C",
+        "data": "#00D4AA",
+        "security": "#7B61FF",
+        "operations": "#FFD166",
+    }
+
+    # Map component type -> tier
+    type_to_tier = {
+        "web app": "presentation",
+        "frontend": "presentation",
+        "ui": "presentation",
+        "cdn": "presentation",
+        "integration": "application",
+        "microservices": "application",
+        "api": "application",
+        "messaging": "application",
+        "backend": "application",
+        "compute": "application",
+        "database": "data",
+        "storage": "data",
+        "data": "data",
+        "cache": "data",
+        "identity": "security",
+        "security": "security",
+        "auth": "security",
+        "operations": "operations",
+        "devops": "operations",
+        "monitoring": "operations",
+    }
+
+    tier_labels = {
+        "presentation": "Presentation Tier",
+        "application": "Application Tier",
+        "data": "Data Tier",
+        "security": "Security Tier",
+        "operations": "Operations Tier",
+    }
+
+    # Classify each component into a tier
+    tier_components = {t: [] for t in tier_colors}
+    for comp in components:
+        comp = safe_dict(comp)
+        comp_type = safe_str(comp.get("type")).lower()
+        comp_name_lower = safe_str(comp.get("name")).lower()
+        tier = type_to_tier.get(comp_type)
+        if tier is None:
+            tier = type_to_tier.get(comp_name_lower, "application")
+        tier_components[tier].append(comp)
+
+    # Build a sanitised node id from component name
+    def node_id(name):
+        nid = safe_str(name).replace(" ", "_").replace("/", "_").replace("-", "_")
+        nid = "".join(ch for ch in nid if ch.isalnum() or ch == "_")
+        return "n_" + nid
+
+    # ── Start DOT ──
+    lines = []
+    lines.append("digraph architecture {")
+    lines.append('    rankdir=TB;')
+    lines.append('    bgcolor="#0a0e1a";')
+    lines.append('    fontname="Helvetica";')
+    lines.append('    node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fontcolor=white];')
+    lines.append('    edge [fontname="Helvetica", fontsize=9, color="#64748b", fontcolor="#94a3b8"];')
+    lines.append('')
+
+    # Title
+    lines.append('    labelloc=t;')
+    lines.append('    label=<<FONT FACE="Helvetica" POINT-SIZE="16" COLOR="white">' + safe_str(pattern) + '</FONT>>;')
+    lines.append('')
+
+    # ── Subgraph clusters per tier ──
+    cluster_idx = 0
+    all_node_ids = []
+    for tier_key in ["presentation", "application", "data", "operations"]:
+        comps_in_tier = tier_components.get(tier_key, [])
+        if not comps_in_tier:
+            continue
+        color = tier_colors[tier_key]
+        label = tier_labels[tier_key]
+        lines.append('    subgraph cluster_' + str(cluster_idx) + ' {')
+        lines.append('        label=<<FONT FACE="Helvetica" POINT-SIZE="12" COLOR="' + color + '">' + label + '</FONT>>;')
+        lines.append('        style=dashed;')
+        lines.append('        color="' + color + '";')
+        lines.append('        bgcolor="#111827";')
+        lines.append('')
+        for comp in comps_in_tier:
+            comp = safe_dict(comp)
+            name = safe_str(comp.get("name"))
+            azure_svc = safe_str(comp.get("azure_service"))
+            nid = node_id(name)
+            all_node_ids.append((name, nid))
+            node_label = name + "\\n" + azure_svc
+            lines.append('        ' + nid + ' [label="' + node_label + '", fillcolor="' + color + '"];')
+        lines.append('    }')
+        lines.append('')
+        cluster_idx += 1
+
+    # ── Security cluster (bottom) ──
+    security_comps = tier_components.get("security", [])
+    if security_comps or security_items:
+        color = tier_colors["security"]
+        label = tier_labels["security"]
+        lines.append('    subgraph cluster_' + str(cluster_idx) + ' {')
+        lines.append('        label=<<FONT FACE="Helvetica" POINT-SIZE="12" COLOR="' + color + '">' + label + '</FONT>>;')
+        lines.append('        style=dashed;')
+        lines.append('        color="' + color + '";')
+        lines.append('        bgcolor="#111827";')
+        lines.append('        rank=max;')
+        lines.append('')
+        for comp in security_comps:
+            comp = safe_dict(comp)
+            name = safe_str(comp.get("name"))
+            azure_svc = safe_str(comp.get("azure_service"))
+            nid = node_id(name)
+            all_node_ids.append((name, nid))
+            node_label = name + "\\n" + azure_svc
+            lines.append('        ' + nid + ' [label="' + node_label + '", fillcolor="' + color + '"];')
+
+        # Security items as a single info node
+        if security_items:
+            sec_label = "Security Controls\\n" + "\\n".join(safe_str(s) for s in security_items)
+            lines.append('        n_security_controls [label="' + sec_label + '", fillcolor="' + color + '", shape=note];')
+        lines.append('    }')
+        lines.append('')
+        cluster_idx += 1
+
+    # ── Edges based on data_flow ──
+    # Build a lookup: lowercase name -> node_id
+    name_to_nid = {}
+    for name, nid in all_node_ids:
+        name_to_nid[name.lower()] = nid
+
+    # For data_flow items that don't match a component, create ghost nodes
+    flow_nids = []
+    for item in data_flow:
+        item_str = safe_str(item)
+        item_lower = item_str.lower()
+        matched_nid = name_to_nid.get(item_lower)
+        if matched_nid is None:
+            # Try partial match
+            for comp_name_lower, comp_nid in name_to_nid.items():
+                if item_lower in comp_name_lower or comp_name_lower in item_lower:
+                    matched_nid = comp_nid
+                    break
+        if matched_nid is None:
+            # Create an inline node for this flow step
+            ghost_nid = node_id(item_str)
+            lines.append('    ' + ghost_nid + ' [label="' + item_str + '", fillcolor="#334155", shape=box, style="rounded,filled"];')
+            name_to_nid[item_lower] = ghost_nid
+            matched_nid = ghost_nid
+        flow_nids.append(matched_nid)
+
+    for i in range(len(flow_nids) - 1):
+        lines.append('    ' + flow_nids[i] + ' -> ' + flow_nids[i + 1] + ';')
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def generate_flow_diagram(time_est_data):
+    """Generate a Graphviz DOT string for a project workflow / timeline diagram.
+
+    Args:
+        time_est_data: dict with keys 'phases' and 'milestones'.
+
+    Returns:
+        A DOT language string suitable for st.graphviz_chart().
+    """
+    data = safe_dict(time_est_data)
+    phases = safe_list(data.get("phases"))
+    milestones = safe_list(data.get("milestones"))
+
+    # Gradient colours from blue to green across phases
+    phase_colors = [
+        "#1B3A5C",  # deep blue
+        "#0E5E8A",  # medium blue
+        "#007F8C",  # teal
+        "#00A07A",  # teal-green
+        "#00B464",  # green
+        "#00D44A",  # bright green
+        "#06d6a0",  # mint green
+        "#0AD490",  # extra – in case of many phases
+        "#10D280",
+        "#16D070",
+    ]
+
+    milestone_color = "#FFD166"
+
+    lines = []
+    lines.append("digraph timeline {")
+    lines.append('    rankdir=LR;')
+    lines.append('    bgcolor="#0a0e1a";')
+    lines.append('    fontname="Helvetica";')
+    lines.append('    node [fontname="Helvetica", fontsize=10, style="rounded,filled", fontcolor=white];')
+    lines.append('    edge [fontname="Helvetica", fontsize=9, color="#64748b"];')
+    lines.append('')
+    lines.append('    labelloc=t;')
+    lines.append('    label=<<FONT FACE="Helvetica" POINT-SIZE="14" COLOR="white">Project Timeline</FONT>>;')
+    lines.append('')
+
+    phase_node_ids = []
+    for idx, phase in enumerate(phases):
+        phase = safe_dict(phase)
+        name = safe_str(phase.get("name"), "Phase " + str(idx + 1))
+        hours = safe_int(phase.get("hours"))
+        pct = safe_str(phase.get("percentage"), "")
+        tasks = safe_list(phase.get("tasks"))
+
+        color = phase_colors[idx % len(phase_colors)]
+        nid = "phase_" + str(idx)
+        phase_node_ids.append(nid)
+
+        # Build label: phase name, hours, percentage, then tasks
+        label_parts = [name, str(hours) + " hrs (" + pct + ")"]
+        for task in tasks:
+            task = safe_dict(task)
+            task_name = safe_str(task.get("name"))
+            task_hours = safe_int(task.get("hours"))
+            task_role = safe_str(task.get("role"))
+            if task_name:
+                task_line = "- " + task_name
+                if task_hours:
+                    task_line = task_line + " (" + str(task_hours) + "h"
+                    if task_role:
+                        task_line = task_line + ", " + task_role
+                    task_line = task_line + ")"
+                elif task_role:
+                    task_line = task_line + " [" + task_role + "]"
+                label_parts.append(task_line)
+
+        label = "\\n".join(label_parts)
+        lines.append('    ' + nid + ' [label="' + label + '", fillcolor="' + color + '", shape=box];')
+
+    lines.append('')
+
+    # Connect phases sequentially
+    for i in range(len(phase_node_ids) - 1):
+        lines.append('    ' + phase_node_ids[i] + ' -> ' + phase_node_ids[i + 1] + ';')
+    lines.append('')
+
+    # ── Milestones as diamonds ──
+    # Map each milestone to the nearest phase by week.
+    # We estimate cumulative weeks per phase proportionally.
+    total_hours = sum(safe_int(safe_dict(p).get("hours")) for p in phases) or 1
+    cumulative_week = 0
+    phase_week_ranges = []
+    total_weeks_est = safe_int(data.get("duration_weeks")) if safe_str(data.get("duration_weeks")).isdigit() else 0
+    if total_weeks_est == 0:
+        # Rough estimate: use hours to approximate
+        dur_str = safe_str(data.get("duration_weeks"))
+        digits = "".join(ch for ch in dur_str if ch.isdigit())
+        total_weeks_est = safe_int(digits) if digits else max(8, total_hours // 160)
+
+    for phase in phases:
+        phase = safe_dict(phase)
+        ph_hours = safe_int(phase.get("hours"))
+        proportion = ph_hours / total_hours if total_hours else 0
+        weeks_for_phase = proportion * total_weeks_est
+        start_week = cumulative_week
+        cumulative_week += weeks_for_phase
+        phase_week_ranges.append((start_week, cumulative_week))
+
+    for m_idx, ms in enumerate(milestones):
+        ms = safe_dict(ms)
+        ms_name = safe_str(ms.get("name"), "Milestone " + str(m_idx + 1))
+        ms_week = safe_int(ms.get("week"))
+        ms_desc = safe_str(ms.get("description"))
+        mid = "ms_" + str(m_idx)
+
+        label = ms_name + "\\nWeek " + str(ms_week)
+        if ms_desc:
+            label = label + "\\n" + ms_desc
+        lines.append('    ' + mid + ' [label="' + label + '", shape=diamond, fillcolor="' + milestone_color + '", fontcolor="#1B3A5C", fontsize=9];')
+
+        # Find which phase this milestone falls into (or nearest)
+        best_phase_idx = 0
+        for p_idx, (ws, we) in enumerate(phase_week_ranges):
+            if ms_week <= we or p_idx == len(phase_week_ranges) - 1:
+                best_phase_idx = p_idx
+                break
+
+        if phase_node_ids:
+            target_phase = phase_node_ids[min(best_phase_idx, len(phase_node_ids) - 1)]
+            lines.append('    ' + target_phase + ' -> ' + mid + ' [style=dashed, color="' + milestone_color + '"];')
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DYNAMIC TEXT ANALYSIS ENGINE (No AI — pure NLP/regex)
+# ═══════════════════════════════════════════════════════════════════════
+
+_TECH_CATALOG = {
+    "Azure App Service": ["app service", "web app hosting"],
+    "Azure Functions": ["azure function", "serverless", "function app"],
+    "Azure SQL Database": ["azure sql", "sql database", "sql server"],
+    "Cosmos DB": ["cosmos db", "cosmosdb", "nosql"],
+    "Azure Blob Storage": ["blob storage", "blob", "file storage"],
+    "Azure Key Vault": ["key vault", "keyvault", "secrets management"],
+    "Azure AI Search": ["ai search", "cognitive search", "azure search", "vector search"],
+    "Azure OpenAI": ["azure openai", "openai", "gpt-4", "gpt4", "gpt-4o"],
+    "Azure AI Foundry": ["ai foundry", "foundry", "claude"],
+    "Azure Monitor": ["azure monitor", "application insights", "app insights", "monitoring"],
+    "Azure AD / Entra ID": ["azure ad", "entra id", "active directory", "sso", "mfa", "identity"],
+    "API Management": ["api management", "apim", "api gateway"],
+    "Azure Front Door": ["front door", "cdn", "load balancing"],
+    "Azure Service Bus": ["service bus", "message queue", "event-driven"],
+    "Azure Redis Cache": ["redis", "cache", "in-memory"],
+    "Azure DevOps": ["devops", "ci/cd", "pipeline"],
+    "Copilot Studio": ["copilot studio", "copilot", "bot framework"],
+    "Azure Container Apps": ["container app", "docker", "kubernetes", "k8s", "aks"],
+    "Power BI": ["power bi", "powerbi", "analytics dashboard"],
+    "SharePoint": ["sharepoint", "document library"],
+    "Microsoft Teams": ["teams", "teams bot", "teams app"],
+    "Azure Event Grid": ["event grid"],
+    "Azure Logic Apps": ["logic app", "workflow automation"],
+    "SignalR": ["signalr", "real-time", "websocket"],
+}
+
+_LANG_CATALOG = {
+    "Python": ["python", "flask", "django", "fastapi", "pytest"],
+    ".NET / C#": [".net", "c#", "csharp", "asp.net", "blazor"],
+    "Node.js": ["node.js", "nodejs", "express", "npm"],
+    "React": ["react", "reactjs", "jsx", "next.js"],
+    "Angular": ["angular"],
+    "Vue.js": ["vue", "vuejs", "nuxt"],
+    "Java / Spring": ["java", "spring", "springboot"],
+    "TypeScript": ["typescript"],
+}
+
+_INFRA_COST_CATALOG = {
+    "Azure App Service": ("Premium P1v3", 146, "Web app hosting with auto-scale"),
+    "Azure Functions": ("Consumption", 30, "Serverless compute, event-driven"),
+    "Azure SQL Database": ("Standard S3", 380, "Relational database with 100 DTUs"),
+    "Cosmos DB": ("Autoscale 4000 RU/s", 320, "NoSQL for high-throughput workloads"),
+    "Azure Blob Storage": ("Hot LRS", 8, "File and document storage"),
+    "Azure Key Vault": ("Standard", 1, "Secrets and certificate management"),
+    "Azure AI Search": ("Standard S1", 250, "Vector + keyword hybrid search"),
+    "Azure OpenAI": ("GPT-4o", 75, "LLM inference — fallback model"),
+    "Azure AI Foundry": ("Claude via Foundry", 350, "Primary AI model"),
+    "Azure Monitor": ("Pay-as-you-go", 21, "Logging, monitoring, alerting"),
+    "Azure AD / Entra ID": ("Premium P1", 6, "Identity and access management per user"),
+    "API Management": ("Standard", 550, "API gateway with rate limiting"),
+    "Azure Front Door": ("Standard", 280, "CDN and global load balancing"),
+    "Azure Service Bus": ("Standard", 95, "Message queuing and event-driven"),
+    "Azure Redis Cache": ("Standard C1", 160, "In-memory caching"),
+    "Azure DevOps": ("Basic", 30, "CI/CD pipelines"),
+    "Copilot Studio": ("Pay-as-you-go", 130, "Bot builder"),
+    "Azure Container Apps": ("Consumption", 50, "Container hosting"),
+    "Power BI": ("Pro", 10, "Analytics per user/month"),
+    "SharePoint": ("Included M365", 0, "Document storage — included in M365"),
+    "Microsoft Teams": ("Included M365", 0, "Collaboration — included in M365"),
+    "Azure Event Grid": ("Per-operation", 5, "Event routing"),
+    "Azure Logic Apps": ("Consumption", 15, "Workflow automation"),
+    "SignalR": ("Standard", 50, "Real-time messaging"),
+}
+
+
+def _analyze_text_dynamic(text):
+    """Analyze raw document text and extract requirements, tech stack, etc. without AI."""
+    text_lower = text.lower() if text else ""
+    words = text_lower.split()
+    word_count = len(words)
+
+    # ── Detect technologies ──
+    detected_tech = []
+    for tech_name, keywords in _TECH_CATALOG.items():
+        for kw in keywords:
+            if kw in text_lower:
+                detected_tech.append(tech_name)
+                break
+    detected_langs = []
+    for lang_name, keywords in _LANG_CATALOG.items():
+        for kw in keywords:
+            if kw in text_lower:
+                detected_langs.append(lang_name)
+                break
+
+    # Always include baseline infra if any Azure detected
+    baseline = ["Azure Key Vault", "Azure Monitor", "Azure Blob Storage"]
+    for b in baseline:
+        if b not in detected_tech and any("azure" in t.lower() for t in detected_tech):
+            detected_tech.append(b)
+
+    tech_stack = detected_tech + detected_langs
+
+    # ── Extract requirements from sentences ──
+    sentences = re.split(r'[.!?\n]+', text)
+    req_keywords_func = ["implement", "develop", "build", "create", "process", "generate", "deploy",
+                         "configure", "manage", "handle", "support", "enable", "provide", "upload",
+                         "download", "ingest", "extract", "parse", "index", "retrieve", "query",
+                         "orchestrat", "automat"]
+    req_keywords_nf = ["performance", "security", "scalab", "availab", "complian", "reliab",
+                       "latency", "throughput", "encrypt", "audit", "soc2", "gdpr", "sla",
+                       "backup", "disaster", "recovery", "uptime"]
+    req_keywords_int = ["integrat", "connect", "sync", "api", "sso", "webhook", "sharepoint",
+                        "teams", "graph api", "rest api", "copilot", "power bi"]
+    complex_indicators = ["multi-model", "orchestrat", "failover", "hybrid", "vector",
+                          "embedding", "rag", "pipeline", "authentication", "authorization"]
+
+    requirements = []
+    seen_titles = set()
+    for sent in sentences:
+        sent = sent.strip()
+        if len(sent) < 15 or len(sent) > 500:
+            continue
+        sent_lower = sent.lower()
+
+        req_type = None
+        if any(kw in sent_lower for kw in req_keywords_int):
+            req_type = "integration"
+        elif any(kw in sent_lower for kw in req_keywords_nf):
+            req_type = "non-functional"
+        elif any(kw in sent_lower for kw in req_keywords_func):
+            req_type = "functional"
+
+        if not req_type:
+            continue
+
+        # Title: first meaningful phrase
+        title = sent[:80].strip()
+        if title.startswith(("- ", "• ", "* ")):
+            title = title[2:]
+        title = title.split(",")[0].split(";")[0].strip()
+        if len(title) < 5:
+            continue
+        title_key = title[:40].lower()
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+
+        # Complexity
+        complex_count = sum(1 for kw in complex_indicators if kw in sent_lower)
+        complexity = "High" if complex_count >= 2 or len(sent) > 200 else "Medium" if complex_count >= 1 else "Low"
+        priority = "P1" if complexity == "High" or any(w in sent_lower for w in ["critical", "must", "essential", "required"]) else "P2"
+
+        requirements.append({
+            "title": title,
+            "description": sent.strip(),
+            "type": req_type,
+            "complexity": complexity,
+            "priority": priority,
+        })
+
+    # Ensure minimum requirements if text is substantial
+    if word_count > 100 and len(requirements) < 3:
+        for tech in detected_tech[:5]:
+            requirements.append({
+                "title": tech + " setup and configuration",
+                "description": "Setup and configure " + tech + " as identified in scope document.",
+                "type": "functional" if "Service" in tech or "Function" in tech else "integration",
+                "complexity": "Medium",
+                "priority": "P2",
+            })
+
+    # ── Project type ──
+    ai_count = sum(1 for t in detected_tech if any(k in t.lower() for k in ["ai", "openai", "foundry", "cognitive"]))
+    int_count = sum(1 for t in detected_tech if any(k in t.lower() for k in ["sharepoint", "teams", "service bus", "logic", "event"]))
+    if ai_count >= 2:
+        project_type = "Data/Cloud/AI"
+    elif int_count >= 3:
+        project_type = "Integration Platform"
+    elif any("sharepoint" in t.lower() for t in detected_tech):
+        project_type = "SharePoint Solution"
+    elif any(l in detected_langs for l in ["React", "Angular", "Vue.js"]):
+        project_type = "Web Application"
+    elif "migration" in text_lower or "migrate" in text_lower:
+        project_type = "Cloud Migration"
+    else:
+        project_type = "Enterprise Application"
+
+    # ── Complexity score ──
+    score = 3
+    score += min(3, len(detected_tech) * 0.4)
+    score += min(2, len(requirements) * 0.15)
+    if ai_count >= 1:
+        score += 1.5
+    score += min(1.5, int_count * 0.3)
+    score = min(10, max(1, int(round(score))))
+
+    # ── Business objectives ──
+    obj_keywords = ["goal", "objective", "achieve", "improve", "reduce", "increase",
+                    "enhance", "optimize", "streamline", "automate", "enable"]
+    objectives = []
+    for sent in sentences:
+        sent = sent.strip()
+        if any(kw in sent.lower() for kw in obj_keywords) and 20 < len(sent) < 300:
+            objectives.append(sent[:150].strip())
+            if len(objectives) >= 5:
+                break
+
+    return {
+        "requirements": requirements,
+        "technology_stack": tech_stack if tech_stack else ["Azure App Service", "Python"],
+        "business_objectives": objectives if objectives else ["Deliver project on time and within budget"],
+        "complexity_score": score,
+        "project_type": project_type,
+    }
+
+
+def _build_dynamic_time(semantic, text=""):
+    """Build detailed time estimate from actual requirements — Inflexion.xlsx format."""
+    reqs = safe_list(semantic.get("requirements"))
+    tech = safe_list(semantic.get("technology_stack"))
+    complexity = safe_int(semantic.get("complexity_score", 5))
+
+    n_func = len([r for r in reqs if isinstance(r, dict) and r.get("type") == "functional"])
+    n_nf = len([r for r in reqs if isinstance(r, dict) and r.get("type") == "non-functional"])
+    n_int = len([r for r in reqs if isinstance(r, dict) and r.get("type") == "integration"])
+    n_total = max(1, len(reqs))
+
+    # ── Per-requirement hours ──
+    func_hrs = sum({"High": 40, "Medium": 30, "Low": 20}.get(safe_str(r.get("complexity")), 30) for r in reqs if isinstance(r, dict) and r.get("type") == "functional")
+    nf_hrs = sum({"High": 25, "Medium": 20, "Low": 15}.get(safe_str(r.get("complexity")), 20) for r in reqs if isinstance(r, dict) and r.get("type") == "non-functional")
+    int_hrs = sum({"High": 45, "Medium": 35, "Low": 25}.get(safe_str(r.get("complexity")), 35) for r in reqs if isinstance(r, dict) and r.get("type") == "integration")
+    raw_dev = max(120, func_hrs + nf_hrs + int_hrs)
+
+    has_ai = any(k in " ".join(tech).lower() for k in ["ai", "openai", "foundry", "ml", "llm", "claude", "gpt"])
+    has_frontend = any(k in " ".join(tech).lower() for k in ["react", "angular", "vue", "frontend", "blazor"])
+    has_infra = any(k in " ".join(tech).lower() for k in ["devops", "container", "kubernetes", "function"])
+    has_data = any(k in " ".join(tech).lower() for k in ["sql", "cosmos", "redis", "data", "etl", "pipeline"])
+
+    # ── Build phases dynamically ──
+    phases = []
+    week_counter = 1
+
+    # Phase 1: Discovery & Design
+    disc_tasks = [
+        {"name": "Project kickoff and requirements review", "role": "BA / PM", "hours": max(8, n_total), "justification": "Stakeholder alignment — " + str(n_total) + " requirements to review"},
+        {"name": "Document and scope analysis", "role": "BA", "hours": max(6, n_total // 2 + 4), "justification": "Analyze uploaded scope documents for " + str(n_func) + " functional requirements"},
+        {"name": "Architecture design and sign-off", "role": "Architect", "hours": max(6, len(tech) + 2), "justification": str(len(tech)) + " technologies identified — architecture blueprint needed"},
+        {"name": "Security and compliance review", "role": "Security", "hours": max(4, n_nf * 2), "justification": str(n_nf) + " non-functional requirements including security"},
+    ]
+    disc_total = sum(t["hours"] for t in disc_tasks)
+    for t in disc_tasks:
+        t["low_hours"] = int(t["hours"] * 0.8)
+        t["high_hours"] = int(t["hours"] * 1.35)
+    disc_weeks = max(1, disc_total // 40)
+    phases.append({"name": "Discovery & Design", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + disc_weeks - 1) if disc_weeks > 1 else ""),
+                   "hours": disc_total, "low_hours": int(disc_total * 0.8), "high_hours": int(disc_total * 1.35),
+                   "percentage": "", "tasks": disc_tasks})
+    week_counter += disc_weeks
+
+    # Phase 2: Infrastructure Setup (if infra/cloud detected)
+    if has_infra or len(tech) > 3:
+        infra_tasks = []
+        for t_name in tech:
+            if any(k in t_name.lower() for k in ["azure", "key vault", "monitor", "devops", "ad", "entra"]):
+                hrs = 3 if "vault" in t_name.lower() or "monitor" in t_name.lower() else 5
+                infra_tasks.append({"name": t_name + " provisioning", "role": "DevOps", "hours": hrs,
+                                    "low_hours": int(hrs * 0.8), "high_hours": int(hrs * 1.35),
+                                    "justification": "Setup " + t_name + " per architecture design"})
+        if not infra_tasks:
+            infra_tasks.append({"name": "Cloud environment setup", "role": "DevOps", "hours": 16,
+                                "low_hours": 13, "high_hours": 22, "justification": "Base infrastructure provisioning"})
+        infra_total = sum(t["hours"] for t in infra_tasks)
+        infra_weeks = max(1, infra_total // 40)
+        phases.append({"name": "Infrastructure Setup", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + infra_weeks - 1) if infra_weeks > 1 else ""),
+                       "hours": infra_total, "low_hours": int(infra_total * 0.8), "high_hours": int(infra_total * 1.35),
+                       "percentage": "", "tasks": infra_tasks})
+        week_counter += infra_weeks
+
+    # Phase 3: Core Development
+    dev_tasks = []
+    for r in reqs:
+        r = safe_dict(r)
+        if r.get("type") == "functional":
+            hrs = {"High": 40, "Medium": 30, "Low": 20}.get(safe_str(r.get("complexity")), 30)
+            dev_tasks.append({"name": "Implement: " + safe_str(r.get("title"))[:50], "role": "Senior Dev",
+                              "hours": hrs, "low_hours": int(hrs * 0.8), "high_hours": int(hrs * 1.35),
+                              "justification": safe_str(r.get("description"))[:80]})
+    if has_ai:
+        ai_hrs = max(30, n_func * 5)
+        dev_tasks.append({"name": "AI/ML pipeline and model integration", "role": "ML Engineer",
+                          "hours": ai_hrs, "low_hours": int(ai_hrs * 0.8), "high_hours": int(ai_hrs * 1.35),
+                          "justification": "Multi-model orchestration, RAG pipeline, prompt engineering"})
+    if has_frontend:
+        fe_hrs = max(20, n_func * 4)
+        dev_tasks.append({"name": "Frontend UI development", "role": "Frontend Dev",
+                          "hours": fe_hrs, "low_hours": int(fe_hrs * 0.8), "high_hours": int(fe_hrs * 1.35),
+                          "justification": "User interface for " + str(n_func) + " functional features"})
+    if has_data:
+        db_hrs = max(15, n_func * 3)
+        dev_tasks.append({"name": "Data layer and database implementation", "role": "Data Engineer",
+                          "hours": db_hrs, "low_hours": int(db_hrs * 0.8), "high_hours": int(db_hrs * 1.35),
+                          "justification": "Schema design, indexing, data pipeline setup"})
+    if not dev_tasks:
+        dev_tasks.append({"name": "Core application development", "role": "Senior Dev",
+                          "hours": raw_dev, "low_hours": int(raw_dev * 0.8), "high_hours": int(raw_dev * 1.35),
+                          "justification": "Primary development based on " + str(n_total) + " requirements"})
+    dev_total = sum(t["hours"] for t in dev_tasks)
+    dev_weeks = max(2, dev_total // 40)
+    phases.append({"name": "Core Development", "week_label": "Week " + str(week_counter) + "-" + str(week_counter + dev_weeks - 1),
+                   "hours": dev_total, "low_hours": int(dev_total * 0.8), "high_hours": int(dev_total * 1.35),
+                   "percentage": "", "tasks": dev_tasks})
+    week_counter += dev_weeks
+
+    # Phase 4: Integration (if integration reqs exist)
+    if n_int > 0:
+        int_tasks = []
+        for r in reqs:
+            r = safe_dict(r)
+            if r.get("type") == "integration":
+                hrs = {"High": 45, "Medium": 35, "Low": 25}.get(safe_str(r.get("complexity")), 35)
+                int_tasks.append({"name": "Integrate: " + safe_str(r.get("title"))[:50], "role": "Developer",
+                                  "hours": hrs, "low_hours": int(hrs * 0.8), "high_hours": int(hrs * 1.35),
+                                  "justification": safe_str(r.get("description"))[:80]})
+        int_total = sum(t["hours"] for t in int_tasks)
+        int_weeks = max(1, int_total // 40)
+        phases.append({"name": "Integration", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + int_weeks - 1) if int_weeks > 1 else ""),
+                       "hours": int_total, "low_hours": int(int_total * 0.8), "high_hours": int(int_total * 1.35),
+                       "percentage": "", "tasks": int_tasks})
+        week_counter += int_weeks
+
+    # Phase 5: Testing & QA
+    test_base = max(40, dev_total // 3)
+    test_tasks = [
+        {"name": "Unit testing (all components)", "role": "QA", "hours": int(test_base * 0.25),
+         "low_hours": int(test_base * 0.2), "high_hours": int(test_base * 0.34),
+         "justification": "Function-level tests for " + str(n_func) + " features"},
+        {"name": "Integration testing (end-to-end)", "role": "QA", "hours": int(test_base * 0.30),
+         "low_hours": int(test_base * 0.24), "high_hours": int(test_base * 0.41),
+         "justification": "Full workflow testing across " + str(len(tech)) + " components"},
+        {"name": "Performance and load testing", "role": "QA", "hours": int(test_base * 0.15),
+         "low_hours": int(test_base * 0.12), "high_hours": int(test_base * 0.20),
+         "justification": "Response time and concurrency validation"},
+        {"name": "Security testing", "role": "Security", "hours": int(test_base * 0.10),
+         "low_hours": int(test_base * 0.08), "high_hours": int(test_base * 0.14),
+         "justification": "Authentication, authorization, vulnerability scan"},
+        {"name": "UAT coordination", "role": "BA", "hours": int(test_base * 0.20),
+         "low_hours": int(test_base * 0.16), "high_hours": int(test_base * 0.27),
+         "justification": "User acceptance testing with stakeholders"},
+    ]
+    test_total = sum(t["hours"] for t in test_tasks)
+    test_weeks = max(1, test_total // 40)
+    phases.append({"name": "Testing & QA", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + test_weeks - 1) if test_weeks > 1 else ""),
+                   "hours": test_total, "low_hours": int(test_total * 0.8), "high_hours": int(test_total * 1.35),
+                   "percentage": "", "tasks": test_tasks})
+    week_counter += test_weeks
+
+    # Phase 6: Deployment
+    deploy_base = max(20, dev_total // 6)
+    deploy_tasks = [
+        {"name": "UAT environment deployment", "role": "DevOps", "hours": int(deploy_base * 0.20),
+         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
+         "justification": "Staging environment provisioning"},
+        {"name": "Production deployment", "role": "DevOps", "hours": int(deploy_base * 0.25),
+         "low_hours": int(deploy_base * 0.20), "high_hours": int(deploy_base * 0.34),
+         "justification": "Go-live cutover and configuration"},
+        {"name": "Monitoring and alerting setup", "role": "DevOps", "hours": int(deploy_base * 0.20),
+         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
+         "justification": "Production observability, dashboards, alerts"},
+        {"name": "Smoke testing and sign-off", "role": "QA / PM", "hours": int(deploy_base * 0.15),
+         "low_hours": int(deploy_base * 0.12), "high_hours": int(deploy_base * 0.20),
+         "justification": "Final validation and stakeholder acceptance"},
+        {"name": "Feedback incorporation and bug fixes", "role": "Dev", "hours": int(deploy_base * 0.20),
+         "low_hours": int(deploy_base * 0.16), "high_hours": int(deploy_base * 0.27),
+         "justification": "Address UAT findings before production"},
+    ]
+    deploy_total = sum(t["hours"] for t in deploy_tasks)
+    deploy_weeks = max(1, deploy_total // 40)
+    phases.append({"name": "Deployment & Go-Live", "week_label": "Week " + str(week_counter) + ("-" + str(week_counter + deploy_weeks - 1) if deploy_weeks > 1 else ""),
+                   "hours": deploy_total, "low_hours": int(deploy_total * 0.8), "high_hours": int(deploy_total * 1.35),
+                   "percentage": "", "tasks": deploy_tasks})
+    week_counter += deploy_weeks
+
+    # Phase 7: Documentation & Training
+    doc_base = max(16, dev_total // 8)
+    doc_tasks = [
+        {"name": "Architecture documentation with diagrams", "role": "Architect", "hours": int(doc_base * 0.40),
+         "low_hours": int(doc_base * 0.32), "high_hours": int(doc_base * 0.54),
+         "justification": "Technical design documentation for " + str(len(tech)) + " components"},
+        {"name": "User guide creation", "role": "Writer", "hours": int(doc_base * 0.35),
+         "low_hours": int(doc_base * 0.28), "high_hours": int(doc_base * 0.47),
+         "justification": "End-user how-to guide with screenshots"},
+        {"name": "Training session", "role": "BA", "hours": int(doc_base * 0.25),
+         "low_hours": int(doc_base * 0.20), "high_hours": int(doc_base * 0.34),
+         "justification": "Knowledge transfer to client team"},
+    ]
+    doc_total = sum(t["hours"] for t in doc_tasks)
+    doc_weeks = max(1, doc_total // 40)
+    phases.append({"name": "Documentation & Training", "week_label": "Week " + str(week_counter),
+                   "hours": doc_total, "low_hours": int(doc_total * 0.8), "high_hours": int(doc_total * 1.35),
+                   "percentage": "", "tasks": doc_tasks})
+    week_counter += doc_weeks
+
+    # ── Calculate totals and percentages ──
+    total_dev = sum(p["hours"] for p in phases)
+    pm_hours = int(total_dev * 0.10)
+    phases.append({"name": "Project Management", "week_label": "Ongoing",
+                   "hours": pm_hours, "low_hours": int(pm_hours * 0.8), "high_hours": int(pm_hours * 1.35),
+                   "percentage": "10%", "tasks": [
+                       {"name": "Meetings, reporting, risk management", "role": "PM",
+                        "hours": pm_hours, "low_hours": int(pm_hours * 0.8), "high_hours": int(pm_hours * 1.35),
+                        "justification": "10% of dev effort — throughout project"}
+                   ]})
+
+    total = total_dev + pm_hours
+    for p in phases:
+        if not p.get("percentage"):
+            p["percentage"] = str(round(p["hours"] / max(total, 1) * 100)) + "%"
+
+    total_weeks = week_counter - 1
+    buffer_pct = 18 if complexity >= 7 else 15 if complexity >= 5 else 12
+    conf = "Medium (" + str(max(60, 90 - complexity * 3)) + "%)"
+
+    # ── Roles ──
+    has_ml = has_ai
+    roles = [
+        {"name": "Project Manager", "allocation_pct": 0.10 + (0.05 * (n_total > 10)), "rate": 125},
+        {"name": "Solution Architect", "allocation_pct": 0.15 + (0.05 * (len(tech) > 8)), "rate": 150},
+        {"name": "Backend Developer", "allocation_pct": min(1.0, 0.5 + n_func * 0.05), "rate": 110},
+    ]
+    if has_frontend:
+        roles.append({"name": "Frontend Developer", "allocation_pct": min(1.0, 0.3 + n_func * 0.04), "rate": 100})
+    if has_ml:
+        ai_kw_count = sum(1 for t in tech if any(k in t.lower() for k in ["ai", "openai", "ml", "llm", "gpt", "claude", "foundry"]))
+        roles.append({"name": "ML Engineer", "allocation_pct": min(1.0, 0.5 + ai_kw_count * 0.1), "rate": 140})
+    roles.append({"name": "DevOps Engineer", "allocation_pct": 0.25 if has_infra else 0.15, "rate": 120})
+    roles.append({"name": "QA Engineer", "allocation_pct": min(0.6, 0.3 + n_total * 0.02), "rate": 95})
+    roles.append({"name": "Product Owner", "allocation_pct": 0.10, "rate": 130})
+
+    # ── Milestones ──
+    milestones = [
+        {"name": "Kickoff", "week": 1, "description": "Team onboarding and project initiation"},
+        {"name": "Requirements Baselined", "week": max(2, total_weeks // 8), "description": "Scope sign-off"},
+        {"name": "Design Approved", "week": max(3, total_weeks // 5), "description": "Architecture review complete"},
+        {"name": "MVP Ready", "week": max(6, total_weeks // 2), "description": "Core features functional"},
+        {"name": "UAT Start", "week": max(8, int(total_weeks * 0.75)), "description": "User acceptance testing begins"},
+        {"name": "Go-Live", "week": total_weeks, "description": "Production deployment"},
+    ]
+
+    return {
+        "total_hours": total,
+        "duration_weeks": str(total_weeks) + " weeks",
+        "confidence": conf,
+        "buffer": str(buffer_pct) + "%",
+        "phases": phases,
+        "milestones": milestones,
+        "three_point": {"optimistic": int(total * 0.8), "most_likely": total, "pessimistic": int(total * 1.35)},
+        "roles": roles,
+    }
+
+
+def _build_dynamic_cost(semantic, time_est):
+    """Build infrastructure cost estimate from detected tech stack — no hardcoded services."""
+    tech = safe_list(semantic.get("technology_stack"))
+    azure_costs = []
+    seen = set()
+    for tech_name in tech:
+        for catalog_name, (tier, monthly, desc) in _INFRA_COST_CATALOG.items():
+            if catalog_name in seen:
+                continue
+            if any(kw in tech_name.lower() for kw in catalog_name.lower().split()):
+                azure_costs.append({"service": catalog_name, "tier": tier, "monthly_cost": monthly, "description": desc})
+                seen.add(catalog_name)
+                break
+
+    # Add baseline infra always
+    for base_svc in ["Azure Key Vault", "Azure Monitor", "Azure Blob Storage"]:
+        if base_svc not in seen:
+            tier, monthly, desc = _INFRA_COST_CATALOG[base_svc]
+            azure_costs.append({"service": base_svc, "tier": tier, "monthly_cost": monthly, "description": desc})
+            seen.add(base_svc)
+
+    # Filter zero-cost items for display but keep them
+    third_party = []
+    active_costs = [c for c in azure_costs if c["monthly_cost"] > 0]
+    total_monthly = sum(c["monthly_cost"] for c in active_costs)
+
+    # Generate dynamic optimization tips
+    optimization = []
+    if any("app service" in c["service"].lower() for c in azure_costs):
+        optimization.append("Use Reserved Instances for 36% savings on App Service")
+    if any("sql" in c["service"].lower() for c in azure_costs):
+        optimization.append("Use elastic pools for SQL if multiple databases")
+    if any("cosmos" in c["service"].lower() for c in azure_costs):
+        optimization.append("Monitor Cosmos DB RU consumption and right-size autoscale")
+    if any("openai" in c["service"].lower() or "foundry" in c["service"].lower() for c in azure_costs):
+        optimization.append("Implement token caching and prompt optimization to reduce AI costs")
+    optimization.append("Enable auto-shutdown for non-production environments")
+    optimization.append("Use Azure Cost Management alerts at 80% and 100% budget thresholds")
+
+    return {
+        "total_monthly_cost": total_monthly,
+        "total_annual_cost": total_monthly * 12,
+        "azure_costs": active_costs,
+        "third_party_costs": third_party,
+        "cost_optimization": optimization,
+        "notes": "Estimates based on detected tech stack (" + str(len(active_costs)) + " services). Dev/staging adds ~40% of prod costs.",
+    }
+
+
+def _build_dynamic_risk(semantic, time_est, cost_est):
+    """Build risk assessment from project analysis — no hardcoded risks."""
+    complexity = safe_int(semantic.get("complexity_score", 5))
+    reqs = safe_list(semantic.get("requirements"))
+    tech = safe_list(semantic.get("technology_stack"))
+    hours = safe_int(time_est.get("total_hours", 0))
+    monthly = safe_int(cost_est.get("total_monthly_cost", 0))
+
+    n_int = len([r for r in reqs if isinstance(r, dict) and r.get("type") == "integration"])
+    has_ai = any(k in " ".join(tech).lower() for k in ["ai", "openai", "foundry", "llm", "claude"])
+
+    risks = []
+
+    # Technical
+    if n_int >= 2:
+        risks.append({"category": "Technical", "title": "Integration Complexity (" + str(n_int) + " integrations)",
+                       "description": str(n_int) + " integration points identified — API compatibility and data mapping risks.",
+                       "severity": "High" if n_int >= 4 else "Medium", "probability": "Medium", "impact": "High",
+                       "mitigation": "Early PoC for each integration. Validate APIs in Week 1."})
+    if has_ai:
+        risks.append({"category": "Technical", "title": "AI Model Performance",
+                       "description": "LLM response quality, hallucination risk, and prompt engineering complexity.",
+                       "severity": "High", "probability": "Medium", "impact": "High",
+                       "mitigation": "Extensive prompt tuning, fallback model routing, response validation."})
+    if len(tech) > 8:
+        risks.append({"category": "Technical", "title": "Technology Stack Complexity",
+                       "description": str(len(tech)) + " technologies — increased learning curve and integration overhead.",
+                       "severity": "Medium", "probability": "Medium", "impact": "Medium",
+                       "mitigation": "Assign specialists per technology. Conduct architecture reviews."})
+
+    # Schedule
+    if hours > 500:
+        risks.append({"category": "Schedule", "title": "Extended Timeline (" + str(hours) + " hours)",
+                       "description": "Large project scope increases risk of delays and scope creep.",
+                       "severity": "High", "probability": "High", "impact": "High",
+                       "mitigation": "Strict change request process. Agile sprints with bi-weekly reviews."})
+    else:
+        risks.append({"category": "Schedule", "title": "Scope Creep",
+                       "description": "Requirements may evolve during development.",
+                       "severity": "Medium", "probability": "High", "impact": "Medium",
+                       "mitigation": "Formal change request process and sprint backlog management."})
+
+    # Resource
+    risks.append({"category": "Resource", "title": "Key Personnel Availability",
+                   "description": "Specialists may have limited availability across concurrent projects.",
+                   "severity": "Medium", "probability": "Medium", "impact": "High",
+                   "mitigation": "Secure resource commitments early. Cross-train team members."})
+
+    # Budget
+    if monthly > 500:
+        risks.append({"category": "Budget", "title": "Cloud Cost Overrun ($" + str(monthly) + "/mo)",
+                       "description": "Infrastructure costs of $" + str(monthly) + "/month may exceed estimates with usage growth.",
+                       "severity": "Medium" if monthly < 2000 else "High", "probability": "Medium", "impact": "Medium",
+                       "mitigation": "Azure Cost Management alerts. Monthly cost reviews. Reserved instances."})
+
+    # Data
+    if any(k in " ".join(tech).lower() for k in ["sharepoint", "blob", "sql", "cosmos", "data"]):
+        risks.append({"category": "Data", "title": "Data Quality & Migration",
+                       "description": "Document quality, format inconsistencies, or data integrity issues during processing.",
+                       "severity": "Medium", "probability": "Medium", "impact": "Medium",
+                       "mitigation": "Early data profiling. Validate sample documents. Implement error handling."})
+
+    score = min(10, max(1, int(complexity * 0.7 + len(risks) * 0.3)))
+    level = "Low" if score <= 3 else "Medium" if score <= 6 else "High"
+    return {"overall_score": score, "overall_level": level, "risks": risks}
+
+
+def _build_dynamic_arch(semantic):
+    """Build architecture from detected tech stack — no hardcoded components."""
+    tech = safe_list(semantic.get("technology_stack"))
+    tech_lower = " ".join(tech).lower()
+
+    components = []
+    data_flow = ["Client"]
+    security = []
+
+    # Presentation
+    if any(k in tech_lower for k in ["react", "angular", "vue", "blazor", "frontend"]):
+        components.append({"name": "Frontend", "type": "Web App", "azure_service": "App Service",
+                           "services": [t for t in tech if any(k in t.lower() for k in ["react", "angular", "vue", "blazor"])] or ["Web App"]})
+        data_flow.append("Frontend")
+    if any(k in tech_lower for k in ["front door", "cdn"]):
+        data_flow.insert(1, "Front Door / CDN")
+    if any(k in tech_lower for k in ["teams", "copilot studio"]):
+        components.append({"name": "Teams Bot", "type": "Web App", "azure_service": "Copilot Studio / Bot Service",
+                           "services": [t for t in tech if any(k in t.lower() for k in ["teams", "copilot"])]})
+        if "Client" in data_flow:
+            data_flow.insert(1, "Teams Bot")
+
+    # API Gateway
+    if any(k in tech_lower for k in ["api management", "api gateway", "apim"]):
+        components.append({"name": "API Gateway", "type": "Integration", "azure_service": "API Management",
+                           "services": ["REST APIs", "Rate limiting", "Authentication"]})
+        data_flow.append("API Gateway")
+
+    # Application
+    if any(k in tech_lower for k in ["app service", "fastapi", "flask", ".net", "python", "node"]):
+        app_services = [t for t in tech if any(k in t.lower() for k in ["python", ".net", "node", "fastapi", "flask"])]
+        components.append({"name": "Backend Services", "type": "Microservices", "azure_service": "App Service / Functions",
+                           "services": app_services or ["Application Logic"]})
+        data_flow.append("Backend")
+
+    # AI
+    if any(k in tech_lower for k in ["ai", "openai", "foundry", "claude", "gpt", "llm"]):
+        ai_services = [t for t in tech if any(k in t.lower() for k in ["ai", "openai", "foundry", "claude", "gpt"])]
+        components.append({"name": "AI / ML Engine", "type": "Compute", "azure_service": "AI Foundry / OpenAI",
+                           "services": ai_services or ["LLM Inference"]})
+        data_flow.append("AI Engine")
+
+    # Search
+    if any(k in tech_lower for k in ["ai search", "vector search", "cognitive search"]):
+        components.append({"name": "Search Index", "type": "Data", "azure_service": "Azure AI Search",
+                           "services": ["Vector search", "Hybrid search", "Semantic ranking"]})
+
+    # Data
+    data_svcs = []
+    if any(k in tech_lower for k in ["sql", "database"]):
+        data_svcs.append("Azure SQL")
+    if any(k in tech_lower for k in ["cosmos"]):
+        data_svcs.append("Cosmos DB")
+    if any(k in tech_lower for k in ["redis", "cache"]):
+        data_svcs.append("Redis Cache")
+    if any(k in tech_lower for k in ["blob", "storage"]):
+        data_svcs.append("Blob Storage")
+    if data_svcs:
+        components.append({"name": "Data Layer", "type": "Database", "azure_service": " + ".join(data_svcs[:2]),
+                           "services": data_svcs})
+        data_flow.append("Database")
+
+    # Integration
+    int_svcs = []
+    if any(k in tech_lower for k in ["service bus"]):
+        int_svcs.append("Service Bus")
+    if any(k in tech_lower for k in ["sharepoint"]):
+        int_svcs.append("SharePoint Connector")
+    if any(k in tech_lower for k in ["logic app"]):
+        int_svcs.append("Logic Apps")
+    if any(k in tech_lower for k in ["event grid"]):
+        int_svcs.append("Event Grid")
+    if int_svcs:
+        components.append({"name": "Integration", "type": "Messaging", "azure_service": int_svcs[0],
+                           "services": int_svcs})
+
+    # Security
+    if any(k in tech_lower for k in ["ad", "entra", "sso", "mfa", "identity"]):
+        security.extend(["Azure AD / Entra ID", "SSO + MFA"])
+        components.append({"name": "Security", "type": "Identity", "azure_service": "Azure AD + Key Vault",
+                           "services": ["Entra ID", "Key Vault", "Managed Identity"]})
+    if any(k in tech_lower for k in ["key vault"]):
+        security.append("Key Vault — secrets management")
+    security.extend(["TLS 1.3 encryption", "RBAC access control"])
+
+    # DevOps
+    if any(k in tech_lower for k in ["devops", "ci/cd", "pipeline", "docker", "kubernetes"]):
+        devops_svcs = [t for t in tech if any(k in t.lower() for k in ["devops", "docker", "kubernetes"])]
+        components.append({"name": "DevOps", "type": "Operations", "azure_service": "Azure DevOps",
+                           "services": devops_svcs or ["CI/CD Pipelines", "Monitoring"]})
+
+    if not components:
+        components.append({"name": "Application", "type": "Microservices", "azure_service": "App Service",
+                           "services": tech[:4] or ["Web Application"]})
+        data_flow = ["Client", "App Service", "Database"]
+
+    pattern = "AI-Powered RAG Architecture" if any(k in tech_lower for k in ["rag", "vector", "embedding"]) \
+        else "Microservices with Event-Driven Integration" if any(k in tech_lower for k in ["service bus", "event"]) \
+        else "Cloud-Native Application Architecture"
+
+    return {"pattern": pattern, "components": components, "data_flow": data_flow, "security": security,
+            "scalability": "Auto-scaling based on demand", "availability": "99.9% SLA target"}
+
+
+def _build_dynamic_scope(semantic, time_est):
+    """Build scope from actual requirements — no hardcoded items."""
+    reqs = safe_list(semantic.get("requirements"))
+    tech = safe_list(semantic.get("technology_stack"))
+    tech_lower = " ".join(tech).lower()
+
+    in_scope = []
+    for r in reqs[:10]:
+        r = safe_dict(r)
+        in_scope.append(safe_str(r.get("title", "Requirement")))
+    in_scope.extend(["Architecture design and documentation", "Testing (unit, integration, performance, UAT)",
+                     "Deployment to production", "30-day hypercare support"])
+
+    # Out of scope: common items NOT in detected tech
+    out_of_scope = []
+    if "react" not in tech_lower and "angular" not in tech_lower and "vue" not in tech_lower:
+        out_of_scope.append("Custom frontend/mobile application development")
+    if "ci/cd" not in tech_lower and "devops" not in tech_lower:
+        out_of_scope.append("CI/CD pipeline automation (manual deployments for MVP)")
+    out_of_scope.extend([
+        "Legacy system decommissioning",
+        "End-user training beyond knowledge transfer sessions",
+        "Hardware procurement",
+        "License procurement (client responsibility)",
+        "Penetration testing (recommended as separate engagement)",
+        "Multi-language support (English only for MVP)",
+        "Ongoing managed support beyond hypercare period",
+    ])
+
+    assumptions = []
+    if any("azure" in t.lower() for t in tech):
+        assumptions.append("Client provides Azure subscription with Contributor/Owner access")
+    if any("sharepoint" in t.lower() for t in tech):
+        assumptions.append("SharePoint Online with Read/Write access to document library")
+    if any("teams" in t.lower() for t in tech):
+        assumptions.append("Microsoft Teams admin consent for bot deployment")
+    assumptions.extend([
+        "Dedicated product owner available for requirements sign-off and UAT",
+        "SME availability minimum 10 hours/week during development",
+        "Standard business hours (9 AM – 6 PM) for team availability",
+        "All documents in standard formats without password protection or DRM",
+    ])
+
+    prerequisites = []
+    if any("azure" in t.lower() for t in tech):
+        prerequisites.append("Active Azure subscription with appropriate access levels")
+    if any("ad" in t.lower() or "entra" in t.lower() for t in tech):
+        prerequisites.append("Azure AD tenant with user accounts for MVP users")
+    if any("sharepoint" in t.lower() for t in tech):
+        prerequisites.append("SharePoint site with document library access")
+    prerequisites.extend(["Signed Statement of Work (SOW)", "Sample documents for testing and validation"])
+
+    return {"in_scope": in_scope, "out_of_scope": out_of_scope, "assumptions": assumptions, "prerequisites": prerequisites}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  DOCUMENT PROCESSOR
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -467,12 +1509,18 @@ class AzureAI:
                     clean_tasks.append({
                         "name": safe_str(t.get("name", "")),
                         "hours": safe_int(t.get("hours", 0)),
+                        "low_hours": safe_int(t.get("low_hours", int(safe_int(t.get("hours", 0)) * 0.8))),
+                        "high_hours": safe_int(t.get("high_hours", int(safe_int(t.get("hours", 0)) * 1.35))),
                         "role": safe_str(t.get("role", "")),
+                        "justification": safe_str(t.get("justification", "")),
                     })
             clean_ph.append({
                 "name": safe_str(p.get("name", "Phase")),
                 "hours": safe_int(p.get("hours", 0)),
+                "low_hours": safe_int(p.get("low_hours", int(safe_int(p.get("hours", 0)) * 0.8))),
+                "high_hours": safe_int(p.get("high_hours", int(safe_int(p.get("hours", 0)) * 1.35))),
                 "percentage": safe_str(p.get("percentage", "0%")),
+                "week_label": safe_str(p.get("week_label", "")),
                 "tasks": clean_tasks,
             })
         data["phases"] = clean_ph
@@ -481,120 +1529,44 @@ class AzureAI:
         data["confidence"] = safe_str(data.get("confidence", "N/A"))
         data["buffer"] = safe_str(data.get("buffer", "N/A"))
         data["three_point"] = safe_dict(data.get("three_point"))
+        # Roles
+        clean_roles = []
+        for rl in safe_list(data.get("roles")):
+            if isinstance(rl, dict):
+                clean_roles.append({
+                    "name": safe_str(rl.get("name", "")),
+                    "allocation_pct": float(rl.get("allocation_pct", 0)),
+                    "rate": safe_int(rl.get("rate", 100)),
+                })
+        data["roles"] = clean_roles
         return data
 
-    # ═══ FALLBACKS (only when Azure not configured) ═══
+    # ═══ DYNAMIC FALLBACKS (analyze actual document text) ═══
 
     def _fb_semantic(self, text):
-        reqs = []
-        for t, d, tp, c in [
-            ("User Auth & SSO", "Azure AD SSO with MFA", "functional", "High"),
-            ("Dashboard & Reports", "Real-time Power BI dashboards", "functional", "High"),
-            ("Data Pipeline", "Automated ETL from multiple sources", "functional", "High"),
-            ("API Gateway", "RESTful API with rate limiting", "functional", "Medium"),
-            ("Notifications", "Email, Teams, push alerts", "functional", "Medium"),
-            ("Search", "Full-text search with filtering", "functional", "Medium"),
-            ("Performance SLA", "<200ms, 10K concurrent users", "non-functional", "High"),
-            ("Security", "SOC2 Type II, encryption", "non-functional", "High"),
-            ("Scalability", "Auto-scale 5x peak", "non-functional", "High"),
-            ("Azure AD", "SSO and RBAC integration", "integration", "Medium"),
-            ("SharePoint", "Document library integration", "integration", "Medium"),
-            ("Power BI", "Embedded analytics", "integration", "Medium"),
-            ("Teams", "Notification bot", "integration", "Medium"),
-        ]:
-            reqs.append({"title": t, "description": d, "type": tp, "complexity": c, "priority": "P1" if c == "High" else "P2"})
-        return {
-            "requirements": reqs,
-            "technology_stack": ["Azure App Service", "Azure SQL", "Cosmos DB", "Functions", "API Management", "Azure AD", "Power BI", "DevOps", "React", "Python", ".NET"],
-            "business_objectives": ["Reduce manual effort 60%", "Real-time analytics", "Secure collaboration"],
-            "complexity_score": 7,
-            "project_type": "Data/Cloud/AI",
-        }
+        return _analyze_text_dynamic(text)
 
     def _fb_time(self, semantic, rag):
-        reqs = safe_list(semantic.get("requirements"))
-        n = len(reqs)
-        base = max(800, n * 100)
-        total = int(base * 1.18)
-        weeks = max(8, total // 160)
-        phases = [
-            {"name": "Discovery", "hours": int(total * .10), "percentage": "10%", "tasks": [{"name": "Workshops", "hours": int(total * .04), "role": "BA"}, {"name": "Requirements", "hours": int(total * .03), "role": "BA"}, {"name": "Planning", "hours": int(total * .03), "role": "PM"}]},
-            {"name": "Design", "hours": int(total * .15), "percentage": "15%", "tasks": [{"name": "Architecture", "hours": int(total * .06), "role": "Architect"}, {"name": "UX Design", "hours": int(total * .05), "role": "UX"}, {"name": "Data Model", "hours": int(total * .04), "role": "Data Architect"}]},
-            {"name": "Development", "hours": int(total * .40), "percentage": "40%", "tasks": [{"name": "Backend", "hours": int(total * .18), "role": "Senior Dev"}, {"name": "Frontend", "hours": int(total * .12), "role": "Frontend Dev"}, {"name": "APIs", "hours": int(total * .10), "role": "Developer"}]},
-            {"name": "Testing", "hours": int(total * .15), "percentage": "15%", "tasks": [{"name": "Unit/Integration", "hours": int(total * .06), "role": "QA"}, {"name": "Performance", "hours": int(total * .04), "role": "QA"}, {"name": "UAT", "hours": int(total * .03), "role": "BA"}, {"name": "Security", "hours": int(total * .02), "role": "Security"}]},
-            {"name": "Deployment", "hours": int(total * .10), "percentage": "10%", "tasks": [{"name": "CI/CD", "hours": int(total * .03), "role": "DevOps"}, {"name": "Migration", "hours": int(total * .04), "role": "Data Eng"}, {"name": "Go-live", "hours": int(total * .03), "role": "Team"}]},
-            {"name": "Support", "hours": int(total * .10), "percentage": "10%", "tasks": [{"name": "Hypercare", "hours": int(total * .05), "role": "Support"}, {"name": "KT", "hours": int(total * .03), "role": "Lead Dev"}, {"name": "Docs", "hours": int(total * .02), "role": "Writer"}]},
-        ]
-        milestones = [
-            {"name": "Kickoff", "week": 1, "description": "Team onboarding"},
-            {"name": "Requirements Baselined", "week": max(2, weeks // 8), "description": "Sign-off"},
-            {"name": "Design Approved", "week": max(4, weeks // 4), "description": "Architecture review"},
-            {"name": "MVP", "week": max(8, weeks // 2), "description": "Core features ready"},
-            {"name": "UAT Start", "week": max(10, int(weeks * .75)), "description": "User testing"},
-            {"name": "Go-Live", "week": weeks, "description": "Production deployment"},
-        ]
-        return {"total_hours": total, "duration_weeks": str(weeks) + " weeks", "confidence": "Medium (72%)", "buffer": "18%", "phases": phases, "milestones": milestones, "three_point": {"optimistic": int(total * .8), "most_likely": total, "pessimistic": int(total * 1.35)}}
+        return _build_dynamic_time(semantic)
 
     def _fb_cost(self, time_est):
-        azure_costs = [
-            {"service": "Azure App Service", "tier": "Premium P1v3", "monthly_cost": 450, "description": "Web app hosting with auto-scale"},
-            {"service": "Azure SQL Database", "tier": "Standard S3", "monthly_cost": 380, "description": "Relational database with 100 DTUs"},
-            {"service": "Cosmos DB", "tier": "Autoscale 4000 RU/s", "monthly_cost": 320, "description": "NoSQL for high-throughput workloads"},
-            {"service": "Azure Functions", "tier": "Premium EP1", "monthly_cost": 180, "description": "Serverless compute for background jobs"},
-            {"service": "API Management", "tier": "Standard", "monthly_cost": 550, "description": "API gateway with rate limiting"},
-            {"service": "Azure Front Door", "tier": "Standard", "monthly_cost": 280, "description": "CDN and global load balancing"},
-            {"service": "Azure Service Bus", "tier": "Standard", "monthly_cost": 95, "description": "Message queuing and event-driven"},
-            {"service": "Azure Key Vault", "tier": "Standard", "monthly_cost": 15, "description": "Secrets and certificate management"},
-            {"service": "Azure Monitor + App Insights", "tier": "Pay-as-you-go", "monthly_cost": 120, "description": "Logging, monitoring, alerting"},
-            {"service": "Azure AD B2C", "tier": "Premium P1", "monthly_cost": 130, "description": "Identity and access management"},
-            {"service": "Azure Blob Storage", "tier": "Hot LRS", "monthly_cost": 60, "description": "File and document storage"},
-            {"service": "Azure Redis Cache", "tier": "Standard C1", "monthly_cost": 160, "description": "In-memory caching"},
-        ]
-        third_party = [
-            {"name": "SendGrid (Email)", "monthly_cost": 45, "description": "Transactional email service"},
-            {"name": "SSL Certificates", "monthly_cost": 15, "description": "Custom domain SSL"},
-        ]
-        total_monthly = sum(a["monthly_cost"] for a in azure_costs) + sum(t["monthly_cost"] for t in third_party)
-        return {
-            "total_monthly_cost": total_monthly,
-            "total_annual_cost": total_monthly * 12,
-            "azure_costs": azure_costs,
-            "third_party_costs": third_party,
-            "cost_optimization": [
-                "Use Reserved Instances for 36% savings on App Service and SQL",
-                "Enable auto-shutdown for non-production environments",
-                "Use Azure Hybrid Benefit if existing Windows Server licenses",
-                "Monitor Cosmos DB RU consumption and right-size",
-                "Use Azure Cost Management alerts at 80% and 100% budget",
-            ],
-            "notes": "Estimates based on production environment. Dev/staging adds ~40% of prod costs.",
-        }
+        # Use stored semantic if available
+        sem = st.session_state.get("_last_semantic", {})
+        return _build_dynamic_cost(sem, time_est)
 
     def _fb_risk(self, semantic):
-        c = safe_int(semantic.get("complexity_score", 7))
-        risks = [
-            {"category": "Technical", "title": "Integration Complexity", "description": "Third-party integrations may have limitations.", "severity": "High", "probability": "Medium", "impact": "High", "mitigation": "Early PoC for each integration."},
-            {"category": "Schedule", "title": "Scope Creep", "description": "Requirements may evolve.", "severity": "High", "probability": "High", "impact": "High", "mitigation": "Strict change request process."},
-            {"category": "Resource", "title": "Key Personnel", "description": "Specialists may have limited availability.", "severity": "Medium", "probability": "Medium", "impact": "High", "mitigation": "Secure commitments early."},
-            {"category": "Budget", "title": "Cloud Cost Overrun", "description": "Azure costs may exceed estimates.", "severity": "Medium", "probability": "Medium", "impact": "Medium", "mitigation": "Cost Management alerts."},
-            {"category": "External", "title": "Regulatory Changes", "description": "Compliance may evolve.", "severity": "Low", "probability": "Low", "impact": "High", "mitigation": "Design for extensibility."},
-        ]
-        score = min(10, max(1, int(c * 0.8)))
-        return {"overall_score": score, "overall_level": "Low" if score <= 3 else "Medium" if score <= 6 else "High", "risks": risks}
+        te = st.session_state.get("_last_time_est", {})
+        ce = st.session_state.get("_last_cost_est", {})
+        return _build_dynamic_risk(semantic, te, ce)
 
     def _fb_arch(self):
-        return {"pattern": "Microservices with Event-Driven Integration", "components": [
-            {"name": "Frontend", "type": "Web App", "azure_service": "App Service", "services": ["React SPA", "CDN", "Front Door"]},
-            {"name": "API Gateway", "type": "Integration", "azure_service": "API Management", "services": ["REST APIs", "Rate limiting", "JWT"]},
-            {"name": "Backend", "type": "Microservices", "azure_service": "App Service / Functions", "services": [".NET Core", "Azure Functions", "SignalR"]},
-            {"name": "Data", "type": "Database", "azure_service": "SQL + Cosmos DB", "services": ["Azure SQL", "Cosmos DB", "Redis", "Blob"]},
-            {"name": "Integration", "type": "Messaging", "azure_service": "Service Bus", "services": ["Async messaging", "Logic Apps", "SharePoint connector"]},
-            {"name": "Security", "type": "Identity", "azure_service": "Azure AD + Key Vault", "services": ["AD B2C", "Key Vault", "Managed Identity"]},
-            {"name": "DevOps", "type": "Operations", "azure_service": "Azure DevOps", "services": ["CI/CD", "Bicep IaC", "App Insights"]},
-        ], "data_flow": ["Client", "Front Door", "API Mgmt", "App Service", "Database", "Service Bus", "Functions"], "security": ["Azure AD + MFA", "Key Vault", "TLS 1.3", "SQL TDE", "RBAC", "Azure Policy", "Sentinel"], "scalability": "Auto-scaling with Cosmos DB RUs", "availability": "Multi-region, 99.95% SLA"}
+        sem = st.session_state.get("_last_semantic", {})
+        return _build_dynamic_arch(sem)
 
     def _fb_scope(self):
-        return {"in_scope": ["All functional requirements", "Architecture design", "Full-stack development", "Integrations", "Testing (unit, integration, perf, security, UAT)", "CI/CD and IaC", "Data migration", "Documentation", "30-day hypercare"], "out_of_scope": ["Legacy decommissioning", "End-user training", "Hardware procurement", "License procurement", "Data cleansing", "Native mobile apps", "Multi-language", "Pen testing", "Ongoing support beyond hypercare"], "assumptions": ["Client provides Azure subscription", "Dedicated product owner", "SMEs 10hrs/week", "APIs documented", "Standard business hours"], "prerequisites": ["Azure subscription", "AD tenant", "SharePoint site", "API credentials", "Signed SOW"]}
+        sem = st.session_state.get("_last_semantic", {})
+        te = st.session_state.get("_last_time_est", {})
+        return _build_dynamic_scope(sem, te)
 
     def _fb_proposal(self, sem, te, ce, ri, ar):
         d = datetime.now().strftime("%B %d, %Y")
@@ -834,61 +1806,77 @@ def generate_time_excel(time_est, semantic):
     ws2.row_dimensions[1].height = 35
 
     row = 3
-    headers = ["Phase", "Task", "Role", "Hours", "% of Total", "Notes"]
+    headers = ["Phase / Week", "Sub-task", "Role", "Dev Low (hrs)", "Dev High (hrs)", "Dev Avg (hrs)", "Justification"]
     for c, h in enumerate(headers, 1):
         ws2.cell(row=row, column=c, value=h)
     style_header_row(ws2, row, len(headers))
     row += 1
 
     total_hours = safe_int(time_est.get("total_hours", 1))
+    grand_low = 0
+    grand_high = 0
+    grand_avg = 0
     for phase in safe_list(time_est.get("phases")):
         phase = safe_dict(phase)
         phase_name = safe_str(phase.get("name"))
+        phase_week = safe_str(phase.get("week_label", ""))
+        phase_label = phase_name + (" (" + phase_week + ")" if phase_week else "")
         phase_hours = safe_int(phase.get("hours"))
+        phase_low = safe_int(phase.get("low_hours", int(phase_hours * 0.8)))
+        phase_high = safe_int(phase.get("high_hours", int(phase_hours * 1.35)))
         tasks = safe_list(phase.get("tasks"))
         if not tasks:
-            style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_name
+            style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_label
             style_cell(ws2, row, 2, fill=sub_fill)
             style_cell(ws2, row, 3, fill=sub_fill)
-            style_cell(ws2, row, 4, font=sub_font, fill=sub_fill, align=center).value = phase_hours
-            style_cell(ws2, row, 5, fill=sub_fill, align=center).value = safe_str(phase.get("percentage"))
-            style_cell(ws2, row, 6, fill=sub_fill)
+            style_cell(ws2, row, 4, font=sub_font, fill=sub_fill, align=center).value = phase_low
+            style_cell(ws2, row, 5, font=sub_font, fill=sub_fill, align=center).value = phase_high
+            style_cell(ws2, row, 6, font=sub_font, fill=sub_fill, align=center).value = phase_hours
+            style_cell(ws2, row, 7, fill=sub_fill)
             row += 1
         else:
             first_task = True
             for task in tasks:
                 task = safe_dict(task)
                 if first_task:
-                    style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_name
+                    style_cell(ws2, row, 1, font=sub_font, fill=sub_fill).value = phase_label
                     first_task = False
                 else:
                     style_cell(ws2, row, 1, fill=None)
+                t_hrs = safe_int(task.get("hours"))
+                t_low = safe_int(task.get("low_hours", int(t_hrs * 0.8)))
+                t_high = safe_int(task.get("high_hours", int(t_hrs * 1.35)))
                 style_cell(ws2, row, 2).value = safe_str(task.get("name"))
                 style_cell(ws2, row, 3).value = safe_str(task.get("role"))
-                style_cell(ws2, row, 4, align=center).value = safe_int(task.get("hours"))
-                pct = safe_int(task.get("hours")) / max(total_hours, 1) * 100
-                style_cell(ws2, row, 5, align=center).value = str(round(pct, 1)) + "%"
-                style_cell(ws2, row, 6)
+                style_cell(ws2, row, 4, align=center).value = t_low
+                style_cell(ws2, row, 5, align=center).value = t_high
+                style_cell(ws2, row, 6, align=center).value = t_hrs
+                style_cell(ws2, row, 7, align=wrap).value = safe_str(task.get("justification", ""))
                 row += 1
             # Phase subtotal
             style_cell(ws2, row, 1, font=bold_font, fill=total_fill)
             style_cell(ws2, row, 2, font=bold_font, fill=total_fill).value = "Subtotal — " + phase_name
             style_cell(ws2, row, 3, fill=total_fill)
-            style_cell(ws2, row, 4, font=bold_font, fill=total_fill, align=center).value = phase_hours
-            style_cell(ws2, row, 5, font=bold_font, fill=total_fill, align=center).value = safe_str(phase.get("percentage"))
-            style_cell(ws2, row, 6, fill=total_fill)
+            style_cell(ws2, row, 4, font=bold_font, fill=total_fill, align=center).value = phase_low
+            style_cell(ws2, row, 5, font=bold_font, fill=total_fill, align=center).value = phase_high
+            style_cell(ws2, row, 6, font=bold_font, fill=total_fill, align=center).value = phase_hours
+            style_cell(ws2, row, 7, fill=total_fill)
             row += 1
+        grand_low += phase_low
+        grand_high += phase_high
+        grand_avg += phase_hours
 
     # Grand total
     row += 1
     style_cell(ws2, row, 1, font=total_font, fill=total_fill)
     style_cell(ws2, row, 2, font=total_font, fill=total_fill).value = "GRAND TOTAL"
     style_cell(ws2, row, 3, fill=total_fill)
-    style_cell(ws2, row, 4, font=total_font, fill=total_fill, align=center).value = total_hours
-    style_cell(ws2, row, 5, font=total_font, fill=total_fill, align=center).value = "100%"
-    style_cell(ws2, row, 6, fill=total_fill)
+    style_cell(ws2, row, 4, font=total_font, fill=total_fill, align=center).value = grand_low
+    style_cell(ws2, row, 5, font=total_font, fill=total_fill, align=center).value = grand_high
+    style_cell(ws2, row, 6, font=total_font, fill=total_fill, align=center).value = grand_avg
+    style_cell(ws2, row, 7, fill=total_fill)
 
-    for c, w in [(1, 18), (2, 28), (3, 18), (4, 12), (5, 12), (6, 25)]:
+    for c, w in [(1, 22), (2, 35), (3, 15), (4, 14), (5, 14), (6, 14), (7, 40)]:
         ws2.column_dimensions[get_column_letter(c)].width = w
 
     # ═══ Sheet 3: Milestones ═══
@@ -1174,15 +2162,20 @@ def generate_cost_excel(cost_est, time_est, semantic):
     row += 1
 
     total_hours_val = safe_int(time_est.get("total_hours", 0))
-    total_days_val = total_hours_val / 7
-    roles = [
-        ("Project Manager", 0.33, 125), ("Solution Architect / Lead", 0.33, 150),
-        ("Backend Developer", 1.0, 110), ("Frontend Developer", 0.0, 100),
-        ("DevOps Engineer", 0.25, 120), ("QA Engineer", 0.50, 95),
-        ("Product Owner", 0.10, 130),
-    ]
+    total_days_val = max(1, total_hours_val / 7)
+    dynamic_roles = safe_list(time_est.get("roles"))
+    if not dynamic_roles:
+        dynamic_roles = [
+            {"name": "Project Manager", "allocation_pct": 0.15, "rate": 125},
+            {"name": "Developer", "allocation_pct": 0.60, "rate": 110},
+            {"name": "QA Engineer", "allocation_pct": 0.25, "rate": 95},
+        ]
     sum_days, sum_hours, sum_cost = 0, 0, 0
-    for i, (role_name, pct, rate) in enumerate(roles, 1):
+    for i, rl in enumerate(dynamic_roles, 1):
+        rl = safe_dict(rl)
+        role_name = safe_str(rl.get("name", "Team Member"))
+        pct = float(rl.get("allocation_pct", 0))
+        rate = safe_int(rl.get("rate", 100))
         days = round(total_days_val * pct, 1)
         hours = int(round(days * 7, 0))
         cost = hours * rate
@@ -1232,8 +2225,8 @@ def generate_cost_excel(cost_est, time_est, semantic):
         phase = safe_dict(phase)
         ph_name = safe_str(phase.get("name"))
         ph_hours = safe_int(phase.get("hours"))
-        low_hrs = int(ph_hours * 0.8)
-        high_hrs = int(ph_hours * 1.35)
+        low_hrs = safe_int(phase.get("low_hours", int(ph_hours * 0.8)))
+        high_hrs = safe_int(phase.get("high_hours", int(ph_hours * 1.35)))
         low_cost = low_hrs * blended_rate
         high_cost = high_hrs * blended_rate
         avg_cost = ph_hours * blended_rate
@@ -2343,7 +3336,8 @@ def run_pipeline(files):
     status.markdown("**3/10** Semantic Analysis" + (" (GPT-4)..." if live else "..."))
     pb.progress(20)
     semantic = ai.analyze_requirements(text)
-    log_agent("Semantic", str(len(safe_list(semantic.get("requirements")))) + " requirements")
+    st.session_state["_last_semantic"] = semantic
+    log_agent("Semantic", str(len(safe_list(semantic.get("requirements")))) + " requirements, " + str(len(safe_list(semantic.get("technology_stack")))) + " technologies detected")
     time.sleep(0.2)
 
     status.markdown("**4/10** Historical RAG...")
@@ -2355,19 +3349,21 @@ def run_pipeline(files):
     status.markdown("**5/10** Time Estimator...")
     pb.progress(40)
     time_est = ai.estimate_time(semantic, rag)
-    log_agent("Time", str(time_est.get("total_hours", 0)) + " hours")
+    st.session_state["_last_time_est"] = time_est
+    log_agent("Time", str(time_est.get("total_hours", 0)) + " hours across " + str(len(safe_list(time_est.get("phases")))) + " phases")
     time.sleep(0.2)
 
     status.markdown("**6/10** Cost Calculator...")
     pb.progress(50)
     cost_est = ai.estimate_cost(semantic, time_est, rag)
-    log_agent("Cost", "$" + str(cost_est.get("total_monthly_cost", 0)) + "/mo")
+    st.session_state["_last_cost_est"] = cost_est
+    log_agent("Cost", "$" + str(cost_est.get("total_monthly_cost", 0)) + "/mo (" + str(len(safe_list(cost_est.get("azure_costs")))) + " services)")
     time.sleep(0.2)
 
     status.markdown("**7/10** Risk Analyzer...")
     pb.progress(60)
     risk = ai.analyze_risk(semantic, time_est, cost_est)
-    log_agent("Risk", str(risk.get("overall_score", 0)) + "/10")
+    log_agent("Risk", str(risk.get("overall_score", 0)) + "/10 — " + str(len(safe_list(risk.get("risks")))) + " risks identified")
     time.sleep(0.2)
 
     status.markdown("**8/10** Architecture Designer...")
@@ -2454,7 +3450,8 @@ def show_results():
     # ── Time ──
     with tab_list[1]:
         phases = safe_list(te.get("phases"))
-        mc = st.columns(4)
+        three_pt = safe_dict(te.get("three_point"))
+        mc = st.columns(6)
         with mc[0]:
             st.metric("Total Hours", str(safe_int(te.get("total_hours"))))
         with mc[1]:
@@ -2463,34 +3460,94 @@ def show_results():
             st.metric("Confidence", safe_str(te.get("confidence")))
         with mc[3]:
             st.metric("Buffer", safe_str(te.get("buffer")))
+        with mc[4]:
+            st.metric("Optimistic", str(safe_int(three_pt.get("optimistic", 0))) + "h")
+        with mc[5]:
+            st.metric("Pessimistic", str(safe_int(three_pt.get("pessimistic", 0))) + "h")
+
         if phases:
-            colors = ["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0"]
+            # ── Phase-level bar chart with Low / Avg / High ──
+            colors = ["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0", "#e9c46a", "#f4845f"]
+            phase_names = [safe_str(safe_dict(p).get("name", "Phase")) for p in phases]
+            low_vals = [safe_int(safe_dict(p).get("low_hours", int(safe_int(safe_dict(p).get("hours", 0)) * 0.8))) for p in phases]
+            avg_vals = [safe_int(safe_dict(p).get("hours", 0)) for p in phases]
+            high_vals = [safe_int(safe_dict(p).get("high_hours", int(safe_int(safe_dict(p).get("hours", 0)) * 1.35))) for p in phases]
             fig = go.Figure()
-            for i, p in enumerate(phases):
-                p = safe_dict(p)
-                ph_name = safe_str(p.get("name", "Phase"))
-                ph_hours = safe_int(p.get("hours", 0))
-                fig.add_trace(go.Bar(
-                    name=ph_name, x=[ph_hours], y=[ph_name],
-                    orientation="h", marker_color=colors[i % 6],
-                    text=str(ph_hours) + "h", textposition="auto",
-                ))
+            fig.add_trace(go.Bar(name="Low (Optimistic)", x=low_vals, y=phase_names, orientation="h", marker_color="#06d6a0", text=[str(v) + "h" for v in low_vals], textposition="auto"))
+            fig.add_trace(go.Bar(name="Average", x=avg_vals, y=phase_names, orientation="h", marker_color="#00b4d8", text=[str(v) + "h" for v in avg_vals], textposition="auto"))
+            fig.add_trace(go.Bar(name="High (Pessimistic)", x=high_vals, y=phase_names, orientation="h", marker_color="#ff6b6b", text=[str(v) + "h" for v in high_vals], textposition="auto"))
             fig.update_layout(
-                title="Phase Breakdown", template="plotly_dark",
+                title="Phase Breakdown — Three-Point Estimate (Low / Avg / High)", template="plotly_dark",
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                height=400, showlegend=False, xaxis_title="Hours",
+                height=max(350, len(phases) * 60), barmode="group", xaxis_title="Hours",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             st.plotly_chart(fig, use_container_width=True)
+
+            # ── Detailed task breakdown per phase (Inflexion.xlsx style) ──
+            st.markdown("### Detailed Task Breakdown")
+            for pi, phase in enumerate(phases):
+                phase = safe_dict(phase)
+                ph_name = safe_str(phase.get("name", "Phase"))
+                ph_week = safe_str(phase.get("week_label", ""))
+                ph_low = safe_int(phase.get("low_hours", 0))
+                ph_avg = safe_int(phase.get("hours", 0))
+                ph_high = safe_int(phase.get("high_hours", 0))
+                ph_pct = safe_str(phase.get("percentage", ""))
+                header_txt = ph_name
+                if ph_week:
+                    header_txt += " (" + ph_week + ")"
+                header_txt += " — " + str(ph_avg) + "h [" + str(ph_low) + "-" + str(ph_high) + "h] " + ph_pct
+                with st.expander(header_txt, expanded=(pi < 2)):
+                    tasks = safe_list(phase.get("tasks"))
+                    if tasks:
+                        # Build a table header
+                        st.markdown(
+                            '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
+                            '<tr style="background:#1B3A5C;color:white;">'
+                            '<th style="padding:6px 8px;text-align:left;">Sub-task</th>'
+                            '<th style="padding:6px 8px;text-align:center;">Role</th>'
+                            '<th style="padding:6px 8px;text-align:center;">Low (hrs)</th>'
+                            '<th style="padding:6px 8px;text-align:center;">Avg (hrs)</th>'
+                            '<th style="padding:6px 8px;text-align:center;">High (hrs)</th>'
+                            '<th style="padding:6px 8px;text-align:left;">Justification</th>'
+                            '</tr>' +
+                            "".join(
+                                '<tr style="background:' + ("#f5f8fc" if ti % 2 == 0 else "#ffffff") + ';">'
+                                '<td style="padding:5px 8px;">' + safe_str(safe_dict(tk).get("name")) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;color:#1B3A5C;">' + safe_str(safe_dict(tk).get("role")) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;">' + str(safe_int(safe_dict(tk).get("low_hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;font-weight:bold;">' + str(safe_int(safe_dict(tk).get("hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;">' + str(safe_int(safe_dict(tk).get("high_hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;font-style:italic;color:#555;">' + safe_str(safe_dict(tk).get("justification", "")) + '</td>'
+                                '</tr>'
+                                for ti, tk in enumerate(tasks)
+                            ) +
+                            '<tr style="background:#E2EFDA;font-weight:bold;">'
+                            '<td style="padding:5px 8px;" colspan="2">Phase Total</td>'
+                            '<td style="padding:5px 8px;text-align:center;">' + str(ph_low) + '</td>'
+                            '<td style="padding:5px 8px;text-align:center;">' + str(ph_avg) + '</td>'
+                            '<td style="padding:5px 8px;text-align:center;">' + str(ph_high) + '</td>'
+                            '<td></td></tr>'
+                            '</table>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.info("No sub-tasks for this phase.")
+
+        # ── Milestones ──
         milestones = safe_list(te.get("milestones"))
-        for m in milestones:
-            m = safe_dict(m)
-            st.markdown("- **Week " + str(safe_int(m.get("week"))) + "** — " + safe_str(m.get("name")) + ": " + safe_str(m.get("description")))
+        if milestones:
+            st.markdown("### Milestones")
+            for m in milestones:
+                m = safe_dict(m)
+                st.markdown("- **Week " + str(safe_int(m.get("week"))) + "** — " + safe_str(m.get("name")) + ": " + safe_str(m.get("description")))
         # Excel download
         st.markdown("---")
         excel_data = generate_time_excel(te, se)
         if excel_data:
             st.download_button(
-                "📥 Download Time Estimate (Excel)",
+                "Download Time Estimate (Excel)",
                 data=excel_data,
                 file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2559,6 +3616,17 @@ def show_results():
     with tab_list[4]:
         comps = safe_list(ar.get("components"))
         st.markdown("**Pattern:** _" + safe_str(ar.get("pattern")) + "_")
+
+        # ── Architecture Diagram (Graphviz) ──
+        try:
+            arch_dot = generate_architecture_diagram(ar)
+            if arch_dot:
+                st.markdown("### Solution Architecture Diagram")
+                st.graphviz_chart(arch_dot, use_container_width=True)
+        except Exception:
+            pass
+
+        # ── Component cards ──
         arch_cols = st.columns(3)
         for i, c in enumerate(comps):
             c = safe_dict(c)
@@ -2569,8 +3637,22 @@ def show_results():
         if df:
             flow_str = " -> ".join(safe_str(x) for x in df)
             st.markdown('<div class="dfv">' + flow_str + '</div>', unsafe_allow_html=True)
-        for s in safe_list(ar.get("security")):
-            st.markdown("- " + safe_str(s))
+
+        # ── Workflow / Flow Diagram (Graphviz) ──
+        try:
+            flow_dot = generate_flow_diagram(te)
+            if flow_dot:
+                st.markdown("### Project Workflow Diagram")
+                st.graphviz_chart(flow_dot, use_container_width=True)
+        except Exception:
+            pass
+
+        # ── Security ──
+        sec_items = safe_list(ar.get("security"))
+        if sec_items:
+            st.markdown("### Security Controls")
+            for s in sec_items:
+                st.markdown("- " + safe_str(s))
 
     # ── Proposal ──
     with tab_list[5]:
@@ -2626,28 +3708,30 @@ def show_results():
     with tab_list[7]:
         st.markdown("### Team Composition & Role Allocation")
         total_h = safe_int(te.get("total_hours", 0))
-        total_d = total_h / 7
-        roles_data = [
-            ("Project Manager", 0.33, 125, "Stakeholder mgmt, sprint planning, status reports"),
-            ("Solution Architect / Lead", 0.33, 150, "Architecture design, technical decisions, code reviews"),
-            ("Backend Developer", 1.0, 110, "API development, business logic, integrations"),
-            ("Frontend Developer", 0.0, 100, "UI/UX implementation (Teams bot — no custom frontend)"),
-            ("DevOps Engineer", 0.25, 120, "Azure infrastructure, CI/CD, monitoring"),
-            ("QA Engineer", 0.50, 95, "Unit, integration, performance, UAT testing"),
-            ("Product Owner", 0.10, 130, "Requirements validation, UAT coordination"),
-        ]
+        total_d = max(1, total_h / 7)
+        dynamic_roles = safe_list(te.get("roles"))
         rc1, rc2 = st.columns([3, 2])
         with rc1:
             role_names = []
             role_days = []
-            role_colors = ["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0", "#e9c46a"]
-            for role_name, pct, rate, desc in roles_data:
-                days = round(total_d * pct, 1)
-                hours = int(round(days * 7, 0))
-                if hours > 0:
-                    role_names.append(role_name)
-                    role_days.append(days)
-                st.markdown('<div class="ri"><strong>' + role_name + '</strong> — ' + str(int(pct * 100)) + '% allocation<div class="ri-c">' + str(days) + ' days / ' + str(hours) + ' hrs @ $' + str(rate) + '/hr = $' + str(hours * rate) + '</div><p>' + desc + '</p></div>', unsafe_allow_html=True)
+            role_colors = ["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0", "#e9c46a", "#f4845f"]
+            if dynamic_roles:
+                for rl in dynamic_roles:
+                    rl = safe_dict(rl)
+                    role_name = safe_str(rl.get("name", "Team Member"))
+                    pct = float(rl.get("allocation_pct", 0))
+                    rate = safe_int(rl.get("rate", 100))
+                    days = round(total_d * pct, 1)
+                    hours = int(round(days * 7, 0))
+                    if hours > 0:
+                        role_names.append(role_name)
+                        role_days.append(days)
+                    st.markdown(
+                        '<div class="ri"><strong>' + role_name + '</strong> — ' + str(int(pct * 100)) + '% allocation'
+                        '<div class="ri-c">' + str(days) + ' days / ' + str(hours) + ' hrs @ $' + str(rate) + '/hr = $' + str(hours * rate)
+                        + '</div></div>', unsafe_allow_html=True)
+            else:
+                st.info("Role allocation data not available. Run analysis to generate dynamic roles.")
         with rc2:
             if role_names:
                 fig_roles = px.pie(values=role_days, names=role_names, title="Team Allocation (Days)",
@@ -2670,16 +3754,15 @@ def show_results():
 
         st.markdown("---")
         st.markdown("### Prerequisites")
-        prereqs = [
-            "Azure subscription with Contributor/Owner access at resource group level",
-            "SharePoint Online Read/Write access to document library",
-            "Sample documents from all types (PDF, Excel, PPT, Word)",
-            "Microsoft Teams admin consent for bot deployment",
-            "Azure AD user accounts for MVP users",
-            "Service principal credentials with SharePoint API access",
-        ]
+        # Dynamic prerequisites from scope
+        scope_data = safe_dict(r.get("scope"))
+        prereqs = safe_list(scope_data.get("prerequisites"))
+        if not prereqs:
+            prereqs = safe_list(scope_data.get("assumptions"))
+        if not prereqs:
+            prereqs = ["Cloud subscription access", "Sample documents for analysis", "Stakeholder availability for UAT"]
         for i, p in enumerate(prereqs, 1):
-            st.markdown(str(i) + ". " + p)
+            st.markdown(str(i) + ". " + safe_str(p))
 
     # ── Delivery ──
     st.markdown("---")
