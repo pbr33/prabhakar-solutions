@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, base64, zipfile
 import streamlit as st
 
 st.set_page_config(page_title="Agent BELAL | ECI Presale", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -12,8 +12,9 @@ import plotly.express as px
 
 try:
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
     from openpyxl.utils import get_column_letter
+    from openpyxl.chart import BarChart, PieChart, Reference
 except ImportError:
     Workbook = None
 
@@ -22,11 +23,21 @@ try:
     from reportlab.lib import colors as rl_colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm, inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable, Image as RLImage
     from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
+
+try:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.enum.shapes import MSO_SHAPE
+    HAS_PPTX = True
+except ImportError:
+    HAS_PPTX = False
 
 try:
     from openai import AzureOpenAI
@@ -40,6 +51,22 @@ try:
     import requests as _requests
 except ImportError:
     _requests = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ECI BRANDING CONSTANTS
+# ═══════════════════════════════════════════════════════════════════════
+
+ECI_BLUE = (27, 58, 92)
+ECI_LIGHT_BLUE = (214, 228, 240)
+ECI_ACCENT = (0, 180, 216)
+ECI_GREEN = (0, 212, 170)
+ECI_DARK = (10, 14, 26)
+ECI_TEXT = (30, 30, 30)
+ECI_GRAY = (100, 100, 100)
+
+ECI_LOGO_BLUE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAMgAAABGCAYAAACJ4ts2AAAD6ElEQVR4nO3dS4gcRRzH8e8mvlE3D1BiQUx8BFGXHCS6FoKC5hAUFRTFpAiBIMkhh3j04NF4MwEPGkQPWp7UiIqioohgyvXgQcT4CsaDlbgefGwiEh+Jh5qIBN2pbacyWzW/D8xp/93zY5jf9nT3TDeIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiDRibNgBTgVj3WLgZuBaYAK4GLgQOAc4HTgCzADfA/uAT4EAfBCD/2MYmWV+6FwQY90TwJYBZjnZ3hj8DV0XNtYtBO4EtgI3Aad1WM0M8BbwNPBmDP7YLM+X83o8EIPf1SGHDMmCYQcowVh3O2kr8AJwC93KAXA+cDfwOrDfWLdsMAmlFl3fOPOSsW4ceBy4r8DqVwLjwKEC65Z5qpmCGOuWk/7TXzXsLNKOJgpirLsIeA9YMeQo0pjqC2KsO4u05ViRucgPwEvAK8DnwHfAUWBp77EamCQd9bpiwHGlMqULciqO2jxKelP3c4y0f/JQDP7Hf/n7wd7jE8ADGOsmgc3ARuCMgaSVqlS9BTHWrSEdxu3nT2BTDN7PZf0x+Clgyli3A3iYVDIZIVUXBHiEvHM5W+Zajn+KwR8A1nddXupV7XkQY90EaT+hn9di8E+VziNtqrYgpP2Cfo4D2wvnkIbVXJA7MmbejsHvL55EmlVlQYx1FwCXZ4w+VzqLtK3KggDXZM5NFU0hzSt9FGunsW5nh+W+iMHPdpLukox1zABfdnhukb/VugUxGTMHY/DHiyeRptVakPMyZn4unkKaV2tBzsyYOVw8hTSv1oIczZg5t3gKaV6tBTmSMbOodAhpX63f5o0ZM8uMdWPaUZf/o9YtyNcZM+PknUwU+U+1FuSjzLnJoimkeVUWJAY/DeR8x2pD6SzStioL0vNyxsxaY92lxZNIs2ouyLMZM2PArsI5pGHVFiQG/zHwbsbobca6zaXzSJuqLUjPg6QfRfWz21jXeX/EWLfSWOeNdau6rkPqVHVBYvAfAk9mjC4EnjHWPda7kHUWY90aY91u0uWBNlD56yVzN1+/7n7Cuhj8G31mtgMWuLrP3AJgG7DeWPci8CrwGTAN/AYsJl0XawK4DliLrtI48mq/qgkx+F+NdeuAvcDyjEWWAPf3HiKzauIjQwz+W+BG0kchkYFpoiAAMfhvgOuB54ccRRrSTEEAYvA/xeDvAe4Cvhrw6g+gH2GNnKYKckIMfg9wJXAv8A7p0qNdHAb2ALcCl8XgdW+QETMq9yhcQrrT1Mn3KDybdKDiF1IZpkn7MftI9yh8Pwb/+zAyi4iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiMjc/QXeEc9g6vu/ZAAAAABJRU5ErkJggg=="
+ECI_LOGO_WHITE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAMgAAABGCAYAAACJ4ts2AAADvElEQVR4nO3dza9dUxzG8e+vJV6Cq5WQklTrPbgxaMplYkAHN4RBhaRNaiANgw6uob/A8EqIaBoTikGplBAJIpKiBgYGqqFRAy+9BqUvIlfVY7COSZP2rLvvXj13rfN8kjP77bWfs09+Z5/9ctYGMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM7NGxKgDnAuSVgD3AXcCk8C1wFXAxcD5wAngGPAbsB/4Bvgc+CIi/hlFZqucpJdU1t5F5lsuaaOkDyWd7JjhqKRdkqYlLethe8ws5j3ZuXfWD71Wkh4i7QXeBO4Hzus41GXAI8D7wEFJq/pJaLVoqkEkTUh6HdgD3Nzz8GuBiZ7HtCWu6zfrkiNpNemb/rZRZ7F2NNEgkq4GPgXWjDiKNab6BpF0IWnPsSZzkSPA28A7wAHgMDAPXDF43QFMkc563dJzXBsXS+WsjaQXM89InZL0gtIp39yxpyTtkDQ/GOOMDbNUtof1q+qDdEnrgacySk8Bj0fEtoj4PXf8iNgXEVtJe5I3gH+7JbVa1f4T61nyLnY+GRE7u64kIg4Bm7oub/Wqdg8iaZJ0nDDMexHxcuk81qZqGwTYklEjYKZwDmtYzQ3ycEbNRxFxsHgSa1aVDSLpSuDGjNLXSmextlXZIMC6zLp9RVNY80o3yGzmNYrTHRgy7nUZ6z4GfNfDe7AxVuse5JqMml8iQsWTWNNqbZBLM2qOFk9hzau1QS7IqDlePIU1r9YGmc+ouaR4CmterQ1yIqPm8tIhrH2lG+Tp6GbYbeY/Z6x7laSxmJTCyql1D/JDRs0EeRcTzc6o1gb5KrNuqmgKa16VDRIRc0DOPVabS2extlXZIAN7Mmo2SLq+eBJrVs0N8mpGTQDPFc5hDau2QSLia+CTjNIHJT1ROo+1qdoGGXiG9KeoYbZL6nw8ImmtpJ2Sbuo6htWp6gaJiC+BHRmly4FXJD2/wFlN1kvaTpoeaDOVby9buNKTNsxKml3E8tMR8cGQmhngHuD2IXXLgG3AJklvAe8C3wJzwN/ACtK8WJPAXcAGPEvj2Kt9VhMi4i9J08BnwOqMRVYCWwcvs7Nq4idDRPwE3Ev6KWTWmyYaBCAifgTuBnaNOIo1pJkGAYiIPyLiUWAj8H3Pwx/Cf8IaO001yP8iYjdwK/AY8DFp6tEujgO7gQeAGyLi134SWi3G4nZwSStJT5o6/RmFF5FOVPxJaoY50nHMftIzCvdGxMlRZDYzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzOzhfsPjGdVI+ycCmwAAAAASUVORK5CYII="
 
 
 # ═══════════════════════════════════════════════════════════════════════
