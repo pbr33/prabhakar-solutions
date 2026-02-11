@@ -198,7 +198,7 @@ def safe_dict(val):
 def render_dot_to_svg(dot_string):
     """Render a DOT string to SVG bytes using the graphviz library.
 
-    Returns SVG bytes or None if graphviz is not available.
+    Returns SVG bytes or None if graphviz system binary is not available.
     """
     if not HAS_GRAPHVIZ or not dot_string:
         return None
@@ -213,7 +213,7 @@ def render_dot_to_svg(dot_string):
 def render_dot_to_png(dot_string):
     """Render a DOT string to PNG bytes using the graphviz library.
 
-    Returns PNG bytes or None if graphviz is not available.
+    Returns PNG bytes or None if graphviz system binary is not available.
     """
     if not HAS_GRAPHVIZ or not dot_string:
         return None
@@ -223,6 +223,61 @@ def render_dot_to_png(dot_string):
         return png_bytes
     except Exception:
         return None
+
+
+def render_dot_to_html(dot_string):
+    """Create a self-contained HTML file that renders DOT using Viz.js.
+
+    This always works — no system graphviz binary needed. The user downloads
+    an HTML file they can open in any browser to see the rendered diagram.
+    """
+    if not dot_string:
+        return None
+    escaped = dot_string.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+    html = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ECI Architecture Diagram</title>
+<style>body{background:#0a0e1a;margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:sans-serif}
+#msg{color:#94a3b8;font-size:1.2rem}svg{max-width:95vw}
+.toolbar{position:fixed;top:10px;right:10px;display:flex;gap:8px;z-index:10}
+.toolbar button{background:#1B3A5C;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px}
+.toolbar button:hover{background:#00b4d8}</style>
+<script src="https://unpkg.com/@viz-js/viz@3.2.4/lib/viz-standalone.js"></script>
+</head><body>
+<div class="toolbar"><button onclick="downloadSVG()">Download SVG</button><button onclick="downloadPNG()">Download PNG</button></div>
+<div id="graph"><p id="msg">Rendering diagram...</p></div>
+<script>
+const dot = `""" + escaped + """`;
+Viz.instance().then(viz => {
+  const svg = viz.renderSVGElement(dot);
+  document.getElementById('graph').innerHTML = '';
+  document.getElementById('graph').appendChild(svg);
+}).catch(e => { document.getElementById('msg').textContent = 'Render error: ' + e; });
+function downloadSVG(){
+  const svg = document.querySelector('#graph svg');
+  if(!svg) return;
+  const blob = new Blob([new XMLSerializer().serializeToString(svg)], {type:'image/svg+xml'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'ECI_Architecture.svg'; a.click();
+}
+function downloadPNG(){
+  const svg = document.querySelector('#graph svg');
+  if(!svg) return;
+  const svgData = new XMLSerializer().serializeToString(svg);
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const img = new Image();
+  img.onload = function(){
+    canvas.width = img.width * 2; canvas.height = img.height * 2;
+    ctx.scale(2, 2); ctx.drawImage(img, 0, 0);
+    canvas.toBlob(function(blob){
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = 'ECI_Architecture.png'; a.click();
+    });
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
+</script></body></html>"""
+    return html.encode("utf-8")
 
 
 def generate_architecture_diagram(architecture_data):
@@ -742,6 +797,98 @@ def _analyze_text_dynamic(text):
         "complexity_score": score,
         "project_type": project_type,
     }
+
+
+def _split_large_task(name, hours, role, justification):
+    """Split a task > 8 hours into granular 4-8h sub-tasks for justifiable estimates.
+
+    Returns a list of task dicts, each capped at 8 hours.
+    """
+    name_short = name[:45]
+    # Determine the activity breakdown based on task name keywords
+    name_lower = name.lower()
+
+    # Detect task category and create appropriate sub-task breakdown
+    if any(k in name_lower for k in ["design", "architect", "blueprint"]):
+        splits = [
+            ("Requirements analysis: " + name_short, 0.35, role, "Analyze requirements and constraints"),
+            ("Design document: " + name_short, 0.35, role, "Create detailed design specification"),
+            ("Design review and sign-off: " + name_short, 0.30, role, "Peer review, feedback, approval"),
+        ]
+    elif any(k in name_lower for k in ["test", "qa", "validation", "uat"]):
+        splits = [
+            ("Test plan and case design: " + name_short, 0.25, role, "Define test scenarios and acceptance criteria"),
+            ("Test environment setup: " + name_short, 0.15, role, "Configure test environment and data"),
+            ("Test execution: " + name_short, 0.35, role, "Execute test cases, log results"),
+            ("Defect validation and reporting: " + name_short, 0.25, role, "Verify fixes, generate test report"),
+        ]
+    elif any(k in name_lower for k in ["deploy", "release", "provision", "infra"]):
+        splits = [
+            ("Environment configuration: " + name_short, 0.30, role, "Setup and configure environment"),
+            ("Deployment execution: " + name_short, 0.35, role, "Deploy artifacts, run migrations"),
+            ("Smoke testing and verification: " + name_short, 0.20, role, "Post-deployment validation"),
+            ("Runbook and documentation: " + name_short, 0.15, role, "Document steps and rollback procedures"),
+        ]
+    elif any(k in name_lower for k in ["integrate", "api", "connector", "migration"]):
+        splits = [
+            ("Integration design: " + name_short, 0.20, role, "Define API contracts, data mapping"),
+            ("Connector development: " + name_short, 0.35, role, "Build integration adapter and handlers"),
+            ("Error handling and retry logic: " + name_short, 0.20, role, "Implement fault tolerance"),
+            ("Integration testing: " + name_short, 0.25, role, "Validate end-to-end data flow"),
+        ]
+    elif any(k in name_lower for k in ["ai", "ml", "model", "pipeline", "rag", "prompt"]):
+        splits = [
+            ("Model/pipeline design: " + name_short, 0.25, role, "Architecture and approach selection"),
+            ("Implementation: " + name_short, 0.35, role, "Core development and configuration"),
+            ("Testing and tuning: " + name_short, 0.25, role, "Quality validation and optimization"),
+            ("Documentation: " + name_short, 0.15, role, "Technical documentation"),
+        ]
+    elif any(k in name_lower for k in ["document", "training", "guide", "knowledge"]):
+        splits = [
+            ("Content planning: " + name_short, 0.25, role, "Outline structure and content plan"),
+            ("Content creation: " + name_short, 0.45, role, "Write and format documentation"),
+            ("Review and finalize: " + name_short, 0.30, role, "Peer review and final edits"),
+        ]
+    else:
+        # Generic development task breakdown
+        splits = [
+            ("Technical design: " + name_short, 0.20, role, "Detailed design and approach — " + justification[:40]),
+            ("Development: " + name_short, 0.35, role, "Core implementation — " + justification[:40]),
+            ("Unit tests: " + name_short, 0.20, role, "Automated test coverage"),
+            ("Code review and refactor: " + name_short, 0.15, role, "Peer review and address feedback"),
+            ("Integration validation: " + name_short, 0.10, role, "Verify integration with other components"),
+        ]
+
+    result = []
+    remaining = hours
+    for i, (sub_name, pct, sub_role, sub_just) in enumerate(splits):
+        if i == len(splits) - 1:
+            sub_hrs = remaining  # Last task gets remainder
+        else:
+            sub_hrs = max(2, min(8, round(hours * pct)))
+            remaining -= sub_hrs
+        # Ensure we don't exceed 8h per task — split further if needed
+        while sub_hrs > 8:
+            chunk = 8
+            result.append({
+                "name": sub_name + " (part " + str(len(result) + 1) + ")",
+                "hours": chunk,
+                "low_hours": int(chunk * 0.8),
+                "high_hours": int(chunk * 1.35),
+                "role": sub_role,
+                "justification": sub_just,
+            })
+            sub_hrs -= chunk
+        if sub_hrs > 0:
+            result.append({
+                "name": sub_name,
+                "hours": sub_hrs,
+                "low_hours": int(sub_hrs * 0.8),
+                "high_hours": int(sub_hrs * 1.35),
+                "role": sub_role,
+                "justification": sub_just,
+            })
+    return result
 
 
 def _build_dynamic_time(semantic, text=""):
@@ -1588,10 +1735,15 @@ class AzureAI:
     def estimate_time(self, semantic, rag):
         r = self._call(
             "You are an expert ECI project estimator. Use three-point estimation. "
+            "IMPORTANT: Break every task into granular sub-tasks of 4-8 hours MAX each. "
+            "Never create a single task larger than 8 hours — split it into design, develop, test, review sub-tasks. "
+            "Each sub-task must have a clear justification explaining why those hours are needed. "
             "Return JSON: {\"total_hours\": int, \"duration_weeks\": \"N weeks\", \"confidence\": str, \"buffer\": str, "
-            "\"phases\": [{\"name\": str, \"hours\": int, \"percentage\": \"N%\", \"tasks\": [{\"name\": str, \"hours\": int, \"role\": str}]}], "
+            "\"phases\": [{\"name\": str, \"hours\": int, \"percentage\": \"N%\", \"week_label\": str, "
+            "\"tasks\": [{\"name\": str, \"hours\": int (max 8), \"low_hours\": int, \"high_hours\": int, \"role\": str, \"justification\": str}]}], "
             "\"milestones\": [{\"name\": str, \"week\": int, \"description\": str}], "
-            "\"three_point\": {\"optimistic\": int, \"most_likely\": int, \"pessimistic\": int}}",
+            "\"three_point\": {\"optimistic\": int, \"most_likely\": int, \"pessimistic\": int}, "
+            "\"roles\": [{\"name\": str, \"allocation_pct\": float, \"rate\": int}]}",
             "Estimate:\nRequirements: " + json.dumps(safe_list(semantic.get("requirements"))[:20], default=str)
             + "\nComplexity: " + str(semantic.get("complexity_score", 5))
             + "\nType: " + safe_str(semantic.get("project_type"))
@@ -1697,37 +1849,60 @@ class AzureAI:
             elif isinstance(m, str):
                 clean_ms.append({"name": m, "week": 0, "description": ""})
         data["milestones"] = clean_ms
-        # Phases
+        # Phases — break down any task > 8 hours into granular sub-tasks
         clean_ph = []
         for p in safe_list(data.get("phases")):
             if not isinstance(p, dict):
                 continue
             clean_tasks = []
             for t in safe_list(p.get("tasks")):
-                if isinstance(t, dict):
+                if not isinstance(t, dict):
+                    continue
+                t_hrs = safe_int(t.get("hours", 0))
+                t_name = safe_str(t.get("name", ""))
+                t_role = safe_str(t.get("role", ""))
+                t_just = safe_str(t.get("justification", ""))
+                if t_hrs > 8:
+                    # Split large task into granular 4-8h sub-tasks
+                    sub_tasks = _split_large_task(t_name, t_hrs, t_role, t_just)
+                    clean_tasks.extend(sub_tasks)
+                else:
                     clean_tasks.append({
-                        "name": safe_str(t.get("name", "")),
-                        "hours": safe_int(t.get("hours", 0)),
-                        "low_hours": safe_int(t.get("low_hours", int(safe_int(t.get("hours", 0)) * 0.8))),
-                        "high_hours": safe_int(t.get("high_hours", int(safe_int(t.get("hours", 0)) * 1.35))),
-                        "role": safe_str(t.get("role", "")),
-                        "justification": safe_str(t.get("justification", "")),
+                        "name": t_name,
+                        "hours": t_hrs,
+                        "low_hours": safe_int(t.get("low_hours", int(t_hrs * 0.8))),
+                        "high_hours": safe_int(t.get("high_hours", int(t_hrs * 1.35))),
+                        "role": t_role,
+                        "justification": t_just,
                     })
+            phase_hours = sum(tk["hours"] for tk in clean_tasks)
             clean_ph.append({
                 "name": safe_str(p.get("name", "Phase")),
-                "hours": safe_int(p.get("hours", 0)),
-                "low_hours": safe_int(p.get("low_hours", int(safe_int(p.get("hours", 0)) * 0.8))),
-                "high_hours": safe_int(p.get("high_hours", int(safe_int(p.get("hours", 0)) * 1.35))),
+                "hours": phase_hours,
+                "low_hours": int(phase_hours * 0.8),
+                "high_hours": int(phase_hours * 1.35),
                 "percentage": safe_str(p.get("percentage", "0%")),
                 "week_label": safe_str(p.get("week_label", "")),
                 "tasks": clean_tasks,
             })
         data["phases"] = clean_ph
-        data["total_hours"] = safe_int(data.get("total_hours", 0))
+        # Recalculate totals from granular phases
+        recalc_total = sum(p["hours"] for p in clean_ph)
+        if recalc_total > 0:
+            data["total_hours"] = recalc_total
+            data["three_point"] = {
+                "optimistic": int(recalc_total * 0.8),
+                "most_likely": recalc_total,
+                "pessimistic": int(recalc_total * 1.35),
+            }
+            for p in clean_ph:
+                p["percentage"] = str(round(p["hours"] / max(recalc_total, 1) * 100)) + "%"
+        else:
+            data["total_hours"] = safe_int(data.get("total_hours", 0))
+            data["three_point"] = safe_dict(data.get("three_point"))
         data["duration_weeks"] = safe_str(data.get("duration_weeks", "TBD"))
         data["confidence"] = safe_str(data.get("confidence", "N/A"))
         data["buffer"] = safe_str(data.get("buffer", "N/A"))
-        data["three_point"] = safe_dict(data.get("three_point"))
         # Roles
         clean_roles = []
         for rl in safe_list(data.get("roles")):
@@ -4279,9 +4454,11 @@ def show_results():
         # ── Architecture Diagram Downloads ──
         if arch_dot:
             st.markdown("#### Download Architecture Diagram")
+            arch_svg = render_dot_to_svg(arch_dot)
+            arch_png = render_dot_to_png(arch_dot)
+            arch_html = render_dot_to_html(arch_dot)
             dl_arch_cols = st.columns(3)
             with dl_arch_cols[0]:
-                arch_svg = render_dot_to_svg(arch_dot)
                 if arch_svg:
                     st.download_button(
                         "Download Diagram (SVG)",
@@ -4290,8 +4467,15 @@ def show_results():
                         mime="image/svg+xml",
                         use_container_width=True, type="primary", key="dl_arch_svg",
                     )
+                elif arch_html:
+                    st.download_button(
+                        "Download Diagram (HTML+SVG)",
+                        data=arch_html,
+                        file_name="ECI_Architecture_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".html",
+                        mime="text/html",
+                        use_container_width=True, type="primary", key="dl_arch_html",
+                    )
             with dl_arch_cols[1]:
-                arch_png = render_dot_to_png(arch_dot)
                 if arch_png:
                     st.download_button(
                         "Download Diagram (PNG)",
@@ -4300,6 +4484,8 @@ def show_results():
                         mime="image/png",
                         use_container_width=True, type="primary", key="dl_arch_png",
                     )
+                elif arch_html and not arch_svg:
+                    st.info("Open the HTML file in a browser, then use the Download PNG button inside it.")
             with dl_arch_cols[2]:
                 st.download_button(
                     "Download Diagram (DOT)",
@@ -4334,9 +4520,11 @@ def show_results():
         # ── Workflow Diagram Downloads ──
         if flow_dot:
             st.markdown("#### Download Workflow Diagram")
+            flow_svg = render_dot_to_svg(flow_dot)
+            flow_png = render_dot_to_png(flow_dot)
+            flow_html = render_dot_to_html(flow_dot)
             dl_flow_cols = st.columns(3)
             with dl_flow_cols[0]:
-                flow_svg = render_dot_to_svg(flow_dot)
                 if flow_svg:
                     st.download_button(
                         "Download Workflow (SVG)",
@@ -4345,8 +4533,15 @@ def show_results():
                         mime="image/svg+xml",
                         use_container_width=True, type="primary", key="dl_flow_svg",
                     )
+                elif flow_html:
+                    st.download_button(
+                        "Download Workflow (HTML+SVG)",
+                        data=flow_html,
+                        file_name="ECI_Workflow_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".html",
+                        mime="text/html",
+                        use_container_width=True, type="primary", key="dl_flow_html",
+                    )
             with dl_flow_cols[1]:
-                flow_png = render_dot_to_png(flow_dot)
                 if flow_png:
                     st.download_button(
                         "Download Workflow (PNG)",
@@ -4355,6 +4550,8 @@ def show_results():
                         mime="image/png",
                         use_container_width=True, type="primary", key="dl_flow_png",
                     )
+                elif flow_html and not flow_svg:
+                    st.info("Open the HTML file in a browser, then use the Download PNG button inside it.")
             with dl_flow_cols[2]:
                 st.download_button(
                     "Download Workflow (DOT)",
