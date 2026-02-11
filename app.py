@@ -970,6 +970,497 @@ def generate_time_excel(time_est, semantic):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  DETAILED COST ESTIMATE EXCEL (Inflexion Format)
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_cost_excel(cost_est, time_est, semantic):
+    """Generate a detailed cost estimate Excel matching Inflexion.xlsx format."""
+    if not Workbook:
+        return None
+    wb = Workbook()
+
+    hdr_font = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
+    hdr_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    sub_font = Font(name="Calibri", bold=True, size=10, color="1B3A5C")
+    sub_fill = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    normal_font = Font(name="Calibri", size=10)
+    bold_font = Font(name="Calibri", bold=True, size=10)
+    total_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    total_font = Font(name="Calibri", bold=True, size=11, color="1B3A5C")
+    accent_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    accent_font = Font(name="Calibri", bold=True, size=12, color="FFFFFF")
+    warn_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    currency_fmt = '$#,##0'
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    center = Alignment(horizontal="center", vertical="center")
+    wrap = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    def style_header_row(ws, row, cols):
+        for c in range(1, cols + 1):
+            cell = ws.cell(row=row, column=c)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = center
+            cell.border = thin_border
+
+    def style_cell(ws, row, col, font=normal_font, fill=None, align=None, num_fmt=None):
+        cell = ws.cell(row=row, column=col)
+        cell.font = font
+        cell.border = thin_border
+        if fill:
+            cell.fill = fill
+        if align:
+            cell.alignment = align
+        if num_fmt:
+            cell.number_format = num_fmt
+        return cell
+
+    # ═══ Sheet 1: Infrastructure Cost Summary ═══
+    ws1 = wb.active
+    ws1.title = "Infrastructure Costs"
+    ws1.sheet_properties.tabColor = "1B3A5C"
+
+    ws1.merge_cells("A1:F1")
+    t_cell = ws1["A1"]
+    t_cell.value = "ECI — Monthly Infrastructure Cost Estimates"
+    t_cell.font = Font(name="Calibri", bold=True, size=16, color="1B3A5C")
+    t_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 40
+
+    ws1.merge_cells("A2:F2")
+    ws1["A2"].value = "Azure Infrastructure + AI Models  |  Generated: " + datetime.now().strftime("%B %d, %Y %H:%M")
+    ws1["A2"].font = Font(name="Calibri", size=9, color="666666")
+    ws1["A2"].alignment = Alignment(horizontal="center")
+
+    row = 4
+    headers = ["Azure Service / AI Model", "Description & Assumptions", "Low Cost/Mo", "High Cost/Mo", "Average Cost/Mo", "Notes"]
+    for c, h in enumerate(headers, 1):
+        ws1.cell(row=row, column=c, value=h)
+    style_header_row(ws1, row, len(headers))
+    row += 1
+
+    azure_costs = safe_list(cost_est.get("azure_costs"))
+    third_party = safe_list(cost_est.get("third_party_costs"))
+
+    categories = {}
+    for svc in azure_costs:
+        svc = safe_dict(svc)
+        service_name = safe_str(svc.get("service", ""))
+        name_lower = service_name.lower()
+        if any(k in name_lower for k in ["openai", "ai search", "foundry", "cognitive", "ml", "embedding"]):
+            cat = "AI & ML SERVICES"
+        elif any(k in name_lower for k in ["app service", "function", "container", "kubernetes"]):
+            cat = "COMPUTE SERVICES"
+        elif any(k in name_lower for k in ["blob", "storage", "redis", "cache", "cosmos", "sql"]):
+            cat = "DATA & STORAGE SERVICES"
+        elif any(k in name_lower for k in ["key vault", "monitor", "insights", "sentinel", "ad "]):
+            cat = "SECURITY & MONITORING"
+        elif any(k in name_lower for k in ["front door", "cdn", "api management", "service bus", "logic"]):
+            cat = "NETWORKING & INTEGRATION"
+        else:
+            cat = "OTHER SERVICES"
+        if cat not in categories:
+            categories[cat] = []
+        monthly = safe_int(svc.get("monthly_cost", 0))
+        categories[cat].append({
+            "service": service_name,
+            "description": safe_str(svc.get("description", "")),
+            "low": int(monthly * 0.85),
+            "high": int(monthly * 1.25),
+            "average": monthly,
+            "notes": safe_str(svc.get("tier", "")),
+        })
+
+    if third_party:
+        categories["THIRD-PARTY SERVICES"] = []
+        for tp in third_party:
+            tp = safe_dict(tp)
+            monthly = safe_int(tp.get("monthly_cost", 0))
+            categories["THIRD-PARTY SERVICES"].append({
+                "service": safe_str(tp.get("name", "")),
+                "description": safe_str(tp.get("description", "")),
+                "low": int(monthly * 0.85),
+                "high": int(monthly * 1.25),
+                "average": monthly,
+                "notes": "",
+            })
+
+    grand_low, grand_high, grand_avg = 0, 0, 0
+    cat_order = ["AI & ML SERVICES", "COMPUTE SERVICES", "DATA & STORAGE SERVICES",
+                 "SECURITY & MONITORING", "NETWORKING & INTEGRATION", "THIRD-PARTY SERVICES", "OTHER SERVICES"]
+
+    for cat_name in cat_order:
+        if cat_name not in categories:
+            continue
+        items = categories[cat_name]
+        style_cell(ws1, row, 1, font=sub_font, fill=sub_fill).value = cat_name
+        for c in range(2, 7):
+            style_cell(ws1, row, c, fill=sub_fill)
+        row += 1
+
+        cat_low, cat_high, cat_avg = 0, 0, 0
+        for item in items:
+            style_cell(ws1, row, 1).value = item["service"]
+            style_cell(ws1, row, 2, align=wrap).value = item["description"]
+            style_cell(ws1, row, 3, align=center, num_fmt=currency_fmt).value = item["low"]
+            style_cell(ws1, row, 4, align=center, num_fmt=currency_fmt).value = item["high"]
+            style_cell(ws1, row, 5, align=center, num_fmt=currency_fmt).value = item["average"]
+            style_cell(ws1, row, 6).value = item["notes"]
+            cat_low += item["low"]
+            cat_high += item["high"]
+            cat_avg += item["average"]
+            row += 1
+
+        style_cell(ws1, row, 1, font=bold_font, fill=total_fill).value = "Subtotal: " + cat_name.title().split(" ")[0]
+        style_cell(ws1, row, 2, fill=total_fill)
+        style_cell(ws1, row, 3, font=bold_font, fill=total_fill, align=center, num_fmt=currency_fmt).value = cat_low
+        style_cell(ws1, row, 4, font=bold_font, fill=total_fill, align=center, num_fmt=currency_fmt).value = cat_high
+        style_cell(ws1, row, 5, font=bold_font, fill=total_fill, align=center, num_fmt=currency_fmt).value = cat_avg
+        style_cell(ws1, row, 6, fill=total_fill)
+        grand_low += cat_low
+        grand_high += cat_high
+        grand_avg += cat_avg
+        row += 2
+
+    style_cell(ws1, row, 1, font=accent_font, fill=accent_fill).value = "TOTAL MONTHLY COST"
+    style_cell(ws1, row, 2, fill=accent_fill)
+    style_cell(ws1, row, 3, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = grand_low
+    style_cell(ws1, row, 4, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = grand_high
+    style_cell(ws1, row, 5, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = grand_avg
+    style_cell(ws1, row, 6, fill=accent_fill)
+    row += 2
+
+    style_cell(ws1, row, 1, font=total_font).value = "ANNUAL PROJECTION (12 MONTHS)"
+    style_cell(ws1, row, 2)
+    style_cell(ws1, row, 3, font=total_font, align=center, num_fmt=currency_fmt).value = grand_low * 12
+    style_cell(ws1, row, 4, font=total_font, align=center, num_fmt=currency_fmt).value = grand_high * 12
+    style_cell(ws1, row, 5, font=total_font, align=center, num_fmt=currency_fmt).value = grand_avg * 12
+    style_cell(ws1, row, 6)
+    row += 3
+
+    style_cell(ws1, row, 1, font=sub_font).value = "KEY ASSUMPTIONS"
+    row += 1
+    notes_str = safe_str(cost_est.get("notes", ""))
+    if notes_str:
+        ws1.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        style_cell(ws1, row, 1).value = "\u2022 " + notes_str
+        row += 1
+    for a in safe_list(cost_est.get("cost_optimization", [])):
+        ws1.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        style_cell(ws1, row, 1).value = "\u2022 " + safe_str(a)
+        row += 1
+
+    for c, w in [(1, 32), (2, 48), (3, 14), (4, 14), (5, 16), (6, 25)]:
+        ws1.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 2: Team & Role Allocation ═══
+    ws2 = wb.create_sheet("Team & Roles")
+    ws2.sheet_properties.tabColor = "00B4D8"
+
+    ws2.merge_cells("A1:G1")
+    ws2["A1"].value = "Team Composition & Role Allocation"
+    ws2["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws2["A1"].alignment = Alignment(horizontal="center")
+    ws2.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["S.N.", "Role", "Allocation %", "Days", "Hours", "Rate ($/hr)", "Cost"]
+    for c, h in enumerate(headers, 1):
+        ws2.cell(row=row, column=c, value=h)
+    style_header_row(ws2, row, len(headers))
+    row += 1
+
+    total_hours_val = safe_int(time_est.get("total_hours", 0))
+    total_days_val = total_hours_val / 7
+    roles = [
+        ("Project Manager", 0.33, 125), ("Solution Architect / Lead", 0.33, 150),
+        ("Backend Developer", 1.0, 110), ("Frontend Developer", 0.0, 100),
+        ("DevOps Engineer", 0.25, 120), ("QA Engineer", 0.50, 95),
+        ("Product Owner", 0.10, 130),
+    ]
+    sum_days, sum_hours, sum_cost = 0, 0, 0
+    for i, (role_name, pct, rate) in enumerate(roles, 1):
+        days = round(total_days_val * pct, 1)
+        hours = int(round(days * 7, 0))
+        cost = hours * rate
+        sum_days += days
+        sum_hours += hours
+        sum_cost += cost
+        style_cell(ws2, row, 1, align=center).value = i
+        style_cell(ws2, row, 2, font=bold_font).value = role_name
+        style_cell(ws2, row, 3, align=center).value = str(int(pct * 100)) + "%"
+        style_cell(ws2, row, 4, align=center).value = days
+        style_cell(ws2, row, 5, align=center).value = hours
+        style_cell(ws2, row, 6, align=center, num_fmt=currency_fmt).value = rate
+        style_cell(ws2, row, 7, align=center, num_fmt=currency_fmt).value = cost
+        row += 1
+
+    style_cell(ws2, row, 1, fill=total_fill)
+    style_cell(ws2, row, 2, font=total_font, fill=total_fill).value = "TOTAL"
+    style_cell(ws2, row, 3, fill=total_fill)
+    style_cell(ws2, row, 4, font=total_font, fill=total_fill, align=center).value = round(sum_days, 1)
+    style_cell(ws2, row, 5, font=total_font, fill=total_fill, align=center).value = sum_hours
+    style_cell(ws2, row, 6, fill=total_fill)
+    style_cell(ws2, row, 7, font=total_font, fill=total_fill, align=center, num_fmt=currency_fmt).value = sum_cost
+
+    for c, w in [(1, 6), (2, 30), (3, 14), (4, 10), (5, 10), (6, 14), (7, 14)]:
+        ws2.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 3: Project Labor Cost (Three-Point) ═══
+    ws3 = wb.create_sheet("Project Labor Cost")
+    ws3.sheet_properties.tabColor = "00D4AA"
+
+    ws3.merge_cells("A1:G1")
+    ws3["A1"].value = "Project Labor Cost Breakdown (Three-Point Estimation)"
+    ws3["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws3["A1"].alignment = Alignment(horizontal="center")
+    ws3.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["Phase", "Hours", "% of Total", "Low Cost ($)", "High Cost ($)", "Average Cost ($)", "Notes"]
+    for c, h in enumerate(headers, 1):
+        ws3.cell(row=row, column=c, value=h)
+    style_header_row(ws3, row, len(headers))
+    row += 1
+
+    blended_rate = 115
+    gl_low, gl_high, gl_avg = 0, 0, 0
+    for phase in safe_list(time_est.get("phases")):
+        phase = safe_dict(phase)
+        ph_name = safe_str(phase.get("name"))
+        ph_hours = safe_int(phase.get("hours"))
+        low_hrs = int(ph_hours * 0.8)
+        high_hrs = int(ph_hours * 1.35)
+        low_cost = low_hrs * blended_rate
+        high_cost = high_hrs * blended_rate
+        avg_cost = ph_hours * blended_rate
+        gl_low += low_cost
+        gl_high += high_cost
+        gl_avg += avg_cost
+        style_cell(ws3, row, 1, font=bold_font).value = ph_name
+        style_cell(ws3, row, 2, align=center).value = ph_hours
+        style_cell(ws3, row, 3, align=center).value = safe_str(phase.get("percentage"))
+        style_cell(ws3, row, 4, align=center, num_fmt=currency_fmt).value = low_cost
+        style_cell(ws3, row, 5, align=center, num_fmt=currency_fmt).value = high_cost
+        style_cell(ws3, row, 6, align=center, num_fmt=currency_fmt).value = avg_cost
+        style_cell(ws3, row, 7)
+        row += 1
+
+    row += 1
+    style_cell(ws3, row, 1, font=accent_font, fill=accent_fill).value = "TOTAL PROJECT LABOR"
+    style_cell(ws3, row, 2, font=accent_font, fill=accent_fill, align=center).value = safe_int(time_est.get("total_hours"))
+    style_cell(ws3, row, 3, font=accent_font, fill=accent_fill, align=center).value = "100%"
+    style_cell(ws3, row, 4, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = gl_low
+    style_cell(ws3, row, 5, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = gl_high
+    style_cell(ws3, row, 6, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = gl_avg
+    style_cell(ws3, row, 7, fill=accent_fill)
+
+    for c, w in [(1, 20), (2, 10), (3, 12), (4, 14), (5, 14), (6, 16), (7, 25)]:
+        ws3.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 4: Total Cost Summary ═══
+    ws4 = wb.create_sheet("Total Cost Summary")
+    ws4.sheet_properties.tabColor = "7B61FF"
+
+    ws4.merge_cells("A1:D1")
+    ws4["A1"].value = "Total Project Cost Summary"
+    ws4["A1"].font = Font(name="Calibri", bold=True, size=16, color="1B3A5C")
+    ws4["A1"].alignment = Alignment(horizontal="center")
+    ws4.row_dimensions[1].height = 40
+
+    ws4.merge_cells("A2:D2")
+    ws4["A2"].value = "ECI Consulting  |  " + datetime.now().strftime("%B %d, %Y")
+    ws4["A2"].font = Font(name="Calibri", size=9, color="666666")
+    ws4["A2"].alignment = Alignment(horizontal="center")
+
+    row = 4
+    headers = ["Cost Category", "Low Estimate ($)", "High Estimate ($)", "Average Estimate ($)"]
+    for c, h in enumerate(headers, 1):
+        ws4.cell(row=row, column=c, value=h)
+    style_header_row(ws4, row, len(headers))
+    row += 1
+
+    style_cell(ws4, row, 1, font=sub_font, fill=sub_fill).value = "ONE-TIME COSTS"
+    for c in range(2, 5):
+        style_cell(ws4, row, c, fill=sub_fill)
+    row += 1
+    style_cell(ws4, row, 1).value = "Project Labor (Development)"
+    style_cell(ws4, row, 2, align=center, num_fmt=currency_fmt).value = gl_low
+    style_cell(ws4, row, 3, align=center, num_fmt=currency_fmt).value = gl_high
+    style_cell(ws4, row, 4, align=center, num_fmt=currency_fmt).value = gl_avg
+    row += 2
+
+    style_cell(ws4, row, 1, font=sub_font, fill=sub_fill).value = "RECURRING COSTS (Monthly)"
+    for c in range(2, 5):
+        style_cell(ws4, row, c, fill=sub_fill)
+    row += 1
+    style_cell(ws4, row, 1).value = "Azure Infrastructure"
+    style_cell(ws4, row, 2, align=center, num_fmt=currency_fmt).value = grand_low
+    style_cell(ws4, row, 3, align=center, num_fmt=currency_fmt).value = grand_high
+    style_cell(ws4, row, 4, align=center, num_fmt=currency_fmt).value = grand_avg
+    row += 2
+
+    style_cell(ws4, row, 1, font=sub_font, fill=sub_fill).value = "RECURRING COSTS (Annual)"
+    for c in range(2, 5):
+        style_cell(ws4, row, c, fill=sub_fill)
+    row += 1
+    style_cell(ws4, row, 1).value = "Azure Infrastructure (x12)"
+    style_cell(ws4, row, 2, align=center, num_fmt=currency_fmt).value = grand_low * 12
+    style_cell(ws4, row, 3, align=center, num_fmt=currency_fmt).value = grand_high * 12
+    style_cell(ws4, row, 4, align=center, num_fmt=currency_fmt).value = grand_avg * 12
+    row += 2
+
+    y1_low = gl_low + grand_low * 12
+    y1_high = gl_high + grand_high * 12
+    y1_avg = gl_avg + grand_avg * 12
+    style_cell(ws4, row, 1, font=accent_font, fill=accent_fill).value = "YEAR 1 TOTAL COST"
+    style_cell(ws4, row, 2, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = y1_low
+    style_cell(ws4, row, 3, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = y1_high
+    style_cell(ws4, row, 4, font=accent_font, fill=accent_fill, align=center, num_fmt=currency_fmt).value = y1_avg
+    row += 2
+
+    style_cell(ws4, row, 1, font=bold_font, fill=warn_fill).value = "YEAR 2+ ANNUAL (Infra Only)"
+    style_cell(ws4, row, 2, font=bold_font, fill=warn_fill, align=center, num_fmt=currency_fmt).value = grand_low * 12
+    style_cell(ws4, row, 3, font=bold_font, fill=warn_fill, align=center, num_fmt=currency_fmt).value = grand_high * 12
+    style_cell(ws4, row, 4, font=bold_font, fill=warn_fill, align=center, num_fmt=currency_fmt).value = grand_avg * 12
+
+    for c, w in [(1, 36), (2, 20), (3, 20), (4, 20)]:
+        ws4.column_dimensions[get_column_letter(c)].width = w
+
+    # ═══ Sheet 5: Assumptions, Prerequisites & Scope ═══
+    ws5 = wb.create_sheet("Assumptions & Scope")
+    ws5.sheet_properties.tabColor = "FFD166"
+
+    ws5.merge_cells("A1:C1")
+    ws5["A1"].value = "Assumptions, Prerequisites & Out-of-Scope"
+    ws5["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws5["A1"].alignment = Alignment(horizontal="center")
+    ws5.row_dimensions[1].height = 35
+
+    row = 3
+    sections_data = [
+        ("PREREQUISITES", [
+            "Azure subscription with Contributor/Owner access at resource group level",
+            "SharePoint Online Read/Write access to document library",
+            "Sample documents from all types (PDF, Excel, PPT, Word)",
+            "Microsoft Teams admin consent for bot deployment",
+            "Azure AD user accounts for MVP users",
+            "Service principal credentials with SharePoint API access",
+        ]),
+        ("KEY ASSUMPTIONS", [
+            "Client provides Azure subscription with appropriate access levels",
+            "Dedicated product owner available for requirements sign-off and UAT",
+            "SME availability minimum 10 hours/week during development",
+            "All third-party APIs are documented and accessible",
+            "Standard business hours (9 AM - 6 PM) for team availability",
+            "Documents are in standard formats without password protection or DRM",
+            "Total document size approximately 1-2 GB",
+            "SharePoint Online (not on-premise SharePoint Server)",
+            "Client responsible for all software licenses and ongoing infrastructure costs",
+            "Estimates based on production environment; Dev/staging adds ~40% of prod costs",
+            "Pricing based on current Azure pricing; subject to change",
+            "Buffer of 10-20% included for usage spikes and scaling",
+        ]),
+        ("OUT OF SCOPE", [
+            "Integration with database systems (SQL, NoSQL, data warehouses)",
+            "Web scraping or external data source ingestion",
+            "Real-time data feeds or APIs",
+            "Multi-language support (English only for MVP)",
+            "Custom mobile application development",
+            "CI/CD pipeline setup and automation (manual deployments for MVP)",
+            "Legacy system decommissioning",
+            "End-user training beyond knowledge transfer",
+            "Hardware procurement",
+            "Penetration testing",
+        ]),
+    ]
+
+    for sec_title, sec_items in sections_data:
+        style_cell(ws5, row, 1, font=sub_font, fill=sub_fill).value = "S.N."
+        style_cell(ws5, row, 2, font=sub_font, fill=sub_fill).value = sec_title
+        style_cell(ws5, row, 3, fill=sub_fill)
+        row += 1
+        for i, item in enumerate(sec_items, 1):
+            style_cell(ws5, row, 1, align=center).value = i
+            ws5.merge_cells(start_row=row, start_column=2, end_row=row, end_column=3)
+            style_cell(ws5, row, 2, align=wrap).value = item
+            row += 1
+        row += 1
+
+    ws5.column_dimensions["A"].width = 8
+    ws5.column_dimensions["B"].width = 70
+    ws5.column_dimensions["C"].width = 20
+
+    # ═══ Sheet 6: Week-by-Week Breakdown ═══
+    ws6 = wb.create_sheet("Week-by-Week Breakdown")
+    ws6.sheet_properties.tabColor = "FF6B6B"
+
+    ws6.merge_cells("A1:F1")
+    ws6["A1"].value = "Week-by-Week Task Breakdown"
+    ws6["A1"].font = Font(name="Calibri", bold=True, size=14, color="1B3A5C")
+    ws6["A1"].alignment = Alignment(horizontal="center")
+    ws6.row_dimensions[1].height = 35
+
+    row = 3
+    headers = ["Week/Phase", "Task", "Role", "Low (hrs)", "High (hrs)", "Avg (hrs)"]
+    for c, h in enumerate(headers, 1):
+        ws6.cell(row=row, column=c, value=h)
+    style_header_row(ws6, row, len(headers))
+    row += 1
+
+    total_hours_est = safe_int(time_est.get("total_hours", 1))
+    week_counter = 1
+    for phase in safe_list(time_est.get("phases")):
+        phase = safe_dict(phase)
+        ph_name = safe_str(phase.get("name"))
+        ph_hours = safe_int(phase.get("hours"))
+        ph_weeks = max(1, ph_hours // 40)
+        week_label = "Week " + str(week_counter) + ("-" + str(week_counter + ph_weeks - 1) if ph_weeks > 1 else "") + ": " + ph_name
+
+        style_cell(ws6, row, 1, font=sub_font, fill=sub_fill).value = week_label
+        style_cell(ws6, row, 2, fill=sub_fill)
+        style_cell(ws6, row, 3, fill=sub_fill)
+        low_total = int(ph_hours * 0.8)
+        high_total = int(ph_hours * 1.35)
+        style_cell(ws6, row, 4, font=sub_font, fill=sub_fill, align=center).value = low_total
+        style_cell(ws6, row, 5, font=sub_font, fill=sub_fill, align=center).value = high_total
+        style_cell(ws6, row, 6, font=sub_font, fill=sub_fill, align=center).value = ph_hours
+        row += 1
+
+        for task in safe_list(phase.get("tasks")):
+            task = safe_dict(task)
+            t_hours = safe_int(task.get("hours"))
+            style_cell(ws6, row, 1)
+            style_cell(ws6, row, 2).value = safe_str(task.get("name"))
+            style_cell(ws6, row, 3).value = safe_str(task.get("role"))
+            style_cell(ws6, row, 4, align=center).value = int(t_hours * 0.8)
+            style_cell(ws6, row, 5, align=center).value = int(t_hours * 1.35)
+            style_cell(ws6, row, 6, align=center).value = t_hours
+            row += 1
+
+        week_counter += ph_weeks
+
+    row += 1
+    style_cell(ws6, row, 1, font=accent_font, fill=accent_fill).value = "GRAND TOTAL"
+    style_cell(ws6, row, 2, fill=accent_fill)
+    style_cell(ws6, row, 3, fill=accent_fill)
+    style_cell(ws6, row, 4, font=accent_font, fill=accent_fill, align=center).value = int(total_hours_est * 0.8)
+    style_cell(ws6, row, 5, font=accent_font, fill=accent_fill, align=center).value = int(total_hours_est * 1.35)
+    style_cell(ws6, row, 6, font=accent_font, fill=accent_fill, align=center).value = total_hours_est
+
+    for c, w in [(1, 28), (2, 35), (3, 18), (4, 12), (5, 12), (6, 12)]:
+        ws6.column_dimensions[get_column_letter(c)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  PDF PROPOSAL GENERATOR (ECI Template)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1224,6 +1715,485 @@ def generate_proposal_pdf(results):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  PPTX PROPOSAL GENERATOR (ECI Template)
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_proposal_pptx(results):
+    """Generate ECI-branded PowerPoint proposal."""
+    if not HAS_PPTX:
+        return None
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    ECI_BLUE_RGB = RGBColor(27, 58, 92)
+    ECI_ACCENT_RGB = RGBColor(0, 180, 216)
+    ECI_GREEN_RGB = RGBColor(0, 212, 170)
+    WHITE = RGBColor(255, 255, 255)
+    DARK_TEXT = RGBColor(30, 30, 30)
+    GRAY_TEXT = RGBColor(100, 100, 100)
+
+    se = safe_dict(results.get("semantic_analysis"))
+    te = safe_dict(results.get("time_estimate"))
+    ce = safe_dict(results.get("cost_estimate"))
+    ri = safe_dict(results.get("risk_assessment"))
+    ar = safe_dict(results.get("architecture"))
+    sc = safe_dict(results.get("scope"))
+    proposal = safe_dict(results.get("proposal"))
+
+    def add_bg(slide, color=ECI_BLUE_RGB):
+        bg = slide.background
+        fill = bg.fill
+        fill.solid()
+        fill.fore_color.rgb = color
+
+    def add_title_bar(slide, title_text):
+        bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(1.2))
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = ECI_BLUE_RGB
+        bar.line.fill.background()
+        tf = bar.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = title_text
+        p.font.size = Pt(28)
+        p.font.color.rgb = WHITE
+        p.font.bold = True
+        p.alignment = PP_ALIGN.LEFT
+        tf.margin_left = Inches(0.5)
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        # ECI logo text in title bar
+        logo_shape = slide.shapes.add_textbox(Inches(11), Inches(0.15), Inches(2), Inches(0.9))
+        ltf = logo_shape.text_frame
+        lp = ltf.paragraphs[0]
+        lp.text = "ECI"
+        lp.font.size = Pt(24)
+        lp.font.color.rgb = ECI_ACCENT_RGB
+        lp.font.bold = True
+        lp.alignment = PP_ALIGN.RIGHT
+
+    def add_footer(slide):
+        footer = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, Inches(7.0), prs.slide_width, Inches(0.5))
+        footer.fill.solid()
+        footer.fill.fore_color.rgb = RGBColor(20, 30, 50)
+        footer.line.fill.background()
+        tf = footer.text_frame
+        p = tf.paragraphs[0]
+        p.text = "ECI Consulting  |  Confidential  |  " + datetime.now().strftime("%B %d, %Y")
+        p.font.size = Pt(9)
+        p.font.color.rgb = GRAY_TEXT
+        p.alignment = PP_ALIGN.CENTER
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    def add_accent_line(slide, x, y, width):
+        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, width, Inches(0.05))
+        line.fill.solid()
+        line.fill.fore_color.rgb = ECI_ACCENT_RGB
+        line.line.fill.background()
+
+    # ── Slide 1: Title ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_bg(slide)
+
+    # Try to add actual ECI logo
+    try:
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eci_logo_white.png")
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(logo_path, Inches(0.5), Inches(0.4), height=Inches(0.9))
+    except Exception:
+        logo_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.4), Inches(2), Inches(0.9))
+        tf = logo_box.text_frame
+        p = tf.paragraphs[0]
+        p.text = "ECI"
+        p.font.size = Pt(36)
+        p.font.color.rgb = WHITE
+        p.font.bold = True
+
+    add_accent_line(slide, Inches(0.8), Inches(2.3), Inches(3))
+
+    title_box = slide.shapes.add_textbox(Inches(0.8), Inches(2.5), Inches(11), Inches(3))
+    tf = title_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = "PROJECT PROPOSAL"
+    p.font.size = Pt(44)
+    p.font.color.rgb = WHITE
+    p.font.bold = True
+
+    p2 = tf.add_paragraph()
+    p2.text = safe_str(se.get("project_type", "Technology Solution"))
+    p2.font.size = Pt(24)
+    p2.font.color.rgb = ECI_ACCENT_RGB
+    p2.space_before = Pt(8)
+
+    p3 = tf.add_paragraph()
+    p3.text = "\nPrepared by ECI Consulting  |  Agent BELAL"
+    p3.font.size = Pt(14)
+    p3.font.color.rgb = RGBColor(180, 200, 220)
+
+    p4 = tf.add_paragraph()
+    p4.text = datetime.now().strftime("%B %d, %Y")
+    p4.font.size = Pt(14)
+    p4.font.color.rgb = RGBColor(180, 200, 220)
+
+    # ── Slide 2: Executive Summary ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Executive Summary")
+    add_footer(slide)
+
+    kpi_data = [
+        ("Requirements", str(len(safe_list(se.get("requirements"))))),
+        ("Total Hours", str(safe_int(te.get("total_hours")))),
+        ("Infra Cost/Mo", "$" + str(safe_int(ce.get("total_monthly_cost")))),
+        ("Risk Level", safe_str(ri.get("overall_level", "N/A"))),
+    ]
+    for i, (label, val) in enumerate(kpi_data):
+        x = Inches(0.5 + i * 3.1)
+        box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, Inches(1.5), Inches(2.8), Inches(1.2))
+        box.fill.solid()
+        box.fill.fore_color.rgb = RGBColor(240, 245, 250)
+        box.line.color.rgb = RGBColor(200, 210, 225)
+        tf = box.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = val
+        p.font.size = Pt(28)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        p2 = tf.add_paragraph()
+        p2.text = label
+        p2.font.size = Pt(12)
+        p2.font.color.rgb = GRAY_TEXT
+        p2.alignment = PP_ALIGN.CENTER
+
+    summary_box = slide.shapes.add_textbox(Inches(0.5), Inches(3.0), Inches(12), Inches(3.5))
+    tf = summary_box.text_frame
+    tf.word_wrap = True
+    for sec in safe_list(proposal.get("sections"))[:2]:
+        sec = safe_dict(sec)
+        p = tf.add_paragraph()
+        p.text = safe_str(sec.get("title", ""))
+        p.font.size = Pt(16)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p.space_after = Pt(4)
+        content = safe_str(sec.get("content", ""))
+        for ln in content.split("\n")[:5]:
+            ln = ln.strip().replace("**", "").replace("_", "")
+            if ln:
+                p2 = tf.add_paragraph()
+                p2.text = ln
+                p2.font.size = Pt(11)
+                p2.font.color.rgb = DARK_TEXT
+                p2.space_after = Pt(2)
+
+    # ── Slide 3: Requirements ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Requirements Analysis")
+    add_footer(slide)
+
+    reqs = safe_list(se.get("requirements"))
+    fn_list = [x for x in reqs if isinstance(x, dict) and x.get("type") == "functional"]
+    nf_list = [x for x in reqs if isinstance(x, dict) and x.get("type") == "non-functional"]
+    ig_list = [x for x in reqs if isinstance(x, dict) and x.get("type") == "integration"]
+
+    cats = [("Functional", fn_list, ECI_GREEN_RGB), ("Non-Functional", nf_list, ECI_ACCENT_RGB), ("Integration", ig_list, RGBColor(123, 97, 255))]
+    for ci, (cat_label, cat_items, cat_clr) in enumerate(cats):
+        x = Inches(0.3 + ci * 4.3)
+        header_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, Inches(1.5), Inches(4), Inches(0.6))
+        header_box.fill.solid()
+        header_box.fill.fore_color.rgb = cat_clr
+        header_box.line.fill.background()
+        tf = header_box.text_frame
+        p = tf.paragraphs[0]
+        p.text = cat_label + " (" + str(len(cat_items)) + ")"
+        p.font.size = Pt(14)
+        p.font.color.rgb = WHITE
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+        items_box = slide.shapes.add_textbox(x + Inches(0.1), Inches(2.2), Inches(3.8), Inches(4.5))
+        tf = items_box.text_frame
+        tf.word_wrap = True
+        for req in cat_items[:8]:
+            req = safe_dict(req)
+            p = tf.add_paragraph()
+            p.text = "\u2022 " + safe_str(req.get("title"))
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_TEXT
+            p.space_after = Pt(3)
+
+    # ── Slide 4: Timeline & Phases ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Timeline & Phases")
+    add_footer(slide)
+
+    phases = safe_list(te.get("phases"))
+    colors_pptx = [RGBColor(0, 212, 170), RGBColor(0, 180, 216), RGBColor(123, 97, 255),
+                   RGBColor(255, 107, 107), RGBColor(255, 209, 102), RGBColor(6, 214, 160)]
+    for i, phase in enumerate(phases[:6]):
+        phase = safe_dict(phase)
+        x = Inches(0.5 + (i % 3) * 4.1)
+        y = Inches(1.5 + (i // 3) * 2.5)
+        box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, Inches(3.8), Inches(2.2))
+        box.fill.solid()
+        box.fill.fore_color.rgb = RGBColor(245, 248, 252)
+        box.line.color.rgb = colors_pptx[i % 6]
+
+        tf = box.text_frame
+        tf.word_wrap = True
+        tf.margin_left = Inches(0.15)
+        p = tf.paragraphs[0]
+        p.text = safe_str(phase.get("name"))
+        p.font.size = Pt(16)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+
+        p2 = tf.add_paragraph()
+        p2.text = str(safe_int(phase.get("hours"))) + " hours  |  " + safe_str(phase.get("percentage"))
+        p2.font.size = Pt(12)
+        p2.font.color.rgb = ECI_ACCENT_RGB
+        p2.font.bold = True
+
+        for task in safe_list(phase.get("tasks"))[:3]:
+            task = safe_dict(task)
+            p3 = tf.add_paragraph()
+            p3.text = "\u2022 " + safe_str(task.get("name")) + " (" + safe_str(task.get("role")) + ")"
+            p3.font.size = Pt(9)
+            p3.font.color.rgb = GRAY_TEXT
+
+    # Summary bar at bottom
+    summ_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(6.3), Inches(12.3), Inches(0.6))
+    summ_box.fill.solid()
+    summ_box.fill.fore_color.rgb = RGBColor(240, 245, 250)
+    summ_box.line.color.rgb = ECI_ACCENT_RGB
+    tf = summ_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = "Total: " + str(safe_int(te.get("total_hours"))) + " hours  |  Duration: " + safe_str(te.get("duration_weeks")) + "  |  Confidence: " + safe_str(te.get("confidence")) + "  |  Buffer: " + safe_str(te.get("buffer"))
+    p.font.size = Pt(12)
+    p.font.color.rgb = ECI_BLUE_RGB
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    # ── Slide 5: Infrastructure Costs ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Infrastructure Cost Estimate")
+    add_footer(slide)
+
+    monthly = safe_int(ce.get("total_monthly_cost"))
+    annual = safe_int(ce.get("total_annual_cost"))
+    for i, (label, val) in enumerate([("Monthly Cost", "$" + str(monthly)), ("Annual Cost", "$" + str(annual))]):
+        box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5 + i * 4), Inches(1.5), Inches(3.5), Inches(1))
+        box.fill.solid()
+        box.fill.fore_color.rgb = RGBColor(240, 245, 250)
+        box.line.color.rgb = ECI_ACCENT_RGB
+        tf = box.text_frame
+        p = tf.paragraphs[0]
+        p.text = val
+        p.font.size = Pt(24)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        p2 = tf.add_paragraph()
+        p2.text = label
+        p2.font.size = Pt(11)
+        p2.font.color.rgb = GRAY_TEXT
+        p2.alignment = PP_ALIGN.CENTER
+
+    services_box = slide.shapes.add_textbox(Inches(0.5), Inches(2.8), Inches(12), Inches(3.8))
+    tf = services_box.text_frame
+    tf.word_wrap = True
+    for svc in safe_list(ce.get("azure_costs"))[:12]:
+        svc = safe_dict(svc)
+        p = tf.add_paragraph()
+        p.text = safe_str(svc.get("service")) + "  \u2014  $" + str(safe_int(svc.get("monthly_cost"))) + "/mo  (" + safe_str(svc.get("tier", "")) + ")"
+        p.font.size = Pt(11)
+        p.font.color.rgb = DARK_TEXT
+        p.space_after = Pt(3)
+
+    # ── Slide 6: Risk Assessment ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Risk Assessment")
+    add_footer(slide)
+
+    score = safe_int(ri.get("overall_score"))
+    score_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(1.5), Inches(3), Inches(1.2))
+    score_box.fill.solid()
+    score_box.fill.fore_color.rgb = RGBColor(240, 245, 250)
+    score_clr = ECI_GREEN_RGB if score <= 3 else RGBColor(255, 209, 102) if score <= 6 else RGBColor(255, 107, 107)
+    score_box.line.color.rgb = score_clr
+    tf = score_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = str(score) + "/10"
+    p.font.size = Pt(32)
+    p.font.color.rgb = score_clr
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+    p2 = tf.add_paragraph()
+    p2.text = "Overall: " + safe_str(ri.get("overall_level"))
+    p2.font.size = Pt(14)
+    p2.font.color.rgb = GRAY_TEXT
+    p2.alignment = PP_ALIGN.CENTER
+
+    risks_box = slide.shapes.add_textbox(Inches(4), Inches(1.5), Inches(8.5), Inches(5))
+    tf = risks_box.text_frame
+    tf.word_wrap = True
+    for rk in safe_list(ri.get("risks")):
+        rk = safe_dict(rk)
+        p = tf.add_paragraph()
+        p.text = safe_str(rk.get("category")) + ": " + safe_str(rk.get("title")) + " [" + safe_str(rk.get("severity")) + "]"
+        p.font.size = Pt(13)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p.space_after = Pt(2)
+        p2 = tf.add_paragraph()
+        p2.text = "Mitigation: " + safe_str(rk.get("mitigation"))
+        p2.font.size = Pt(10)
+        p2.font.color.rgb = GRAY_TEXT
+        p2.space_after = Pt(8)
+
+    # ── Slide 7: Architecture ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Solution Architecture")
+    add_footer(slide)
+
+    pattern_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(12), Inches(0.5))
+    tf = pattern_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = "Pattern: " + safe_str(ar.get("pattern"))
+    p.font.size = Pt(16)
+    p.font.color.rgb = ECI_ACCENT_RGB
+    p.font.bold = True
+
+    comps = safe_list(ar.get("components"))
+    for i, comp in enumerate(comps[:6]):
+        comp = safe_dict(comp)
+        x = Inches(0.5 + (i % 3) * 4.1)
+        y = Inches(2.2 + (i // 3) * 2.3)
+        box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, Inches(3.8), Inches(2))
+        box.fill.solid()
+        box.fill.fore_color.rgb = RGBColor(245, 248, 252)
+        box.line.color.rgb = ECI_ACCENT_RGB
+        tf = box.text_frame
+        tf.word_wrap = True
+        tf.margin_left = Inches(0.15)
+        p = tf.paragraphs[0]
+        p.text = safe_str(comp.get("name"))
+        p.font.size = Pt(14)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p2 = tf.add_paragraph()
+        p2.text = safe_str(comp.get("azure_service", ""))
+        p2.font.size = Pt(10)
+        p2.font.color.rgb = ECI_ACCENT_RGB
+        for s_item in safe_list(comp.get("services"))[:3]:
+            p3 = tf.add_paragraph()
+            p3.text = "\u2022 " + safe_str(s_item)
+            p3.font.size = Pt(9)
+            p3.font.color.rgb = GRAY_TEXT
+
+    df = safe_list(ar.get("data_flow"))
+    if df:
+        flow_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(6.3), Inches(12.3), Inches(0.6))
+        flow_box.fill.solid()
+        flow_box.fill.fore_color.rgb = RGBColor(240, 245, 250)
+        flow_box.line.color.rgb = ECI_ACCENT_RGB
+        tf = flow_box.text_frame
+        p = tf.paragraphs[0]
+        p.text = "Data Flow:  " + "  \u2192  ".join(safe_str(x) for x in df)
+        p.font.size = Pt(11)
+        p.font.color.rgb = ECI_BLUE_RGB
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    # ── Slide 8: Scope ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title_bar(slide, "Scope Definition")
+    add_footer(slide)
+
+    scope_sections = [
+        ("In Scope", safe_list(sc.get("in_scope")), ECI_GREEN_RGB),
+        ("Out of Scope", safe_list(sc.get("out_of_scope")), RGBColor(255, 107, 107)),
+        ("Assumptions", safe_list(sc.get("assumptions")), ECI_ACCENT_RGB),
+        ("Prerequisites", safe_list(sc.get("prerequisites")), RGBColor(123, 97, 255)),
+    ]
+    for si, (s_title, s_items, s_clr) in enumerate(scope_sections):
+        x = Inches(0.3 + (si % 2) * 6.5)
+        y = Inches(1.4 + (si // 2) * 2.9)
+        hdr_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, Inches(6.2), Inches(0.5))
+        hdr_box.fill.solid()
+        hdr_box.fill.fore_color.rgb = s_clr
+        hdr_box.line.fill.background()
+        tf = hdr_box.text_frame
+        p = tf.paragraphs[0]
+        p.text = s_title
+        p.font.size = Pt(12)
+        p.font.color.rgb = WHITE
+        p.font.bold = True
+        p.alignment = PP_ALIGN.CENTER
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+        items_box = slide.shapes.add_textbox(x + Inches(0.1), y + Inches(0.6), Inches(6), Inches(2.2))
+        tf = items_box.text_frame
+        tf.word_wrap = True
+        for s_item in s_items[:6]:
+            p = tf.add_paragraph()
+            p.text = "\u2022 " + safe_str(s_item)
+            p.font.size = Pt(9)
+            p.font.color.rgb = DARK_TEXT
+            p.space_after = Pt(2)
+
+    # ── Slide 9: Thank You ──
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_bg(slide)
+
+    try:
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eci_logo_white.png")
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(logo_path, Inches(5.5), Inches(1.5), height=Inches(1.2))
+    except Exception:
+        pass
+
+    thank_box = slide.shapes.add_textbox(Inches(2), Inches(3), Inches(9), Inches(2.5))
+    tf = thank_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = "Thank You"
+    p.font.size = Pt(44)
+    p.font.color.rgb = WHITE
+    p.font.bold = True
+    p.alignment = PP_ALIGN.CENTER
+
+    p2 = tf.add_paragraph()
+    p2.text = "ECI Consulting  |  Agent BELAL"
+    p2.font.size = Pt(16)
+    p2.font.color.rgb = ECI_ACCENT_RGB
+    p2.alignment = PP_ALIGN.CENTER
+
+    p3 = tf.add_paragraph()
+    p3.text = datetime.now().strftime("%B %d, %Y")
+    p3.font.size = Pt(14)
+    p3.font.color.rgb = RGBColor(180, 200, 220)
+    p3.alignment = PP_ALIGN.CENTER
+
+    add_accent_line(slide, Inches(4), Inches(5.5), Inches(5))
+
+    p4 = tf.add_paragraph()
+    p4.text = "\nwww.eciconsulting.com"
+    p4.font.size = Pt(11)
+    p4.font.color.rgb = RGBColor(150, 170, 200)
+    p4.alignment = PP_ALIGN.CENTER
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  SESSION STATE
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1247,7 +2217,7 @@ inject_css()
 
 hc1, hc2, hc3 = st.columns([2, 6, 2])
 with hc1:
-    st.markdown('<div class="logo-box"><div class="logo-icon">⚡</div><div><div class="logo-txt">BELAL</div><div class="logo-sub">Agent by ECI</div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="logo-box"><img src="data:image/png;base64,' + ECI_LOGO_BLUE_B64 + '" height="42" style="margin-right:8px;vertical-align:middle"/><div><div class="logo-txt">BELAL</div><div class="logo-sub">Agent by ECI</div></div></div>', unsafe_allow_html=True)
 with hc2:
     st.markdown('<div class="tagline">Business Estimation Leveraging Automated Learning</div>', unsafe_allow_html=True)
 with hc3:
@@ -1455,7 +2425,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📄 Proposal", "📌 Scope"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📄 Proposal", "📌 Scope", "👥 Team & Roles"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -1562,6 +2532,17 @@ def show_results():
         notes = safe_str(ce.get("notes"))
         if notes:
             st.info(notes)
+        # Cost Excel download
+        st.markdown("---")
+        cost_xl_data = generate_cost_excel(ce, te, se)
+        if cost_xl_data:
+            st.download_button(
+                "📥 Download Detailed Cost Estimate (Excel)",
+                data=cost_xl_data,
+                file_name="ECI_Cost_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, type="primary", key="dl_cost_xlsx",
+            )
 
     # ── Risk ──
     with tab_list[3]:
@@ -1612,6 +2593,15 @@ def show_results():
                 mime="application/pdf",
                 use_container_width=True, type="primary", key="dl_proposal_pdf",
             )
+        pptx_data = generate_proposal_pptx(r)
+        if pptx_data:
+            st.download_button(
+                "📥 Download Proposal (PowerPoint)",
+                data=pptx_data,
+                file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True, key="dl_proposal_pptx",
+            )
 
     # ── Scope ──
     with tab_list[6]:
@@ -1632,31 +2622,122 @@ def show_results():
             for x in safe_list(sc.get("prerequisites")):
                 st.markdown("- " + safe_str(x))
 
+    # ── Team & Roles ──
+    with tab_list[7]:
+        st.markdown("### Team Composition & Role Allocation")
+        total_h = safe_int(te.get("total_hours", 0))
+        total_d = total_h / 7
+        roles_data = [
+            ("Project Manager", 0.33, 125, "Stakeholder mgmt, sprint planning, status reports"),
+            ("Solution Architect / Lead", 0.33, 150, "Architecture design, technical decisions, code reviews"),
+            ("Backend Developer", 1.0, 110, "API development, business logic, integrations"),
+            ("Frontend Developer", 0.0, 100, "UI/UX implementation (Teams bot — no custom frontend)"),
+            ("DevOps Engineer", 0.25, 120, "Azure infrastructure, CI/CD, monitoring"),
+            ("QA Engineer", 0.50, 95, "Unit, integration, performance, UAT testing"),
+            ("Product Owner", 0.10, 130, "Requirements validation, UAT coordination"),
+        ]
+        rc1, rc2 = st.columns([3, 2])
+        with rc1:
+            role_names = []
+            role_days = []
+            role_colors = ["#00d4aa", "#00b4d8", "#7b61ff", "#ff6b6b", "#ffd166", "#06d6a0", "#e9c46a"]
+            for role_name, pct, rate, desc in roles_data:
+                days = round(total_d * pct, 1)
+                hours = int(round(days * 7, 0))
+                if hours > 0:
+                    role_names.append(role_name)
+                    role_days.append(days)
+                st.markdown('<div class="ri"><strong>' + role_name + '</strong> — ' + str(int(pct * 100)) + '% allocation<div class="ri-c">' + str(days) + ' days / ' + str(hours) + ' hrs @ $' + str(rate) + '/hr = $' + str(hours * rate) + '</div><p>' + desc + '</p></div>', unsafe_allow_html=True)
+        with rc2:
+            if role_names:
+                fig_roles = px.pie(values=role_days, names=role_names, title="Team Allocation (Days)",
+                                   color_discrete_sequence=role_colors)
+                fig_roles.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=400)
+                st.plotly_chart(fig_roles, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("### Project Duration Summary")
+        dur_cols = st.columns(4)
+        weeks_str = safe_str(te.get("duration_weeks", "N/A"))
+        with dur_cols[0]:
+            st.metric("Total Hours", str(total_h))
+        with dur_cols[1]:
+            st.metric("Total Days", str(round(total_d, 1)))
+        with dur_cols[2]:
+            st.metric("Duration", weeks_str)
+        with dur_cols[3]:
+            st.metric("Incl. Leaves & Holidays", weeks_str.replace("weeks", "").strip() + " + 2 weeks" if "weeks" in weeks_str.lower() else "N/A")
+
+        st.markdown("---")
+        st.markdown("### Prerequisites")
+        prereqs = [
+            "Azure subscription with Contributor/Owner access at resource group level",
+            "SharePoint Online Read/Write access to document library",
+            "Sample documents from all types (PDF, Excel, PPT, Word)",
+            "Microsoft Teams admin consent for bot deployment",
+            "Azure AD user accounts for MVP users",
+            "Service principal credentials with SharePoint API access",
+        ]
+        for i, p in enumerate(prereqs, 1):
+            st.markdown(str(i) + ". " + p)
+
     # ── Delivery ──
     st.markdown("---")
     st.markdown('<div class="shdr"><span class="shdr-i">🚀</span> Delivery</div>', unsafe_allow_html=True)
 
     # Downloads row
     st.markdown('<div class="shdr" style="font-size:1rem;"><span class="shdr-i">📥</span> Downloads</div>', unsafe_allow_html=True)
-    dl_cols = st.columns(3)
-    with dl_cols[0]:
+    dl_row1 = st.columns(3)
+    with dl_row1[0]:
         xl_data = generate_time_excel(te, se)
         if xl_data:
             st.download_button("📊 Time Estimate (Excel)", data=xl_data,
                                file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True, type="primary", key="bdl_xl")
-    with dl_cols[1]:
+    with dl_row1[1]:
+        cost_xl = generate_cost_excel(ce, te, se)
+        if cost_xl:
+            st.download_button("💰 Cost Estimate (Excel)", data=cost_xl,
+                               file_name="ECI_Cost_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, type="primary", key="bdl_cost_xl")
+    with dl_row1[2]:
         pdf_data = generate_proposal_pdf(r)
         if pdf_data:
             st.download_button("📄 Proposal (PDF)", data=pdf_data,
                                file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
                                mime="application/pdf",
                                use_container_width=True, type="primary", key="bdl_pdf")
-    with dl_cols[2]:
+    dl_row2 = st.columns(3)
+    with dl_row2[0]:
+        pptx_dl = generate_proposal_pptx(r)
+        if pptx_dl:
+            st.download_button("📑 Proposal (PowerPoint)", data=pptx_dl,
+                               file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pptx",
+                               mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                               use_container_width=True, type="primary", key="bdl_pptx")
+    with dl_row2[1]:
         st.download_button("📋 Full Data (JSON)", data=json.dumps(r, indent=2, default=str),
                            file_name="belal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
                            mime="application/json", use_container_width=True, key="bdl")
+    with dl_row2[2]:
+        # Zip bundle of all deliverables
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            if xl_data:
+                zf.writestr("ECI_Time_Estimate.xlsx", xl_data)
+            if cost_xl:
+                zf.writestr("ECI_Cost_Estimate.xlsx", cost_xl)
+            if pdf_data:
+                zf.writestr("ECI_Proposal.pdf", pdf_data)
+            if pptx_dl:
+                zf.writestr("ECI_Proposal.pptx", pptx_dl)
+            zf.writestr("BELAL_Data.json", json.dumps(r, indent=2, default=str))
+        zip_buf.seek(0)
+        st.download_button("📦 All Deliverables (ZIP)", data=zip_buf.getvalue(),
+                           file_name="ECI_Deliverables_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".zip",
+                           mime="application/zip", use_container_width=True, key="bdl_zip")
 
     # Actions row
     st.markdown('<div class="shdr" style="font-size:1rem;"><span class="shdr-i">⚡</span> Actions</div>', unsafe_allow_html=True)
