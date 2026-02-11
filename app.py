@@ -4401,6 +4401,15 @@ def show_results():
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 use_container_width=True, key="dl_proposal_pptx",
             )
+        sow_data = generate_sow_pdf(r)
+        if sow_data:
+            st.download_button(
+                "📥 Download Statement of Work (PDF)",
+                data=sow_data,
+                file_name="ECI_SOW_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
+                mime="application/pdf",
+                use_container_width=True, type="primary", key="dl_sow_pdf",
+            )
 
     # ── Scope ──
     with tab_list[6]:
@@ -4518,10 +4527,18 @@ def show_results():
                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                use_container_width=True, type="primary", key="bdl_pptx")
     with dl_row2[1]:
+        sow_dl = generate_sow_pdf(r)
+        if sow_dl:
+            st.download_button("📝 Statement of Work (PDF)", data=sow_dl,
+                               file_name="ECI_SOW_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
+                               mime="application/pdf",
+                               use_container_width=True, type="primary", key="bdl_sow")
+    with dl_row2[2]:
         st.download_button("📋 Full Data (JSON)", data=json.dumps(r, indent=2, default=str),
                            file_name="belal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
                            mime="application/json", use_container_width=True, key="bdl")
-    with dl_row2[2]:
+    dl_row3 = st.columns(3)
+    with dl_row3[0]:
         # Zip bundle of all deliverables
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -4533,6 +4550,8 @@ def show_results():
                 zf.writestr("ECI_Proposal.pdf", pdf_data)
             if pptx_dl:
                 zf.writestr("ECI_Proposal.pptx", pptx_dl)
+            if sow_dl:
+                zf.writestr("ECI_Statement_of_Work.pdf", sow_dl)
             zf.writestr("BELAL_Data.json", json.dumps(r, indent=2, default=str))
         zip_buf.seek(0)
         st.download_button("📦 All Deliverables (ZIP)", data=zip_buf.getvalue(),
