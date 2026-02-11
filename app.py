@@ -2907,6 +2907,456 @@ def generate_proposal_pdf(results):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  SOW (STATEMENT OF WORK) PDF GENERATOR (ECI Template)
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_sow_pdf(results):
+    """Generate a professional Statement of Work PDF using ECI branding.
+
+    Includes: project overview, scope, deliverables, timeline, team,
+    acceptance criteria, assumptions, payment terms, and signatures.
+    """
+    if not HAS_REPORTLAB:
+        return None
+    buf = io.BytesIO()
+    styles = _eci_styles()
+    eci_blue = rl_colors.Color(27/255, 58/255, 92/255)
+    eci_light = rl_colors.Color(214/255, 228/255, 240/255)
+    eci_accent = rl_colors.Color(0, 180/255, 216/255)
+    eci_green = rl_colors.Color(0, 212/255, 170/255)
+    gray = rl_colors.Color(100/255, 100/255, 100/255)
+
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=25*mm, bottomMargin=20*mm,
+                            leftMargin=18*mm, rightMargin=18*mm,
+                            title="ECI Statement of Work", author="ECI Consulting — Agent BELAL")
+    elements = []
+
+    se = safe_dict(results.get("semantic_analysis"))
+    te = safe_dict(results.get("time_estimate"))
+    ce = safe_dict(results.get("cost_estimate"))
+    ri = safe_dict(results.get("risk_assessment"))
+    ar = safe_dict(results.get("architecture"))
+    sc = safe_dict(results.get("scope"))
+    proposal = safe_dict(results.get("proposal"))
+    project_title = safe_str(se.get("project_type", "Technology Solution"))
+
+    # ── Cover Page ──
+    elements.append(Spacer(1, 50))
+    cover_data = [
+        [Paragraph("<b>STATEMENT OF WORK</b>", styles["ECITitle"])],
+        [Paragraph(project_title, styles["ECISubtitle"])],
+        [Paragraph("", styles["ECISubtitle"])],
+        [Paragraph("Prepared by: ECI Consulting", styles["ECISubtitle"])],
+        [Paragraph("Prepared for: [Client Name]", styles["ECISubtitle"])],
+        [Paragraph("Date: " + datetime.now().strftime("%B %d, %Y"), styles["ECISubtitle"])],
+        [Paragraph("Version: 1.0  |  Status: DRAFT", styles["ECISubtitle"])],
+    ]
+    cover = Table(cover_data, colWidths=[480])
+    cover.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), eci_blue),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(cover)
+    elements.append(Spacer(1, 30))
+    elements.append(Paragraph("CONFIDENTIAL — This document contains proprietary information.", styles["ECISmall"]))
+    elements.append(PageBreak())
+
+    # ── Table of Contents ──
+    elements.append(Paragraph("Table of Contents", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+    toc_items = [
+        "1. Project Overview",
+        "2. Scope of Work",
+        "3. Deliverables",
+        "4. Detailed Task Breakdown and Timeline",
+        "5. Team Composition and Roles",
+        "6. Infrastructure and Cost Estimate",
+        "7. Risk Assessment",
+        "8. Assumptions and Dependencies",
+        "9. Acceptance Criteria",
+        "10. Change Management",
+        "11. Payment Terms",
+        "12. Signatures",
+    ]
+    for item in toc_items:
+        elements.append(Paragraph(item, styles["ECIBody"]))
+    elements.append(PageBreak())
+
+    # ── 1. Project Overview ──
+    elements.append(Paragraph("1. Project Overview", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+    # Executive summary from proposal if available
+    exec_summary = ""
+    for sec in safe_list(proposal.get("sections")):
+        sec = safe_dict(sec)
+        if "executive" in safe_str(sec.get("title")).lower() or "overview" in safe_str(sec.get("title")).lower():
+            exec_summary = safe_str(sec.get("content"))
+            break
+    if exec_summary:
+        elements.extend(_md_to_para(exec_summary, styles))
+    else:
+        elements.append(Paragraph("This Statement of Work defines the scope, deliverables, timeline, and terms for the " + project_title + " project.", styles["ECIBody"]))
+    elements.append(Spacer(1, 6))
+
+    # KPI summary
+    kpi_data = [
+        [Paragraph("<b>" + str(len(safe_list(se.get("requirements")))) + "</b>", styles["ECIKPIVal"]),
+         Paragraph("<b>" + str(safe_int(te.get("total_hours"))) + "</b>", styles["ECIKPIVal"]),
+         Paragraph("<b>" + safe_str(te.get("duration_weeks")) + "</b>", styles["ECIKPIVal"]),
+         Paragraph("<b>$" + str(safe_int(ce.get("total_monthly_cost"))) + "/mo</b>", styles["ECIKPIVal"])],
+        [Paragraph("Requirements", styles["ECIKPILabel"]),
+         Paragraph("Total Hours", styles["ECIKPILabel"]),
+         Paragraph("Duration", styles["ECIKPILabel"]),
+         Paragraph("Infra Cost", styles["ECIKPILabel"])],
+    ]
+    kpi_table = Table(kpi_data, colWidths=[120, 120, 120, 120])
+    kpi_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), eci_light),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.white),
+    ]))
+    elements.append(kpi_table)
+    elements.append(Spacer(1, 6))
+
+    # Business objectives
+    objectives = safe_list(se.get("business_objectives"))
+    if objectives:
+        elements.append(Paragraph("<b>Business Objectives:</b>", styles["ECIBody"]))
+        for obj in objectives:
+            elements.append(Paragraph(safe_str(obj), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(PageBreak())
+
+    # ── 2. Scope of Work ──
+    elements.append(Paragraph("2. Scope of Work", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph("<b>In Scope:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("in_scope")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("<b>Out of Scope:</b>", styles["ECIBody"]))
+    for item in safe_list(sc.get("out_of_scope")):
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(PageBreak())
+
+    # ── 3. Deliverables ──
+    elements.append(Paragraph("3. Deliverables", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    # Build deliverables from phases
+    deliverable_rows = []
+    phase_idx = 1
+    for phase in safe_list(te.get("phases")):
+        phase = safe_dict(phase)
+        ph_name = safe_str(phase.get("name"))
+        ph_week = safe_str(phase.get("week_label"))
+        tasks = safe_list(phase.get("tasks"))
+        task_names = ", ".join(safe_str(safe_dict(t).get("name")) for t in tasks[:3])
+        if len(tasks) > 3:
+            task_names += " (+" + str(len(tasks) - 3) + " more)"
+        deliverable_rows.append([str(phase_idx), ph_name, ph_week, task_names])
+        phase_idx += 1
+
+    if deliverable_rows:
+        elements.append(_eci_table(
+            ["#", "Deliverable", "Timeline", "Key Tasks"],
+            deliverable_rows,
+            [30, 120, 80, 250],
+        ))
+    elements.append(PageBreak())
+
+    # ── 4. Detailed Task Breakdown and Timeline ──
+    elements.append(Paragraph("4. Detailed Task Breakdown and Timeline", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph(
+        "Total Estimated Hours: <b>" + str(safe_int(te.get("total_hours"))) + "</b>"
+        + "  |  Duration: <b>" + safe_str(te.get("duration_weeks")) + "</b>"
+        + "  |  Confidence: <b>" + safe_str(te.get("confidence")) + "</b>"
+        + "  |  Buffer: <b>" + safe_str(te.get("buffer")) + "</b>",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 6))
+
+    three_pt = safe_dict(te.get("three_point"))
+    elements.append(Paragraph(
+        "Three-Point Estimate: Optimistic <b>" + str(safe_int(three_pt.get("optimistic"))) + "h</b>"
+        + "  |  Most Likely <b>" + str(safe_int(three_pt.get("most_likely"))) + "h</b>"
+        + "  |  Pessimistic <b>" + str(safe_int(three_pt.get("pessimistic"))) + "h</b>",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 8))
+
+    for phase in safe_list(te.get("phases")):
+        phase = safe_dict(phase)
+        ph_name = safe_str(phase.get("name"))
+        ph_week = safe_str(phase.get("week_label"))
+        ph_hours = safe_int(phase.get("hours"))
+        ph_low = safe_int(phase.get("low_hours"))
+        ph_high = safe_int(phase.get("high_hours"))
+        ph_pct = safe_str(phase.get("percentage"))
+
+        elements.append(Paragraph(
+            "<b>" + ph_name + "</b> (" + ph_week + ") — " + str(ph_hours) + "h [" + str(ph_low) + "-" + str(ph_high) + "h] " + ph_pct,
+            styles["ECIBody"],
+        ))
+
+        task_rows = []
+        for task in safe_list(phase.get("tasks")):
+            task = safe_dict(task)
+            task_rows.append([
+                safe_str(task.get("name")),
+                safe_str(task.get("role")),
+                str(safe_int(task.get("low_hours"))),
+                str(safe_int(task.get("hours"))),
+                str(safe_int(task.get("high_hours"))),
+                safe_str(task.get("justification"))[:60],
+            ])
+        if task_rows:
+            elements.append(_eci_table(
+                ["Sub-task", "Role", "Low", "Avg", "High", "Justification"],
+                task_rows,
+                [140, 60, 35, 35, 35, 175],
+            ))
+        elements.append(Spacer(1, 6))
+
+    # Milestones
+    milestones = safe_list(te.get("milestones"))
+    if milestones:
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph("<b>Key Milestones:</b>", styles["ECIBody"]))
+        ms_rows = [[safe_str(m.get("name")), "Week " + str(safe_int(m.get("week"))), safe_str(m.get("description"))]
+                    for m in milestones if isinstance(m, dict)]
+        if ms_rows:
+            elements.append(_eci_table(["Milestone", "Week", "Description"], ms_rows, [150, 80, 250]))
+    elements.append(PageBreak())
+
+    # ── 5. Team Composition and Roles ──
+    elements.append(Paragraph("5. Team Composition and Roles", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    total_h = safe_int(te.get("total_hours", 0))
+    total_d = max(1, total_h / 7)
+    role_rows = []
+    for rl in safe_list(te.get("roles")):
+        rl = safe_dict(rl)
+        role_name = safe_str(rl.get("name"))
+        pct = float(rl.get("allocation_pct", 0))
+        rate = safe_int(rl.get("rate", 100))
+        days = round(total_d * pct, 1)
+        hours = int(round(days * 7, 0))
+        cost = hours * rate
+        role_rows.append([role_name, str(int(pct * 100)) + "%", str(days), str(hours), "$" + str(rate), "$" + str(cost)])
+    if role_rows:
+        elements.append(_eci_table(
+            ["Role", "Allocation", "Days", "Hours", "Rate/hr", "Est. Cost"],
+            role_rows,
+            [110, 55, 50, 50, 55, 80],
+        ))
+    elements.append(PageBreak())
+
+    # ── 6. Infrastructure and Cost Estimate ──
+    elements.append(Paragraph("6. Infrastructure and Cost Estimate", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph(
+        "Monthly Infrastructure Cost: <b>$" + str(safe_int(ce.get("total_monthly_cost"))) + "</b>"
+        + "  |  Annual: <b>$" + str(safe_int(ce.get("total_annual_cost"))) + "</b>",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 6))
+
+    cost_rows = []
+    for svc in safe_list(ce.get("azure_costs")):
+        svc = safe_dict(svc)
+        cost_rows.append([
+            safe_str(svc.get("service")),
+            safe_str(svc.get("tier", "")),
+            "$" + str(safe_int(svc.get("monthly_cost"))),
+            "$" + str(safe_int(svc.get("monthly_cost")) * 12),
+            safe_str(svc.get("description", ""))[:50],
+        ])
+    if cost_rows:
+        elements.append(_eci_table(
+            ["Service", "Tier", "Monthly", "Annual", "Notes"],
+            cost_rows,
+            [110, 70, 60, 60, 180],
+        ))
+    elements.append(PageBreak())
+
+    # ── 7. Risk Assessment ──
+    elements.append(Paragraph("7. Risk Assessment", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph(
+        "Overall Risk Score: <b>" + str(safe_int(ri.get("overall_score"))) + "/10</b>"
+        + "  |  Level: <b>" + safe_str(ri.get("overall_level")) + "</b>",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 6))
+
+    risk_rows = []
+    for rk in safe_list(ri.get("risks")):
+        rk = safe_dict(rk)
+        risk_rows.append([
+            safe_str(rk.get("category")),
+            safe_str(rk.get("title")),
+            safe_str(rk.get("severity")),
+            safe_str(rk.get("mitigation"))[:60],
+        ])
+    if risk_rows:
+        elements.append(_eci_table(
+            ["Category", "Risk", "Severity", "Mitigation"],
+            risk_rows,
+            [80, 140, 60, 200],
+        ))
+    elements.append(PageBreak())
+
+    # ── 8. Assumptions and Dependencies ──
+    elements.append(Paragraph("8. Assumptions and Dependencies", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph("<b>Assumptions:</b>", styles["ECIBody"]))
+    assumptions = safe_list(sc.get("assumptions"))
+    if not assumptions:
+        assumptions = [
+            "Client will provide timely access to required systems and environments",
+            "Key stakeholders will be available for reviews and sign-offs within agreed timelines",
+            "Requirements are baselined — changes will follow the change management process",
+            "Client will provision necessary Azure subscriptions and licenses",
+        ]
+    for item in assumptions:
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("<b>Prerequisites:</b>", styles["ECIBody"]))
+    prereqs = safe_list(sc.get("prerequisites"))
+    if not prereqs:
+        prereqs = [
+            "Signed Statement of Work (this document)",
+            "Cloud subscription access provisioned",
+            "VPN/network access for development team",
+            "Sample data and test accounts provided",
+        ]
+    for item in prereqs:
+        elements.append(Paragraph(safe_str(item), styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(PageBreak())
+
+    # ── 9. Acceptance Criteria ──
+    elements.append(Paragraph("9. Acceptance Criteria", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    acceptance = [
+        "All functional requirements as documented in Section 2 are implemented and verified",
+        "All integration points are operational and tested end-to-end",
+        "Non-functional requirements (performance, security, availability) meet agreed thresholds",
+        "User Acceptance Testing (UAT) completed with formal sign-off from designated stakeholders",
+        "All critical and high-severity defects are resolved prior to go-live",
+        "Technical and user documentation delivered and reviewed",
+        "Knowledge transfer sessions completed with client team",
+        "Production environment deployed and verified with smoke testing",
+    ]
+    for item in acceptance:
+        elements.append(Paragraph(item, styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(PageBreak())
+
+    # ── 10. Change Management ──
+    elements.append(Paragraph("10. Change Management", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph(
+        "Any changes to the scope, timeline, or deliverables defined in this SOW must follow "
+        "the change management process outlined below:",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 4))
+    change_items = [
+        "<b>Change Request Submission:</b> All change requests must be submitted in writing with a description of the change, justification, and expected impact.",
+        "<b>Impact Analysis:</b> ECI will assess the impact on timeline, cost, and resources within 3 business days.",
+        "<b>Approval:</b> Changes must be approved in writing by both parties before implementation.",
+        "<b>Tracking:</b> All approved changes will be tracked in the project change log with updated estimates.",
+    ]
+    for item in change_items:
+        elements.append(Paragraph(item, styles["ECIBullet"], bulletText="\u2022"))
+    elements.append(PageBreak())
+
+    # ── 11. Payment Terms ──
+    elements.append(Paragraph("11. Payment Terms", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    total_hours = safe_int(te.get("total_hours"))
+    payment_rows = [
+        ["Milestone 1: Project Kickoff", "Upon SOW signing", "20%", "Discovery & Design phase"],
+        ["Milestone 2: Development Complete", "Core Development delivered", "30%", "All functional requirements implemented"],
+        ["Milestone 3: UAT Sign-off", "UAT phase completed", "30%", "User acceptance testing approved"],
+        ["Milestone 4: Go-Live", "Production deployment", "20%", "Production deployment and handover complete"],
+    ]
+    elements.append(_eci_table(
+        ["Payment Milestone", "Trigger", "% of Total", "Deliverable"],
+        payment_rows,
+        [120, 120, 60, 180],
+    ))
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph(
+        "<b>Note:</b> Payment terms are subject to negotiation. Infrastructure costs (Section 6) "
+        "are billed separately on a monthly basis based on actual consumption.",
+        styles["ECIBody"],
+    ))
+    elements.append(PageBreak())
+
+    # ── 12. Signatures ──
+    elements.append(Paragraph("12. Signatures", styles["ECIHeading"]))
+    elements.append(HRFlowable(width="30%", thickness=2, color=eci_accent, spaceAfter=8))
+
+    elements.append(Paragraph(
+        "By signing below, both parties agree to the terms and conditions outlined in this Statement of Work.",
+        styles["ECIBody"],
+    ))
+    elements.append(Spacer(1, 20))
+
+    sig_data = [
+        [Paragraph("<b>For: ECI Consulting</b>", styles["ECIBody"]), Paragraph("", styles["ECIBody"]),
+         Paragraph("<b>For: [Client Name]</b>", styles["ECIBody"])],
+        [Paragraph("", styles["ECIBody"]), Paragraph("", styles["ECIBody"]), Paragraph("", styles["ECIBody"])],
+        [Paragraph("____________________________", styles["ECIBody"]), Paragraph("", styles["ECIBody"]),
+         Paragraph("____________________________", styles["ECIBody"])],
+        [Paragraph("Name:", styles["ECIBody"]), Paragraph("", styles["ECIBody"]),
+         Paragraph("Name:", styles["ECIBody"])],
+        [Paragraph("Title:", styles["ECIBody"]), Paragraph("", styles["ECIBody"]),
+         Paragraph("Title:", styles["ECIBody"])],
+        [Paragraph("Date:", styles["ECIBody"]), Paragraph("", styles["ECIBody"]),
+         Paragraph("Date:", styles["ECIBody"])],
+    ]
+    sig_table = Table(sig_data, colWidths=[200, 80, 200])
+    sig_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(sig_table)
+
+    # ── Build PDF ──
+    def _sow_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setStrokeColor(rl_colors.Color(27/255, 58/255, 92/255))
+        canvas.line(18*mm, 15*mm, A4[0] - 18*mm, 15*mm)
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(rl_colors.Color(100/255, 100/255, 100/255))
+        canvas.drawString(18*mm, 10*mm, "ECI Consulting  |  Statement of Work  |  CONFIDENTIAL  |  " + datetime.now().strftime("%B %d, %Y"))
+        canvas.drawRightString(A4[0] - 18*mm, 10*mm, "Page " + str(canvas.getPageNumber()))
+        canvas.restoreState()
+
+    doc.build(elements, onFirstPage=_sow_footer, onLaterPages=_sow_footer)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  PPTX PROPOSAL GENERATOR (ECI Template)
 # ═══════════════════════════════════════════════════════════════════════
 
