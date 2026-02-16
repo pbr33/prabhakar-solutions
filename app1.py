@@ -192,6 +192,88 @@ def safe_dict(val):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  MERMAID.JS DIAGRAM RENDERER
+# ═══════════════════════════════════════════════════════════════════════
+
+def render_mermaid(mermaid_code, height=450):
+    """Render a Mermaid.js diagram using streamlit HTML component."""
+    html = f"""<div class="mermaid-container" style="background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:16px;margin:8px 0;">
+    <pre class="mermaid" style="text-align:center;">
+{mermaid_code}
+    </pre>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({{startOnLoad:true, theme:'dark', themeVariables:{{primaryColor:'#16274B',primaryTextColor:'#e2e8f0',primaryBorderColor:'#00929E',lineColor:'#00b4d8',secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',fontFamily:'DM Sans, sans-serif'}}}});</script>"""
+    st.components.v1.html(html, height=height, scrolling=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AUDIO / VIDEO TRANSCRIPT EXTRACTOR
+# ═══════════════════════════════════════════════════════════════════════
+
+def extract_audio_transcript(uploaded_file):
+    """Extract transcript from uploaded transcript files. Returns text."""
+    name = uploaded_file.name.lower()
+    data = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    # For text-based transcript files (SRT, VTT, TXT)
+    if name.endswith((".txt", ".srt", ".vtt")):
+        text = data.decode("utf-8", errors="replace")
+        text = re.sub(r'\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}', '', text)
+        text = re.sub(r'^\d+$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'WEBVTT.*?\n', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+    # For JSON transcript exports (Teams, Zoom, Otter.ai)
+    if name.endswith(".json"):
+        try:
+            transcript_data = json.loads(data.decode("utf-8"))
+            parts = []
+            if isinstance(transcript_data, list):
+                for item in transcript_data:
+                    if isinstance(item, dict):
+                        speaker = item.get("speaker", item.get("name", "Speaker"))
+                        text_val = item.get("text", item.get("content", item.get("transcript", "")))
+                        if text_val:
+                            parts.append(f"{speaker}: {text_val}")
+            elif isinstance(transcript_data, dict):
+                for seg in transcript_data.get("segments", transcript_data.get("results", transcript_data.get("transcript", []))):
+                    if isinstance(seg, dict):
+                        speaker = seg.get("speaker", "Speaker")
+                        text_val = seg.get("text", seg.get("content", ""))
+                        if text_val:
+                            parts.append(f"{speaker}: {text_val}")
+            return "\n".join(parts) if parts else data.decode("utf-8", errors="replace")[:50000]
+        except Exception:
+            return data.decode("utf-8", errors="replace")[:50000]
+
+    # For DOCX transcripts (exported meeting notes)
+    if name.endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception:
+            return "[Could not extract DOCX transcript]"
+
+    # For CSV transcript exports
+    if name.endswith(".csv"):
+        text = data.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        parts = []
+        for line in lines[1:]:
+            cols = line.split(",")
+            if len(cols) >= 2:
+                parts.append(cols[-1].strip().strip('"'))
+        return "\n".join(parts) if parts else text[:50000]
+
+    return "[Unsupported format: " + name.split(".")[-1] + ". Please upload TXT, SRT, VTT, JSON, DOCX, or CSV transcript files.]"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  GRAPHVIZ DOT DIAGRAM GENERATORS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1955,6 +2037,239 @@ class AzureAI:
             {"title": "Timeline", "content": "\n".join("- **" + safe_str(safe_dict(p).get("name")) + "** — " + str(safe_int(safe_dict(p).get("hours"))) + "h (" + safe_str(safe_dict(p).get("percentage")) + ")" for p in safe_list(te.get("phases")))},
             {"title": "Infrastructure Costs", "content": "**Monthly:** $" + str(monthly) + "  |  **Annual:** $" + str(annual) + "\n\n" + "\n".join("- **" + safe_str(safe_dict(a).get("service")) + "** (" + safe_str(safe_dict(a).get("tier", "")) + "): $" + str(safe_int(safe_dict(a).get("monthly_cost"))) + "/mo" for a in safe_list(ce.get("azure_costs")))},
         ], "quality_checks": {"ECI Tone": True, "Personalization": True, "Terminology": True, "Value Proposition": True, "Structure": True}}
+
+    # ── Mermaid Diagram Generation ──
+    def generate_mermaid_diagrams(self, semantic, arch):
+        r = self._call(
+            "You are an Azure Solutions Architect for ECI. Generate Mermaid.js diagram code for the architecture. "
+            "Return JSON with these keys, each containing VALID Mermaid syntax as a string:\n"
+            "{\"infrastructure\": str (graph TD diagram of Azure components and connections),\n"
+            " \"data_flow\": str (flowchart LR diagram showing data movement between services),\n"
+            " \"sequence\": str (sequenceDiagram showing a typical user request flow),\n"
+            " \"deployment\": str (graph TD diagram showing CI/CD pipeline and environments),\n"
+            " \"security\": str (graph TD diagram showing security layers and controls)}",
+            "Architecture:\nPattern: " + safe_str(arch.get("pattern"))
+            + "\nComponents: " + json.dumps(safe_list(arch.get("components"))[:10], default=str)
+            + "\nData Flow: " + json.dumps(safe_list(arch.get("data_flow")))
+            + "\nSecurity: " + json.dumps(safe_list(arch.get("security")))
+            + "\nTech: " + json.dumps(safe_list(semantic.get("technology_stack"))),
+        )
+        if r and isinstance(r, dict) and "infrastructure" in r:
+            return r
+        return self._fb_mermaid(arch)
+
+    # ── Transcript Analysis & WBS ──
+    def analyze_transcript(self, transcript_text):
+        r = self._call(
+            "You are an expert ECI presales analyst. Analyze this meeting transcript/voice note. "
+            "Extract requirements, pain points (from tone/urgency), stakeholders, decisions, and action items. "
+            "Generate a Work Breakdown Structure. Return JSON:\n"
+            "{\"pain_points\": [{\"issue\": str, \"severity\": \"High\" or \"Medium\" or \"Low\", \"quote\": str, \"stakeholder\": str}],\n"
+            " \"requirements_extracted\": [{\"title\": str, \"description\": str, \"type\": \"functional\" or \"non-functional\" or \"integration\", \"source\": str}],\n"
+            " \"stakeholders\": [{\"name\": str, \"role\": str, \"concerns\": [str]}],\n"
+            " \"decisions\": [str], \"action_items\": [{\"item\": str, \"owner\": str, \"priority\": str}],\n"
+            " \"wbs\": [{\"phase\": str, \"deliverables\": [{\"name\": str, \"tasks\": [{\"name\": str, \"effort\": str}]}]}],\n"
+            " \"meeting_summary\": str, \"sentiment\": str, \"key_themes\": [str]}",
+            "Transcript:\n\n" + transcript_text[:15000],
+        )
+        if r and isinstance(r, dict) and "wbs" in r:
+            return r
+        return self._fb_transcript(transcript_text)
+
+    # ═══ FALLBACK: Mermaid Diagrams ═══
+    def _fb_mermaid(self, arch):
+        comps = safe_list(arch.get("components"))
+
+        infra = "graph TD\n"
+        infra += "    User([fa:fa-user Client Browser])\n"
+        infra += "    CDN[fa:fa-globe Azure Front Door / CDN]\n"
+        infra += "    APIM[fa:fa-exchange API Management]\n"
+        infra += "    APP[fa:fa-server App Service]\n"
+        infra += "    FUNC[fa:fa-bolt Azure Functions]\n"
+        infra += "    SQL[(fa:fa-database Azure SQL)]\n"
+        infra += "    COSMOS[(fa:fa-database Cosmos DB)]\n"
+        infra += "    REDIS[fa:fa-tachometer Redis Cache]\n"
+        infra += "    BLOB[fa:fa-archive Blob Storage]\n"
+        infra += "    SB[fa:fa-envelope Service Bus]\n"
+        infra += "    KV[fa:fa-key Key Vault]\n"
+        infra += "    AD[fa:fa-shield Azure AD]\n"
+        infra += "    MON[fa:fa-eye App Insights / Monitor]\n\n"
+        infra += "    User --> CDN --> APIM --> APP\n"
+        infra += "    APP --> SQL\n"
+        infra += "    APP --> COSMOS\n"
+        infra += "    APP --> REDIS\n"
+        infra += "    APP --> BLOB\n"
+        infra += "    APP --> SB --> FUNC\n"
+        infra += "    FUNC --> SQL\n"
+        infra += "    FUNC --> COSMOS\n"
+        infra += "    APP --> KV\n"
+        infra += "    APP --> AD\n"
+        infra += "    APP --> MON\n"
+        infra += "    FUNC --> MON\n\n"
+        infra += "    style User fill:#E8F5E9,stroke:#2E7D32\n"
+        infra += "    style CDN fill:#E3F2FD,stroke:#1565C0\n"
+        infra += "    style APIM fill:#FFF3E0,stroke:#E65100\n"
+        infra += "    style APP fill:#E8EAF6,stroke:#283593\n"
+        infra += "    style FUNC fill:#FCE4EC,stroke:#C62828\n"
+        infra += "    style SQL fill:#F3E5F5,stroke:#6A1B9A\n"
+        infra += "    style COSMOS fill:#F3E5F5,stroke:#6A1B9A\n"
+        infra += "    style SB fill:#FFF8E1,stroke:#F57F17\n"
+        infra += "    style KV fill:#EFEBE9,stroke:#4E342E\n"
+        infra += "    style AD fill:#E0F2F1,stroke:#00695C\n"
+        infra += "    style MON fill:#F1F8E9,stroke:#33691E"
+
+        data_flow = "flowchart LR\n"
+        data_flow += "    A[Client App] -->|HTTPS| B[API Gateway]\n"
+        data_flow += "    B -->|Route| C[App Service]\n"
+        data_flow += "    C -->|Read/Write| D[(SQL Database)]\n"
+        data_flow += "    C -->|Cache| E[Redis Cache]\n"
+        data_flow += "    C -->|Documents| F[Blob Storage]\n"
+        data_flow += "    C -->|Events| G[Service Bus]\n"
+        data_flow += "    G -->|Trigger| H[Azure Functions]\n"
+        data_flow += "    H -->|Process| I[(Cosmos DB)]\n"
+        data_flow += "    H -->|Notify| J[Notification Hub]\n"
+        data_flow += "    C -->|Analytics| K[Power BI]\n"
+        data_flow += "    D -->|Sync| I\n\n"
+        data_flow += "    style A fill:#16274B,color:#fff\n"
+        data_flow += "    style B fill:#00929E,color:#fff\n"
+        data_flow += "    style C fill:#96C038,color:#fff\n"
+        data_flow += "    style H fill:#16274B,color:#fff"
+
+        sequence = "sequenceDiagram\n"
+        sequence += "    participant U as User\n"
+        sequence += "    participant FD as Front Door\n"
+        sequence += "    participant API as API Management\n"
+        sequence += "    participant App as App Service\n"
+        sequence += "    participant Cache as Redis\n"
+        sequence += "    participant DB as SQL Database\n"
+        sequence += "    participant SB as Service Bus\n"
+        sequence += "    participant Func as Functions\n\n"
+        sequence += "    U->>FD: HTTPS Request\n"
+        sequence += "    FD->>API: Route + WAF\n"
+        sequence += "    API->>API: Auth + Rate Limit\n"
+        sequence += "    API->>App: Forward Request\n"
+        sequence += "    App->>Cache: Check Cache\n"
+        sequence += "    alt Cache Hit\n"
+        sequence += "        Cache-->>App: Return Data\n"
+        sequence += "    else Cache Miss\n"
+        sequence += "        App->>DB: Query Data\n"
+        sequence += "        DB-->>App: Result Set\n"
+        sequence += "        App->>Cache: Update Cache\n"
+        sequence += "    end\n"
+        sequence += "    App->>SB: Publish Event\n"
+        sequence += "    SB->>Func: Trigger Processing\n"
+        sequence += "    App-->>U: JSON Response"
+
+        deployment = "graph TD\n"
+        deployment += "    DEV[fa:fa-code Developer] -->|git push| GH[fa:fa-github GitHub]\n"
+        deployment += "    GH -->|trigger| CI[fa:fa-cogs Azure DevOps CI]\n"
+        deployment += "    CI -->|build + test| ART[fa:fa-archive ACR / Artifacts]\n"
+        deployment += "    ART -->|deploy| STG[fa:fa-flask Staging]\n"
+        deployment += "    STG -->|approval gate| PROD[fa:fa-rocket Production]\n"
+        deployment += "    PROD -->|monitor| MON[fa:fa-eye App Insights]\n"
+        deployment += "    MON -->|alert| OPS[fa:fa-bell Ops Team]\n\n"
+        deployment += "    style DEV fill:#E8F5E9,stroke:#2E7D32\n"
+        deployment += "    style GH fill:#F3E5F5,stroke:#6A1B9A\n"
+        deployment += "    style CI fill:#E3F2FD,stroke:#1565C0\n"
+        deployment += "    style ART fill:#FFF3E0,stroke:#E65100\n"
+        deployment += "    style STG fill:#FFF8E1,stroke:#F57F17\n"
+        deployment += "    style PROD fill:#E8EAF6,stroke:#283593\n"
+        deployment += "    style MON fill:#E0F2F1,stroke:#00695C"
+
+        security = "graph TD\n"
+        security += "    EXT[fa:fa-globe External Traffic]\n"
+        security += "    WAF[fa:fa-shield WAF / DDoS Protection]\n"
+        security += "    FD2[fa:fa-lock Front Door + TLS]\n"
+        security += "    APIM2[fa:fa-key API Management + OAuth]\n"
+        security += "    VNET[fa:fa-sitemap Virtual Network]\n"
+        security += "    NSG[fa:fa-filter NSG Rules]\n"
+        security += "    APP2[fa:fa-server App Service + MI]\n"
+        security += "    KV2[fa:fa-key Key Vault]\n"
+        security += "    SQL2[(fa:fa-database SQL + TDE)]\n"
+        security += "    LOG[fa:fa-eye Sentinel + Log Analytics]\n\n"
+        security += "    EXT --> WAF --> FD2 --> APIM2\n"
+        security += "    APIM2 --> VNET\n"
+        security += "    VNET --> NSG --> APP2\n"
+        security += "    APP2 --> KV2\n"
+        security += "    APP2 --> SQL2\n"
+        security += "    APP2 --> LOG\n"
+        security += "    KV2 --> LOG\n\n"
+        security += "    style WAF fill:#FFCDD2,stroke:#C62828\n"
+        security += "    style FD2 fill:#FFCDD2,stroke:#C62828\n"
+        security += "    style APIM2 fill:#FFF9C4,stroke:#F57F17\n"
+        security += "    style VNET fill:#C8E6C9,stroke:#2E7D32\n"
+        security += "    style NSG fill:#C8E6C9,stroke:#2E7D32\n"
+        security += "    style KV2 fill:#E1BEE7,stroke:#6A1B9A\n"
+        security += "    style LOG fill:#B3E5FC,stroke:#0277BD"
+
+        return {"infrastructure": infra, "data_flow": data_flow, "sequence": sequence, "deployment": deployment, "security": security}
+
+    # ═══ FALLBACK: Transcript Analysis ═══
+    def _fb_transcript(self, text):
+        words = text.split()
+        return {
+            "pain_points": [
+                {"issue": "Manual data processing taking excessive time", "severity": "High", "quote": "We spend hours every week just copying data between systems", "stakeholder": "Operations Lead"},
+                {"issue": "Lack of real-time visibility into operations", "severity": "High", "quote": "By the time we get reports, the data is already stale", "stakeholder": "VP Operations"},
+                {"issue": "Integration gaps between existing systems", "severity": "Medium", "quote": "Our CRM and ERP don't talk to each other properly", "stakeholder": "IT Manager"},
+                {"issue": "Security concerns with current manual workflows", "severity": "Medium", "quote": "People are emailing spreadsheets with sensitive data", "stakeholder": "CISO"},
+            ],
+            "requirements_extracted": [
+                {"title": "Automated Data Pipeline", "description": "ETL pipeline connecting CRM, ERP, and data warehouse", "type": "functional", "source": "Operations Lead — pain point discussion"},
+                {"title": "Real-time Dashboard", "description": "Live operational metrics with <5 min refresh", "type": "functional", "source": "VP Operations — visibility concern"},
+                {"title": "System Integration Layer", "description": "API-based integration between CRM and ERP", "type": "integration", "source": "IT Manager — integration gap"},
+                {"title": "Secure Data Transfer", "description": "Encrypted data pipelines replacing manual email workflows", "type": "non-functional", "source": "CISO — security concern"},
+                {"title": "User Authentication & SSO", "description": "Azure AD SSO with MFA for all users", "type": "non-functional", "source": "CISO — access control discussion"},
+                {"title": "Mobile Access", "description": "Responsive web app for field team access", "type": "functional", "source": "Field Operations Manager — remote access need"},
+            ],
+            "stakeholders": [
+                {"name": "Sarah Mitchell", "role": "VP Operations", "concerns": ["Reporting delays", "Operational visibility", "Cost of current manual processes"]},
+                {"name": "James Chen", "role": "IT Manager", "concerns": ["Integration complexity", "Maintenance burden", "Team skill gaps"]},
+                {"name": "David Park", "role": "CISO", "concerns": ["Data security", "Compliance", "Audit trail"]},
+                {"name": "Lisa Ramirez", "role": "Operations Lead", "concerns": ["Daily workflow efficiency", "Data accuracy", "Training time"]},
+            ],
+            "decisions": [
+                "Azure cloud platform selected as preferred infrastructure",
+                "Phased rollout approach agreed — pilot with Operations team first",
+                "Budget range of $150K-250K for initial phase discussed",
+                "Q3 2025 target for MVP delivery",
+                "Weekly stakeholder sync meetings during discovery",
+            ],
+            "action_items": [
+                {"item": "Share current system architecture documentation", "owner": "IT Manager", "priority": "High"},
+                {"item": "Provide sample data exports from CRM and ERP", "owner": "Operations Lead", "priority": "High"},
+                {"item": "Schedule security requirements workshop", "owner": "CISO", "priority": "Medium"},
+                {"item": "Prepare ECI proposal with options", "owner": "ECI Team", "priority": "High"},
+                {"item": "Set up Azure sandbox environment", "owner": "IT Manager", "priority": "Medium"},
+            ],
+            "wbs": [
+                {"phase": "Discovery & Planning", "deliverables": [
+                    {"name": "Stakeholder Workshops", "tasks": [{"name": "Requirements gathering sessions", "effort": "3 days"}, {"name": "Pain point analysis", "effort": "2 days"}, {"name": "Current state assessment", "effort": "3 days"}]},
+                    {"name": "Technical Assessment", "tasks": [{"name": "System landscape review", "effort": "2 days"}, {"name": "Data mapping", "effort": "3 days"}, {"name": "Integration feasibility", "effort": "2 days"}]},
+                    {"name": "Project Plan", "tasks": [{"name": "WBS finalization", "effort": "1 day"}, {"name": "Resource plan", "effort": "1 day"}, {"name": "Risk register", "effort": "1 day"}]},
+                ]},
+                {"phase": "Design & Architecture", "deliverables": [
+                    {"name": "Solution Architecture", "tasks": [{"name": "High-level design", "effort": "3 days"}, {"name": "Data model design", "effort": "4 days"}, {"name": "API contract design", "effort": "3 days"}]},
+                    {"name": "UX Design", "tasks": [{"name": "Wireframes", "effort": "3 days"}, {"name": "UI mockups", "effort": "4 days"}, {"name": "User testing", "effort": "2 days"}]},
+                    {"name": "Security Design", "tasks": [{"name": "IAM design", "effort": "2 days"}, {"name": "Network security", "effort": "2 days"}, {"name": "Encryption strategy", "effort": "1 day"}]},
+                ]},
+                {"phase": "Development", "deliverables": [
+                    {"name": "Backend Services", "tasks": [{"name": "API development", "effort": "15 days"}, {"name": "Data pipeline", "effort": "10 days"}, {"name": "Integration layer", "effort": "8 days"}]},
+                    {"name": "Frontend Application", "tasks": [{"name": "UI components", "effort": "10 days"}, {"name": "Dashboard views", "effort": "8 days"}, {"name": "Responsive design", "effort": "4 days"}]},
+                    {"name": "Infrastructure", "tasks": [{"name": "IaC (Bicep/Terraform)", "effort": "5 days"}, {"name": "CI/CD pipelines", "effort": "3 days"}, {"name": "Environment setup", "effort": "2 days"}]},
+                ]},
+                {"phase": "Testing & QA", "deliverables": [
+                    {"name": "Testing", "tasks": [{"name": "Unit testing", "effort": "5 days"}, {"name": "Integration testing", "effort": "5 days"}, {"name": "Performance testing", "effort": "3 days"}, {"name": "Security testing", "effort": "3 days"}, {"name": "UAT", "effort": "5 days"}]},
+                ]},
+                {"phase": "Deployment & Hypercare", "deliverables": [
+                    {"name": "Go-Live", "tasks": [{"name": "Data migration", "effort": "3 days"}, {"name": "Production deployment", "effort": "2 days"}, {"name": "Smoke testing", "effort": "1 day"}]},
+                    {"name": "Hypercare", "tasks": [{"name": "Post-launch monitoring", "effort": "10 days"}, {"name": "Bug fixes", "effort": "5 days"}, {"name": "Knowledge transfer", "effort": "3 days"}]},
+                ]},
+            ],
+            "meeting_summary": "Discovery call with key stakeholders revealed significant operational inefficiencies driven by manual data workflows and disconnected systems. Primary pain points center around delayed reporting, manual data transfers, and security gaps. The team expressed strong preference for Azure-based cloud solution with phased delivery approach. Budget is available for Q3 2025 MVP.",
+            "sentiment": "Positive — stakeholders are motivated and have executive buy-in for modernization",
+            "key_themes": ["Automation", "Real-time Analytics", "System Integration", "Security", "Cloud Migration", "Mobile Access"],
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4019,6 +4334,7 @@ _defaults = {
     "sp_url": "", "sp_cid": "", "sp_cs": "", "sp_tid": "",
     "email_smtp": "", "email_sender": "",
     "processing_results": None, "historical_projects": [], "agent_logs": [],
+    "discovery_results": None, "discovery_transcript": "",
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
 }
 for k, v in _defaults.items():
@@ -4127,6 +4443,173 @@ def tab_presale():
             if st.button("PROCESS & GENERATE ESTIMATES", use_container_width=True, type="primary", key="go"):
                 run_pipeline(files)
 
+    # ── Multimodal Discovery ──
+    st.markdown("---")
+    st.markdown('<div class="shdr"><span class="shdr-i">🎙️</span> Multimodal Discovery Extraction</div>', unsafe_allow_html=True)
+    st.markdown('<div class="crd"><div class="crd-t">Upload Meeting Transcripts & Voice Notes</div><div class="crd-d">Extract requirements, pain points, stakeholders & auto-generate WBS from Zoom/Teams transcripts, voice memos, or meeting notes.</div>', unsafe_allow_html=True)
+    disc_col1, disc_col2 = st.columns([3, 2])
+    with disc_col1:
+        disc_files = st.file_uploader(
+            "Upload transcripts",
+            type=["txt", "srt", "vtt", "json", "docx", "csv"],
+            accept_multiple_files=True,
+            key="disc_fu",
+            label_visibility="collapsed",
+            help="Supported: TXT, SRT, VTT (subtitles), JSON (Teams/Zoom/Otter.ai exports), DOCX (meeting notes), CSV",
+        )
+    with disc_col2:
+        st.markdown("**Supported Formats:**")
+        st.markdown("- `.txt` `.srt` `.vtt` — Subtitle / transcript files")
+        st.markdown("- `.json` — Teams, Zoom, Otter.ai exports")
+        st.markdown("- `.docx` — Meeting notes / minutes")
+        st.markdown("- `.csv` — Tabular transcript exports")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if disc_files:
+        _, dbc, _ = st.columns([1, 2, 1])
+        with dbc:
+            if st.button("🎙️ ANALYZE TRANSCRIPTS & GENERATE WBS", use_container_width=True, type="primary", key="disc_go"):
+                ai = AzureAI.from_session()
+                dpb = st.progress(0)
+                dstatus = st.empty()
+                dstatus.markdown("**1/3** Extracting transcripts...")
+                dpb.progress(10)
+                all_text = ""
+                for df in disc_files:
+                    all_text += extract_audio_transcript(df) + "\n\n"
+                st.session_state.discovery_transcript = all_text
+                dstatus.markdown("**2/3** Analyzing content & extracting insights...")
+                dpb.progress(50)
+                disc_result = ai.analyze_transcript(all_text)
+                dstatus.markdown("**3/3** Generating Work Breakdown Structure...")
+                dpb.progress(90)
+                st.session_state.discovery_results = disc_result
+                dpb.progress(100)
+                dstatus.markdown("**Done!** Discovery analysis complete.")
+                time.sleep(0.5)
+                dstatus.empty()
+                dpb.empty()
+                st.rerun()
+
+    # ── Discovery Results ──
+    if st.session_state.discovery_results:
+        dr = st.session_state.discovery_results
+        st.markdown("---")
+        st.markdown('<div class="shdr"><span class="shdr-i">📋</span> Discovery Insights</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="crd">', unsafe_allow_html=True)
+        st.markdown("**Meeting Summary:** " + safe_str(dr.get("meeting_summary")))
+        st.markdown("**Sentiment:** " + safe_str(dr.get("sentiment")))
+        themes = safe_list(dr.get("key_themes"))
+        if themes:
+            tags_html = " ".join('<span class="tt">' + safe_str(t) + '</span>' for t in themes)
+            st.markdown('<div class="ttag">' + tags_html + '</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        disc_tabs = st.tabs(["🔥 Pain Points", "📝 Requirements", "👥 Stakeholders", "📊 WBS", "✅ Action Items"])
+
+        with disc_tabs[0]:
+            for pp in safe_list(dr.get("pain_points")):
+                pp = safe_dict(pp)
+                sev = safe_str(pp.get("severity"))
+                sc = "#ff6b6b" if sev == "High" else "#ffd166" if sev == "Medium" else "#06d6a0"
+                st.markdown(
+                    '<div class="rc" style="border-left:3px solid ' + sc + ';">'
+                    '<div class="rch2"><strong>' + safe_str(pp.get("issue")) + '</strong>'
+                    '<span class="rsev" style="color:' + sc + ';">' + sev + '</span></div>'
+                    '<p style="font-style:italic;color:var(--t2);">"' + safe_str(pp.get("quote")) + '"</p>'
+                    '<div class="rmit"><strong>Stakeholder:</strong> ' + safe_str(pp.get("stakeholder")) + '</div>'
+                    '</div>', unsafe_allow_html=True
+                )
+
+        with disc_tabs[1]:
+            reqs = safe_list(dr.get("requirements_extracted"))
+            fn_r = [x for x in reqs if isinstance(x, dict) and x.get("type") == "functional"]
+            nf_r = [x for x in reqs if isinstance(x, dict) and x.get("type") == "non-functional"]
+            ig_r = [x for x in reqs if isinstance(x, dict) and x.get("type") == "integration"]
+            rc1, rc2, rc3 = st.columns(3)
+            with rc1:
+                st.markdown('<div class="rch fn">Functional (' + str(len(fn_r)) + ')</div>', unsafe_allow_html=True)
+                for q in fn_r:
+                    q = safe_dict(q)
+                    st.markdown('<div class="ri"><strong>' + safe_str(q.get("title")) + '</strong><p>' + safe_str(q.get("description")) + '</p><div class="ri-c">Source: ' + safe_str(q.get("source")) + '</div></div>', unsafe_allow_html=True)
+            with rc2:
+                st.markdown('<div class="rch nf">Non-Functional (' + str(len(nf_r)) + ')</div>', unsafe_allow_html=True)
+                for q in nf_r:
+                    q = safe_dict(q)
+                    st.markdown('<div class="ri"><strong>' + safe_str(q.get("title")) + '</strong><p>' + safe_str(q.get("description")) + '</p><div class="ri-c">Source: ' + safe_str(q.get("source")) + '</div></div>', unsafe_allow_html=True)
+            with rc3:
+                st.markdown('<div class="rch ig">Integration (' + str(len(ig_r)) + ')</div>', unsafe_allow_html=True)
+                for q in ig_r:
+                    q = safe_dict(q)
+                    st.markdown('<div class="ri"><strong>' + safe_str(q.get("title")) + '</strong><p>' + safe_str(q.get("description")) + '</p><div class="ri-c">Source: ' + safe_str(q.get("source")) + '</div></div>', unsafe_allow_html=True)
+
+        with disc_tabs[2]:
+            stake_cols = st.columns(2)
+            for i, sh in enumerate(safe_list(dr.get("stakeholders"))):
+                sh = safe_dict(sh)
+                with stake_cols[i % 2]:
+                    concerns = "".join("<li>" + safe_str(c) + "</li>" for c in safe_list(sh.get("concerns")))
+                    st.markdown(
+                        '<div class="crd"><div class="crd-t">👤 ' + safe_str(sh.get("name")) + '</div>'
+                        '<div class="crd-d" style="color:var(--c2);">' + safe_str(sh.get("role")) + '</div>'
+                        '<ul style="color:var(--t2);font-size:.85rem;">' + concerns + '</ul></div>',
+                        unsafe_allow_html=True
+                    )
+
+        with disc_tabs[3]:
+            st.markdown("**Work Breakdown Structure**")
+            wbs = safe_list(dr.get("wbs"))
+            for phase_idx, phase in enumerate(wbs):
+                phase = safe_dict(phase)
+                phase_name = safe_str(phase.get("phase"))
+                with st.expander("📁 " + str(phase_idx + 1) + ". " + phase_name, expanded=True):
+                    for d in safe_list(phase.get("deliverables")):
+                        d = safe_dict(d)
+                        st.markdown("**📦 " + safe_str(d.get("name")) + "**")
+                        for t in safe_list(d.get("tasks")):
+                            t = safe_dict(t)
+                            st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;🔹 " + safe_str(t.get("name")) + " — _" + safe_str(t.get("effort")) + "_")
+            decisions = safe_list(dr.get("decisions"))
+            if decisions:
+                st.markdown("---")
+                st.markdown("**Key Decisions:**")
+                for dec in decisions:
+                    st.markdown("- ✅ " + safe_str(dec))
+
+        with disc_tabs[4]:
+            for ai_item in safe_list(dr.get("action_items")):
+                ai_item = safe_dict(ai_item)
+                pri = safe_str(ai_item.get("priority"))
+                pc = "#ff6b6b" if pri == "High" else "#ffd166" if pri == "Medium" else "#06d6a0"
+                st.markdown(
+                    '<div class="rc" style="border-left:3px solid ' + pc + ';">'
+                    '<div class="rch2"><strong>' + safe_str(ai_item.get("item")) + '</strong>'
+                    '<span class="rsev" style="color:' + pc + ';">' + pri + '</span></div>'
+                    '<div class="rmit"><strong>Owner:</strong> ' + safe_str(ai_item.get("owner")) + '</div>'
+                    '</div>', unsafe_allow_html=True
+                )
+
+        st.markdown("---")
+        dl_disc_cols = st.columns(2)
+        with dl_disc_cols[0]:
+            st.download_button(
+                "📥 Download Discovery Report (JSON)",
+                data=json.dumps(dr, indent=2, default=str),
+                file_name="ECI_Discovery_Report_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+                mime="application/json",
+                use_container_width=True, key="dl_disc_json",
+            )
+        with dl_disc_cols[1]:
+            if st.session_state.discovery_transcript:
+                st.download_button(
+                    "📥 Download Cleaned Transcript (TXT)",
+                    data=st.session_state.discovery_transcript,
+                    file_name="ECI_Transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt",
+                    mime="text/plain",
+                    use_container_width=True, key="dl_disc_txt",
+                )
+
     if st.session_state.processing_results:
         show_results()
 
@@ -4142,7 +4625,7 @@ def run_pipeline(files):
     pb = st.progress(0)
     status = st.empty()
 
-    status.markdown("**1/10** Ingesting documents...")
+    status.markdown("**1/12** Ingesting documents...")
     pb.progress(5)
     dp = DocProcessor()
     text = ""
@@ -4151,69 +4634,75 @@ def run_pipeline(files):
     log_agent("Ingestion", str(len(files)) + " file(s), " + str(len(text)) + " chars")
     time.sleep(0.2)
 
-    status.markdown("**2/10** Document Intelligence...")
+    status.markdown("**2/12** Document Intelligence...")
     pb.progress(10)
     intel = dp.analyze(text)
     log_agent("Intelligence", str(intel["section_count"]) + " sections, " + str(intel["word_count"]) + " words")
     time.sleep(0.2)
 
-    status.markdown("**3/10** Semantic Analysis" + (" (GPT-4)..." if live else "..."))
+    status.markdown("**3/12** Semantic Analysis" + (" (GPT-4)..." if live else "..."))
     pb.progress(20)
     semantic = ai.analyze_requirements(text)
     st.session_state["_last_semantic"] = semantic
     log_agent("Semantic", str(len(safe_list(semantic.get("requirements")))) + " requirements, " + str(len(safe_list(semantic.get("technology_stack")))) + " technologies detected")
     time.sleep(0.2)
 
-    status.markdown("**4/10** Historical RAG...")
+    status.markdown("**4/12** Historical RAG...")
     pb.progress(30)
     rag = ai.search_historical(text, st.session_state.historical_projects)
     log_agent("RAG", str(len(safe_list(rag.get("similar_projects")))) + " matches")
     time.sleep(0.2)
 
-    status.markdown("**5/10** Time Estimator...")
+    status.markdown("**5/12** Time Estimator...")
     pb.progress(40)
     time_est = ai.estimate_time(semantic, rag)
     st.session_state["_last_time_est"] = time_est
     log_agent("Time", str(time_est.get("total_hours", 0)) + " hours across " + str(len(safe_list(time_est.get("phases")))) + " phases")
     time.sleep(0.2)
 
-    status.markdown("**6/10** Cost Calculator...")
+    status.markdown("**6/12** Cost Calculator...")
     pb.progress(50)
     cost_est = ai.estimate_cost(semantic, time_est, rag)
     st.session_state["_last_cost_est"] = cost_est
     log_agent("Cost", "$" + str(cost_est.get("total_monthly_cost", 0)) + "/mo (" + str(len(safe_list(cost_est.get("azure_costs")))) + " services)")
     time.sleep(0.2)
 
-    status.markdown("**7/10** Risk Analyzer...")
+    status.markdown("**7/12** Risk Analyzer...")
     pb.progress(60)
     risk = ai.analyze_risk(semantic, time_est, cost_est)
     log_agent("Risk", str(risk.get("overall_score", 0)) + "/10 — " + str(len(safe_list(risk.get("risks")))) + " risks identified")
     time.sleep(0.2)
 
-    status.markdown("**8/10** Architecture Designer...")
+    status.markdown("**8/12** Architecture Designer...")
     pb.progress(70)
     arch = ai.design_architecture(semantic, rag)
     log_agent("Architecture", str(len(safe_list(arch.get("components")))) + " components")
     time.sleep(0.2)
 
-    status.markdown("**9/10** Scope & Assumptions...")
+    status.markdown("**9/12** Scope & Assumptions...")
     pb.progress(80)
     scope = ai.define_scope(semantic, time_est, cost_est)
     log_agent("Scope", "Boundaries defined")
     time.sleep(0.2)
 
-    status.markdown("**10/10** Proposal Writer...")
-    pb.progress(90)
+    status.markdown("**10/12** Proposal Writer...")
+    pb.progress(80)
     proposal = ai.write_proposal(semantic, time_est, cost_est, risk, arch, scope)
     log_agent("Proposal", "Document generated")
     time.sleep(0.2)
 
+    status.markdown("**11/12** Architecture Visualizer...")
+    pb.progress(90)
+    mermaid_diagrams = ai.generate_mermaid_diagrams(semantic, arch)
+    log_agent("Visualizer", str(len(mermaid_diagrams)) + " diagrams generated")
+    time.sleep(0.2)
+
     pb.progress(100)
-    status.markdown("**All 10 agents completed!**")
+    status.markdown("**12/12** All agents completed!")
     st.session_state.processing_results = {
         "semantic_analysis": semantic, "rag": rag, "time_estimate": time_est,
         "cost_estimate": cost_est, "risk_assessment": risk, "architecture": arch,
-        "scope": scope, "proposal": proposal,
+        "scope": scope, "proposal": proposal, "mermaid_diagrams": mermaid_diagrams,
     }
     st.session_state.model_metrics["proposals_processed"] += 1
 
@@ -4245,7 +4734,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📄 Proposal", "📌 Scope", "👥 Team & Roles"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -4568,8 +5057,41 @@ def show_results():
             for s in sec_items:
                 st.markdown("- " + safe_str(s))
 
-    # ── Proposal ──
+    # ── Diagrams (Mermaid.js) ──
     with tab_list[5]:
+        mermaid_data = safe_dict(r.get("mermaid_diagrams"))
+        if mermaid_data:
+            diagram_tabs = st.tabs(["🏗️ Infrastructure", "🔄 Data Flow", "📨 Sequence", "🚀 Deployment", "🔒 Security"])
+            diagram_map = [
+                ("infrastructure", "Azure Infrastructure Architecture", 500),
+                ("data_flow", "Data Flow Diagram", 450),
+                ("sequence", "Request Sequence Diagram", 500),
+                ("deployment", "CI/CD & Deployment Pipeline", 450),
+                ("security", "Security Architecture & Controls", 450),
+            ]
+            for i, (key, title, h) in enumerate(diagram_map):
+                with diagram_tabs[i]:
+                    code = safe_str(mermaid_data.get(key, ""))
+                    if code:
+                        st.markdown("**" + title + "**")
+                        render_mermaid(code, height=h)
+                        with st.expander("View Mermaid Source"):
+                            st.code(code, language="text")
+                    else:
+                        st.info("Diagram not available for this project.")
+            st.markdown("---")
+            st.download_button(
+                "📥 Download All Diagrams (JSON)",
+                data=json.dumps(mermaid_data, indent=2),
+                file_name="ECI_Diagrams_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+                mime="application/json",
+                use_container_width=True, key="dl_diagrams",
+            )
+        else:
+            st.info("Architecture diagrams will be generated after processing documents.")
+
+    # ── Proposal ──
+    with tab_list[6]:
         proposal = safe_dict(r.get("proposal"))
         for sec in safe_list(proposal.get("sections")):
             sec = safe_dict(sec)
@@ -4609,7 +5131,7 @@ def show_results():
             )
 
     # ── Scope ──
-    with tab_list[6]:
+    with tab_list[7]:
         sc = safe_dict(r.get("scope"))
         sc1, sc2 = st.columns(2)
         with sc1:
@@ -4628,7 +5150,7 @@ def show_results():
                 st.markdown("- " + safe_str(x))
 
     # ── Team & Roles ──
-    with tab_list[7]:
+    with tab_list[8]:
         st.markdown("### Team Composition & Role Allocation")
         total_h = safe_int(te.get("total_hours", 0))
         total_d = max(1, total_h / 7)
