@@ -366,6 +366,451 @@ function downloadPNG(){
     return html.encode("utf-8")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  3D ARCHITECTURE FLY-THROUGH (Three.js)
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_3d_flythrough_html(ar, ce):
+    """Generate a self-contained interactive 3D architecture fly-through HTML.
+
+    Uses Three.js (CDN) to render a 3D scene where each architecture component
+    is a clickable box. Clicking a component shows a HUD with infra cost and
+    specs. A camera fly-through path visits every component automatically.
+
+    Args:
+        ar: architecture dict with keys 'pattern', 'components', 'data_flow'.
+        ce: cost_estimate dict with key 'azure_costs'.
+
+    Returns:
+        HTML string (not bytes).
+    """
+    arch = safe_dict(ar)
+    cost = safe_dict(ce)
+    components = safe_list(arch.get("components"))
+    data_flow = safe_list(arch.get("data_flow"))
+    pattern = safe_str(arch.get("pattern", "Solution Architecture"))
+
+    # Map component type keywords to tier names
+    _type_to_tier = {
+        "web app": "presentation", "frontend": "presentation",
+        "ui": "presentation", "cdn": "presentation", "portal": "presentation",
+        "integration": "application", "microservices": "application",
+        "api": "application", "messaging": "application",
+        "backend": "application", "compute": "application",
+        "function": "application", "logic": "application",
+        "database": "data", "storage": "data", "data": "data",
+        "cache": "data", "redis": "data", "cosmos": "data",
+        "identity": "security", "security": "security",
+        "auth": "security", "firewall": "security", "keyvault": "security",
+        "operations": "operations", "devops": "operations",
+        "monitoring": "operations", "logging": "operations",
+    }
+
+    # Build cost lookup: lowercase azure service or component name -> monthly $
+    cost_map = {}
+    for ac in safe_list(cost.get("azure_costs")):
+        ac = safe_dict(ac)
+        svc = safe_str(ac.get("service", "")).lower()
+        monthly = safe_int(ac.get("monthly_cost", 0))
+        if svc:
+            cost_map[svc] = monthly
+
+    # Tier layout constants
+    tier_y = {
+        "presentation": 9,
+        "application":  4,
+        "data":         0,
+        "security":    -4,
+        "operations":  -8,
+    }
+
+    # Classify components into tiers and compute 3-D positions
+    tier_buckets = {t: [] for t in tier_y}
+    for comp in components:
+        comp = safe_dict(comp)
+        ctype = safe_str(comp.get("type", "")).lower()
+        cname_lower = safe_str(comp.get("name", "")).lower()
+        tier = _type_to_tier.get(ctype)
+        if tier is None:
+            for kw, t in _type_to_tier.items():
+                if kw in cname_lower:
+                    tier = t
+                    break
+        tier = tier or "application"
+        tier_buckets[tier].append(comp)
+
+    components_3d = []
+    for tier_name, comps_in_tier in tier_buckets.items():
+        n = len(comps_in_tier)
+        if n == 0:
+            continue
+        y = tier_y[tier_name]
+        for idx, comp in enumerate(comps_in_tier):
+            comp = safe_dict(comp)
+            name = safe_str(comp.get("name", "Component"))
+            azure_svc = safe_str(comp.get("azure_service", ""))
+            services = [safe_str(s) for s in safe_list(comp.get("services", []))[:5]]
+
+            # Spread along X; alternate Z for visual depth
+            x = (idx - (n - 1) / 2.0) * 5.5
+            z = (idx % 2) * 2.5
+
+            # Match cost
+            monthly = 0
+            n_lower = name.lower()
+            a_lower = azure_svc.lower()
+            for ck, cv in cost_map.items():
+                if ck in n_lower or ck in a_lower or n_lower in ck or a_lower in ck:
+                    monthly = cv
+                    break
+
+            components_3d.append({
+                "name": name,
+                "azure_service": azure_svc,
+                "services": services,
+                "tier": tier_name,
+                "x": round(x, 2),
+                "y": y,
+                "z": round(z, 2),
+                "monthly_cost": monthly,
+            })
+
+    total_monthly = safe_int(cost.get("total_monthly_cost", 0))
+    pattern_js = pattern.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+    import json as _json
+    comp_json = _json.dumps(components_3d)
+    flow_json = _json.dumps([safe_str(f) for f in data_flow])
+
+    html = r"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>ECI 3D Architecture</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{overflow:hidden;background:#0a0e1a;font-family:'Segoe UI',Arial,sans-serif}
+canvas{display:block}
+#overlay{position:absolute;inset:0;pointer-events:none}
+#title-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);
+  background:rgba(10,14,26,.88);border:1px solid #1e2a4a;border-radius:20px;
+  padding:6px 22px;color:#e2e8f0;font-size:.78rem;white-space:nowrap;
+  pointer-events:none;text-align:center}
+#title-bar .hl{color:#00d4aa;font-weight:700}
+#legend{position:absolute;top:14px;left:14px;background:rgba(10,14,26,.88);
+  border:1px solid #1e2a4a;border-radius:10px;padding:12px 15px}
+#legend-hd{font-size:.65rem;color:#64748b;text-transform:uppercase;
+  letter-spacing:1px;margin-bottom:8px}
+.li{display:flex;align-items:center;gap:7px;margin-bottom:5px;
+  font-size:.72rem;color:#94a3b8}
+.ld{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+#hud{position:absolute;top:14px;right:14px;background:rgba(10,14,26,.96);
+  border:1px solid #1e2a4a;border-radius:12px;padding:16px 18px;
+  color:#e2e8f0;min-width:230px;max-width:270px;display:none;
+  backdrop-filter:blur(10px);pointer-events:all}
+#hud-x{float:right;cursor:pointer;color:#64748b;font-size:1rem;line-height:1}
+#hud-x:hover{color:#e2e8f0}
+#hud-name{font-size:.92rem;font-weight:700;color:#00d4aa;margin-bottom:3px;margin-right:20px}
+#hud-svc{font-size:.72rem;color:#00b4d8;margin-bottom:10px;letter-spacing:.4px}
+#hud-cl{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+#hud-cost{font-size:1.25rem;font-weight:700;color:#ffd166;margin-bottom:10px;
+  font-family:'Courier New',monospace}
+#hud-sl{font-size:.62rem;color:#64748b;text-transform:uppercase;
+  letter-spacing:1px;margin-bottom:4px}
+#hud-svcs{font-size:.73rem;color:#94a3b8;line-height:1.7}
+#hud-tier{display:inline-block;font-size:.6rem;padding:2px 9px;
+  border-radius:10px;margin-top:9px;text-transform:uppercase;letter-spacing:1px}
+#total{position:absolute;bottom:54px;right:14px;background:rgba(10,14,26,.88);
+  border:1px solid #1e2a4a;border-radius:10px;padding:9px 13px;text-align:right}
+#total-l{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+#total-v{font-size:1.05rem;font-weight:700;color:#ffd166;
+  font-family:'Courier New',monospace}
+#hint{position:absolute;bottom:54px;left:50%;transform:translateX(-50%);
+  color:#475569;font-size:.65rem;white-space:nowrap;pointer-events:none}
+#ctrl{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
+  display:flex;gap:8px;pointer-events:all}
+.cb{background:rgba(10,14,26,.92);border:1px solid #1e2a4a;color:#94a3b8;
+  padding:7px 15px;border-radius:8px;cursor:pointer;font-size:.75rem;
+  transition:all .2s;white-space:nowrap}
+.cb:hover{border-color:#00d4aa;color:#00d4aa}
+.cb.on{background:rgba(0,212,170,.1);border-color:#00d4aa;color:#00d4aa}
+</style>
+</head><body>
+<div id="overlay">
+  <div id="title-bar"><span class="hl">""" + pattern_js + r"""</span> &nbsp;·&nbsp; 3D Architecture Fly-Through</div>
+  <div id="legend">
+    <div id="legend-hd">Tier</div>
+    <div class="li"><div class="ld" style="background:#00b4d8"></div>Presentation</div>
+    <div class="li"><div class="ld" style="background:#1b5c8c"></div>Application</div>
+    <div class="li"><div class="ld" style="background:#00d4aa"></div>Data</div>
+    <div class="li"><div class="ld" style="background:#7b61ff"></div>Security</div>
+    <div class="li"><div class="ld" style="background:#ffd166"></div>Operations</div>
+  </div>
+  <div id="hud">
+    <span id="hud-x" onclick="closeHUD()">&#10005;</span>
+    <div id="hud-name"></div>
+    <div id="hud-svc"></div>
+    <div id="hud-cl">Monthly Infra Cost</div>
+    <div id="hud-cost"></div>
+    <div id="hud-sl">Capabilities</div>
+    <div id="hud-svcs"></div>
+    <div id="hud-tier"></div>
+  </div>
+  <div id="hint">Click a component to inspect &nbsp;·&nbsp; Drag to orbit &nbsp;·&nbsp; Scroll to zoom</div>
+  <div id="total">
+    <div id="total-l">Total Monthly</div>
+    <div id="total-v">$""" + str(total_monthly) + r"""/mo</div>
+  </div>
+  <div id="ctrl">
+    <button class="cb" id="btn-fly" onclick="toggleFly()">&#9654; Play Fly-Through</button>
+    <button class="cb" onclick="resetCam()">&#8635; Reset</button>
+    <button class="cb" onclick="topCam()">&#8859; Top View</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const COMPS=""" + comp_json + """;
+const FLOW=""" + flow_json + """;
+
+const TIER_HEX={presentation:0x00b4d8,application:0x1b5c8c,data:0x00d4aa,security:0x7b61ff,operations:0xffd166};
+const TIER_CSS={presentation:'#00b4d8',application:'#1b5c8c',data:'#00d4aa',security:'#7b61ff',operations:'#ffd166'};
+const TIER_BG={presentation:'rgba(0,180,216,.1)',application:'rgba(27,92,140,.1)',data:'rgba(0,212,170,.1)',security:'rgba(123,97,255,.1)',operations:'rgba(255,209,102,.1)'};
+
+// ── Scene ──
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a0e1a);
+scene.fog=new THREE.FogExp2(0x0a0e1a,0.016);
+
+const W=window.innerWidth,H=window.innerHeight;
+const camera=new THREE.PerspectiveCamera(58,W/H,0.1,1000);
+camera.position.set(0,22,40);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(W,H);
+document.body.insertBefore(renderer.domElement,document.body.firstChild);
+
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=0.08;
+controls.minDistance=4;controls.maxDistance=90;
+controls.target.set(0,0,0);
+
+// ── Lights ──
+scene.add(new THREE.AmbientLight(0xffffff,0.4));
+const dLight=new THREE.DirectionalLight(0x00d4aa,1.6);
+dLight.position.set(10,20,15);scene.add(dLight);
+const pL1=new THREE.PointLight(0x00b4d8,2,70);pL1.position.set(-15,12,0);scene.add(pL1);
+const pL2=new THREE.PointLight(0x7b61ff,1.6,70);pL2.position.set(15,-4,10);scene.add(pL2);
+
+// ── Grid ──
+scene.add(new THREE.GridHelper(100,50,0x1e2a4a,0x111827));
+
+// ── Starfield ──
+(function(){
+  const g=new THREE.BufferGeometry();
+  const p=new Float32Array(2400);
+  for(let i=0;i<2400;i++) p[i]=(Math.random()-.5)*220;
+  g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x94a3b8,size:.15,transparent:true,opacity:.55})));
+})();
+
+// ── Tier floor planes ──
+const tiers=[...new Set(COMPS.map(c=>c.tier))];
+tiers.forEach(tier=>{
+  const tc=COMPS.filter(c=>c.tier===tier);
+  if(!tc.length)return;
+  const ty=tc[0].y-1.4;
+  const mx=Math.max(...tc.map(c=>Math.abs(c.x)))+4.5;
+  const geo=new THREE.PlaneGeometry(mx*2+4,11);
+  const mat=new THREE.MeshBasicMaterial({color:TIER_HEX[tier]||0x1e2a4a,transparent:true,opacity:.055,side:THREE.DoubleSide});
+  const pl=new THREE.Mesh(geo,mat);
+  pl.rotation.x=-Math.PI/2;pl.position.set(0,ty,2);scene.add(pl);
+  const ol=new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({color:TIER_HEX[tier]||0x1e2a4a,transparent:true,opacity:.2}));
+  ol.rotation.x=-Math.PI/2;ol.position.set(0,ty,2);scene.add(ol);
+});
+
+// ── Component boxes ──
+const meshes=[];
+const raycaster=new THREE.Raycaster();
+const mouse=new THREE.Vector2();
+
+COMPS.forEach((c,i)=>{
+  const col=TIER_HEX[c.tier]||0x1e2a4a;
+  const geo=new THREE.BoxGeometry(3.6,1.9,2.4);
+  const mat=new THREE.MeshPhongMaterial({color:col,transparent:true,opacity:.75,shininess:90,specular:0x303030});
+  const mesh=new THREE.Mesh(geo,mat);
+  mesh.position.set(c.x,c.y,c.z);
+  mesh.userData={c,i,origCol:col};
+  scene.add(mesh);
+  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({color:col,transparent:true,opacity:.85})));
+
+  // Name label
+  scene.add(makeSprite(c.name,col,c.x,c.y+1.95,c.z,0.72));
+  // Azure service sub-label
+  if(c.azure_service) scene.add(makeSprite(c.azure_service,0x94a3b8,c.x,c.y+1.28,c.z,0.52));
+
+  meshes.push(mesh);
+});
+
+// ── Sprite label helper ──
+function makeSprite(text,col,x,y,z,sc){
+  const cv=document.createElement('canvas');
+  cv.width=512;cv.height=60;
+  const ctx=cv.getContext('2d');
+  ctx.font='bold 22px Segoe UI,Arial';
+  ctx.textAlign='center';
+  ctx.fillStyle='#'+col.toString(16).padStart(6,'0');
+  const t=text.length>30?text.slice(0,28)+'…':text;
+  ctx.fillText(t,256,40);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+  sp.scale.set(6*sc,0.72*sc,1);
+  sp.position.set(x,y,z);
+  return sp;
+}
+
+// ── Data flow connections ──
+function findComp(name){
+  const nl=name.toLowerCase();
+  return COMPS.find(c=>c.name.toLowerCase().includes(nl)||nl.includes(c.name.toLowerCase()));
+}
+for(let i=0;i<FLOW.length-1;i++){
+  const a=findComp(FLOW[i]),b=findComp(FLOW[i+1]);
+  if(!a||!b)continue;
+  const pa=new THREE.Vector3(a.x,a.y,a.z);
+  const pb=new THREE.Vector3(b.x,b.y,b.z);
+  const pm=pa.clone().add(pb).multiplyScalar(.5);
+  pm.y+=Math.abs(a.y-b.y)*.5+2.5;
+  const pts=new THREE.QuadraticBezierCurve3(pa,pm,pb).getPoints(36);
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({color:0x00b4d8,transparent:true,opacity:.45})
+  ));
+  const dir=pb.clone().sub(pa).normalize();
+  scene.add(new THREE.ArrowHelper(dir,pb,0,0x00b4d8,.55,.32));
+}
+
+// ── HUD ──
+let selMesh=null;
+function showHUD(c){
+  document.getElementById('hud-name').textContent=c.name;
+  document.getElementById('hud-svc').textContent=c.azure_service||'';
+  document.getElementById('hud-cost').textContent=c.monthly_cost>0?'$'+c.monthly_cost.toLocaleString()+'/mo':'Included in estimate';
+  document.getElementById('hud-svcs').innerHTML=c.services.length?c.services.map(s=>'&#8226; '+s).join('<br>'):'N/A';
+  const te=document.getElementById('hud-tier');
+  const tc=TIER_CSS[c.tier]||'#94a3b8';
+  te.textContent=(c.tier||'').toUpperCase();
+  te.style.cssText='background:'+( TIER_BG[c.tier]||'transparent')+';color:'+tc+';border:1px solid '+tc;
+  document.getElementById('hud').style.display='block';
+}
+function closeHUD(){document.getElementById('hud').style.display='none';}
+
+// ── Click handler ──
+let zoomTarget=null,zoomLook=null,doZoom=false;
+renderer.domElement.addEventListener('click',e=>{
+  mouse.x=(e.clientX/W)*2-1;
+  mouse.y=-(e.clientY/H)*2+1;
+  raycaster.setFromCamera(mouse,camera);
+  const hits=raycaster.intersectObjects(meshes);
+  if(hits.length){
+    const m=hits[0].object;
+    if(selMesh) selMesh.material.emissive.setHex(0);
+    selMesh=m;m.material.emissive.setHex(0x1a1a1a);
+    showHUD(m.userData.c);
+    if(flying) stopFly();
+    zoomTarget=new THREE.Vector3(m.position.x+9,m.position.y+6,m.position.z+13);
+    zoomLook=m.position.clone();doZoom=true;
+  } else {
+    if(selMesh){selMesh.material.emissive.setHex(0);selMesh=null;}
+    doZoom=false;closeHUD();
+  }
+});
+
+// ── Camera presets ──
+const DEF_POS=new THREE.Vector3(0,22,40);
+const DEF_TGT=new THREE.Vector3(0,0,0);
+function resetCam(){doZoom=false;stopFly();controls.enabled=true;
+  camera.position.copy(DEF_POS);controls.target.copy(DEF_TGT);}
+function topCam(){doZoom=false;stopFly();controls.enabled=true;
+  camera.position.set(0,55,.01);controls.target.set(0,0,0);}
+
+// ── Fly-through ──
+let flying=false,flyT=0;
+const FLY_SPEED=0.0018;
+const WPS=COMPS.length?[
+  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,2,0)},
+  ...COMPS.map(c=>({pos:new THREE.Vector3(c.x+9,c.y+7,c.z+15),look:new THREE.Vector3(c.x,c.y,c.z)})),
+  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,2,0)},
+]:[
+  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)},
+  {pos:new THREE.Vector3(22,10,22),look:new THREE.Vector3(0,0,0)},
+  {pos:new THREE.Vector3(-22,10,22),look:new THREE.Vector3(0,0,0)},
+  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)},
+];
+function toggleFly(){flying?stopFly():startFly();}
+function startFly(){
+  flying=true;flyT=0;controls.enabled=false;doZoom=false;closeHUD();
+  document.getElementById('btn-fly').textContent='&#9646;&#9646; Pause';
+  document.getElementById('btn-fly').classList.add('on');
+}
+function stopFly(){
+  flying=false;controls.enabled=true;
+  document.getElementById('btn-fly').textContent='&#9654; Play Fly-Through';
+  document.getElementById('btn-fly').classList.remove('on');
+}
+function crGet(t,pts){
+  const n=pts.length,seg=Math.min(Math.floor(t*(n-1)),n-2),lt=(t*(n-1))-seg;
+  const p0=pts[Math.max(0,seg-1)],p1=pts[seg],p2=pts[Math.min(n-1,seg+1)],p3=pts[Math.min(n-1,seg+2)];
+  return{pos:cr3(lt,p0.pos,p1.pos,p2.pos,p3.pos),look:cr3(lt,p0.look,p1.look,p2.look,p3.look)};
+}
+function cr3(t,p0,p1,p2,p3){
+  const t2=t*t,t3=t2*t;
+  const f=(a,b,c,d)=>.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3);
+  return new THREE.Vector3(f(p0.x,p1.x,p2.x,p3.x),f(p0.y,p1.y,p2.y,p3.y),f(p0.z,p1.z,p2.z,p3.z));
+}
+
+// ── Animation loop ──
+let tick=0;
+function animate(){
+  requestAnimationFrame(animate);tick+=.012;
+  // Pulse meshes
+  meshes.forEach((m,i)=>{
+    m.material.opacity=.68+.09*Math.sin(tick+i*.9);
+    if(m===selMesh) m.scale.setScalar(1+.025*Math.sin(tick*2.5));
+    else m.scale.setScalar(1);
+  });
+  // Dynamic lights
+  pL1.intensity=1.6+.5*Math.sin(tick*.65);
+  pL2.intensity=1.3+.4*Math.sin(tick*.5+1.2);
+  // Fly-through
+  if(flying){
+    flyT+=FLY_SPEED;if(flyT>=1)flyT=0;
+    const pt=crGet(flyT,WPS);
+    camera.position.lerp(pt.pos,.025);
+    controls.target.lerp(pt.look,.04);
+  }
+  // Zoom to selected
+  if(doZoom&&zoomTarget&&zoomLook){
+    camera.position.lerp(zoomTarget,.04);
+    controls.target.lerp(zoomLook,.06);
+  }
+  controls.update();
+  renderer.render(scene,camera);
+}
+animate();
+
+// ── Resize ──
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body></html>"""
+    return html
+
+
 def generate_architecture_diagram(architecture_data):
     """Generate a Graphviz DOT string for an architecture diagram.
 
@@ -4744,7 +5189,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -5218,6 +5663,42 @@ def show_results():
             prereqs = ["Cloud subscription access", "Sample documents for analysis", "Stakeholder availability for UAT"]
         for i, p in enumerate(prereqs, 1):
             st.markdown(str(i) + ". " + safe_str(p))
+
+    # ── 3D Architecture Fly-Through ──
+    with tab_list[9]:
+        st.markdown("### Interactive 3D Architecture Fly-Through")
+        st.markdown(
+            "An interactive **Three.js** 3D scene of the solution architecture. "
+            "Each component is a clickable box — click any node to see its Azure service, "
+            "monthly cost, and capabilities in the HUD overlay. "
+            "Hit **Play Fly-Through** for a guided camera tour of the full architecture."
+        )
+
+        flythrough_html = generate_3d_flythrough_html(ar, ce)
+
+        if flythrough_html:
+            # Render inline inside Streamlit
+            st.components.v1.html(flythrough_html, height=620, scrolling=False)
+
+            st.markdown("---")
+            ft_dl_cols = st.columns([2, 1])
+            with ft_dl_cols[0]:
+                st.markdown(
+                    "**Tip for client meetings:** Download the standalone HTML and open it in any browser "
+                    "for a full-screen, shareable experience — no installation required."
+                )
+            with ft_dl_cols[1]:
+                st.download_button(
+                    "📥 Download 3D View (HTML)",
+                    data=flythrough_html.encode("utf-8"),
+                    file_name="ECI_3D_Architecture_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".html",
+                    mime="text/html",
+                    use_container_width=True,
+                    type="primary",
+                    key="dl_3d_html",
+                )
+        else:
+            st.info("No architecture components found. Run the pipeline to generate the 3D view.")
 
     # ── Delivery ──
     st.markdown("---")
