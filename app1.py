@@ -2787,6 +2787,291 @@ class Mailer:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  ARCHITECT NARRATOR — ElevenLabs + HeyGen video pipeline
+# ═══════════════════════════════════════════════════════════════════════
+
+class ArchitectNarrator:
+    """Turns a BELAL proposal into a personalised architect-presenter video.
+
+    Pipeline
+    --------
+    1. generate_script()   — AzureAI summarises the proposal into a ~200-word
+                             conversational pitch (≈ 90 s video).
+    2. synthesize_voice()  — ElevenLabs TTS converts the script to an MP3.
+                             The audio is embedded in the Streamlit UI AND
+                             passed (base64) to HeyGen as the lip-sync source.
+    3. generate_video()    — HeyGen v2 Video Generate endpoint creates an
+                             avatar video using the supplied audio.
+    4. poll_video()        — HeyGen video generation is asynchronous; this
+                             polls every 5 s until status == "completed".
+    """
+
+    # ------------------------------------------------------------------ #
+    #  Construction                                                        #
+    # ------------------------------------------------------------------ #
+    def __init__(self, el_key: str, hg_key: str, avatar_id: str, voice_id: str):
+        self.el_key    = el_key.strip()
+        self.hg_key    = hg_key.strip()
+        self.avatar_id = avatar_id.strip()
+        self.voice_id  = voice_id.strip()
+
+    @classmethod
+    def from_session(cls):
+        return cls(
+            st.session_state.get("elevenlabs_api_key", ""),
+            st.session_state.get("heygen_api_key", ""),
+            st.session_state.get("heygen_avatar_id", ""),
+            st.session_state.get("heygen_voice_id", ""),
+        )
+
+    @property
+    def el_ready(self):
+        return bool(self.el_key)
+
+    @property
+    def hg_ready(self):
+        return bool(self.hg_key and self.avatar_id)
+
+    # ------------------------------------------------------------------ #
+    #  Step 1 — Script generation                                         #
+    # ------------------------------------------------------------------ #
+    def generate_script(self, results: dict) -> str:
+        """Use AzureAI to write a conversational 200-word pitch from results."""
+        se = safe_dict(results.get("semantic_analysis"))
+        te = safe_dict(results.get("time_estimate"))
+        ce = safe_dict(results.get("cost_estimate"))
+        ri = safe_dict(results.get("risk_assessment"))
+        ar = safe_dict(results.get("architecture"))
+
+        project_type   = safe_str(se.get("project_type", "enterprise cloud solution"))
+        total_hours    = safe_int(te.get("total_hours", 0))
+        monthly_cost   = safe_int(ce.get("total_monthly_cost", 0))
+        risk_level     = safe_str(ri.get("overall_level", "Medium"))
+        pattern        = safe_str(ar.get("pattern", "cloud-native"))
+        obj_list       = [safe_str(o) for o in safe_list(se.get("business_objectives", []))[:3]]
+        objectives_txt = "; ".join(obj_list) if obj_list else "digital transformation and operational efficiency"
+        components     = safe_list(ar.get("components"))
+        num_comps      = len(components)
+
+        # Build summary context for the LLM
+        context = (
+            f"Project type: {project_type}\n"
+            f"Architecture pattern: {pattern}\n"
+            f"Business objectives: {objectives_txt}\n"
+            f"Estimated effort: {total_hours:,} person-hours\n"
+            f"Monthly infrastructure cost: ${monthly_cost:,}/month\n"
+            f"Overall risk level: {risk_level}\n"
+            f"Number of architecture components designed: {num_comps}\n"
+        )
+
+        # Try live LLM first
+        ai = AzureAI.from_session()
+        if ai.is_live:
+            try:
+                resp = ai._call(
+                    "You are the lead architect at ECI (Enterprise Cloud & Integration). "
+                    "Write a warm, confident, first-person video script (≈200 words, ≈90 seconds when spoken). "
+                    "The script will be read by an AI avatar of the architect. "
+                    "Tone: professional yet personable, like a senior expert briefing a client. "
+                    "Structure: greet warmly → summarise the solution in 2–3 sentences → highlight the key cost/timeline → "
+                    "mention risk posture → invite the client to the Live War Room to refine details → close confidently. "
+                    "Do NOT use bullet points or markdown — plain prose only. "
+                    "Return JSON: {\"script\": \"<the full script text>\"}",
+                    "Proposal context:\n" + context,
+                )
+                if resp and isinstance(resp, dict) and resp.get("script"):
+                    return safe_str(resp["script"])
+            except Exception:
+                pass
+
+        # Fallback: template-generated script
+        cost_txt  = f"${monthly_cost:,} per month" if monthly_cost else "within your agreed budget"
+        hours_txt = f"{total_hours:,} person-hours" if total_hours else "an optimised timeline"
+        return (
+            f"Hello! I'm your lead architect at ECI, and I've just finished analysing your scope document. "
+            f"Based on our historical delivery data and your specific requirements for a {project_type}, "
+            f"I've designed a {pattern} architecture made up of {num_comps} integrated Azure services — "
+            f"all built around your core objectives: {objectives_txt}. "
+            f"The total estimated effort comes in at {hours_txt}, "
+            f"with an infrastructure running cost of {cost_txt}. "
+            f"I've reviewed the risk landscape and the overall posture is {risk_level}, "
+            f"which is well within industry norms for a project of this complexity — "
+            f"and I've already embedded mitigations into the architecture design. "
+            f"The complete technical blueprint, the time and cost breakdown, and the interactive 3D architecture fly-through "
+            f"have all been uploaded to our SharePoint. "
+            f"If you'd like to jump into our Live War Room to walk through the numbers together, "
+            f"just drop me a message and I'll have a session ready within the hour. "
+            f"Looking forward to bringing this solution to life with your team!"
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Step 2 — Voice synthesis (ElevenLabs)                              #
+    # ------------------------------------------------------------------ #
+    def synthesize_voice(self, script: str) -> tuple:
+        """Call ElevenLabs TTS and return (mp3_bytes, error_str).
+
+        Uses the multilingual-v2 model with the configured voice ID,
+        falling back to the ECI default "Liam" voice if none is set.
+        """
+        if not self.el_ready:
+            return None, "ElevenLabs API key not configured."
+
+        import urllib.request, urllib.error
+
+        voice = self.voice_id or "TX3LPaxmHKxFdv7VOQHJ"   # "Liam" — warm male narrator
+        url   = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}"
+        payload = json.dumps({
+            "text": script,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.45,
+                "similarity_boost": 0.80,
+                "style": 0.15,
+                "use_speaker_boost": True,
+            },
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "xi-api-key": self.el_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                if resp.status == 200:
+                    return resp.read(), None
+                return None, f"ElevenLabs HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return None, f"ElevenLabs error {e.code}: {body}"
+        except Exception as e:
+            return None, f"ElevenLabs request failed: {str(e)[:200]}"
+
+    # ------------------------------------------------------------------ #
+    #  Step 3 — Video generation (HeyGen)                                 #
+    # ------------------------------------------------------------------ #
+    def generate_video(self, script: str, mp3_bytes: bytes | None) -> tuple:
+        """Submit a HeyGen v2 video generation job and return (video_id, error).
+
+        If mp3_bytes is supplied the audio is uploaded as a base64 audio asset
+        so the avatar lip-syncs to the architect's cloned voice.
+        When mp3_bytes is None, HeyGen will use its built-in TTS with the
+        configured voice ID (or its default voice).
+        """
+        if not self.hg_ready:
+            return None, "HeyGen API key or Avatar ID not configured."
+
+        import urllib.request, urllib.error
+
+        # ---- Build the input block ----
+        if mp3_bytes:
+            audio_b64 = base64.b64encode(mp3_bytes).decode("utf-8")
+            input_block = {
+                "character": {
+                    "type": "avatar",
+                    "avatar_id": self.avatar_id,
+                    "avatar_style": "normal",
+                },
+                "voice": {
+                    "type": "audio",
+                    "audio_url": "",          # unused when audio_base64 is set
+                    "audio_base64": audio_b64,
+                },
+            }
+        else:
+            # Fall back to HeyGen built-in TTS
+            voice_cfg = {"type": "text", "input_text": script}
+            if self.voice_id:
+                voice_cfg["voice_id"] = self.voice_id
+            else:
+                voice_cfg["voice_id"] = "2d5b0e6cf36f460aa7fc47e3eee4ba54"  # default HeyGen voice
+            input_block = {
+                "character": {
+                    "type": "avatar",
+                    "avatar_id": self.avatar_id,
+                    "avatar_style": "normal",
+                },
+                "voice": voice_cfg,
+            }
+
+        payload = json.dumps({
+            "video_inputs": [
+                {
+                    **input_block,
+                    "background": {
+                        "type": "color",
+                        "value": "#0a0e1a",
+                    },
+                }
+            ],
+            "dimension": {"width": 1280, "height": 720},
+            "aspect_ratio": "16:9",
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.heygen.com/v2/video/generate",
+            data=payload,
+            headers={
+                "X-Api-Key": self.hg_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                vid_id = (data.get("data") or {}).get("video_id")
+                if vid_id:
+                    return vid_id, None
+                return None, "HeyGen returned no video_id: " + json.dumps(data)[:200]
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return None, f"HeyGen error {e.code}: {body}"
+        except Exception as e:
+            return None, f"HeyGen request failed: {str(e)[:200]}"
+
+    # ------------------------------------------------------------------ #
+    #  Step 4 — Poll video status                                         #
+    # ------------------------------------------------------------------ #
+    def poll_video(self, video_id: str, max_wait: int = 300) -> tuple:
+        """Poll HeyGen until video is ready or timeout.
+
+        Returns (video_url, error_str). video_url is None on error/timeout.
+        """
+        import urllib.request, urllib.error
+
+        url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
+        req = urllib.request.Request(
+            url,
+            headers={"X-Api-Key": self.hg_key, "Accept": "application/json"},
+            method="GET",
+        )
+        waited = 0
+        interval = 5
+        while waited < max_wait:
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    status = (data.get("data") or {}).get("status", "")
+                    if status == "completed":
+                        video_url = (data.get("data") or {}).get("video_url", "")
+                        return video_url or None, None if video_url else "Completed but no URL"
+                    if status in ("failed", "error"):
+                        err_msg = (data.get("data") or {}).get("error", "Unknown HeyGen error")
+                        return None, f"HeyGen generation failed: {err_msg}"
+            except Exception as e:
+                return None, f"Polling error: {str(e)[:200]}"
+            time.sleep(interval)
+            waited += interval
+        return None, f"HeyGen video not ready after {max_wait} s. Check HeyGen dashboard."
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  EXCEL TIME ESTIMATE GENERATOR
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -4745,6 +5030,9 @@ _defaults = {
     "azure_api_key": "", "azure_endpoint": "", "azure_api_version": "2024-06-01", "azure_deployment": "gpt-4",
     "sp_url": "", "sp_cid": "", "sp_cs": "", "sp_tid": "",
     "email_smtp": "", "email_sender": "",
+    "elevenlabs_api_key": "", "heygen_api_key": "",
+    "heygen_avatar_id": "", "heygen_voice_id": "",
+    "narrator_result": None,
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
@@ -4804,15 +5092,31 @@ with st.sidebar:
     st.session_state.email_sender = st.text_input("Sender Email", value=st.session_state.email_sender, key="k10")
     st.text_input("Password", type="password", key="cfg_email_pass")
     st.divider()
+    st.markdown('<div class="csec">Architect Narrator</div>', unsafe_allow_html=True)
+    st.session_state.elevenlabs_api_key = st.text_input(
+        "ElevenLabs API Key", value=st.session_state.elevenlabs_api_key,
+        type="password", placeholder="sk_...", key="k_el")
+    st.session_state.heygen_api_key = st.text_input(
+        "HeyGen API Key", value=st.session_state.heygen_api_key,
+        type="password", placeholder="HeyGen API key", key="k_hg")
+    st.session_state.heygen_avatar_id = st.text_input(
+        "HeyGen Avatar ID", value=st.session_state.heygen_avatar_id,
+        placeholder="Angad_sitting_sofa_front", key="k_av")
+    st.session_state.heygen_voice_id = st.text_input(
+        "ElevenLabs Voice ID", value=st.session_state.heygen_voice_id,
+        placeholder="Voice clone ID or leave blank for default", key="k_vi")
+    st.divider()
     a_ok = bool(st.session_state.azure_api_key and st.session_state.azure_endpoint)
     s_ok = bool(st.session_state.sp_url and st.session_state.sp_cid)
     e_ok = bool(st.session_state.email_smtp)
+    n_ok = bool(st.session_state.heygen_api_key and st.session_state.heygen_avatar_id)
     mode_label = "LIVE AI" if a_ok else "DEMO MODE"
     st.markdown('<div class="cstat">'
                 + '<div class="srow"><strong>' + mode_label + '</strong></div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if a_ok else 'off') + '"></span> Azure OpenAI</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if s_ok else 'off') + '"></span> SharePoint</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if e_ok else 'off') + '"></span> Email</div>'
+                + '<div class="srow"><span class="sdot ' + ('on' if n_ok else 'off') + '"></span> Architect Narrator</div>'
                 + '</div>', unsafe_allow_html=True)
 
 
@@ -5146,7 +5450,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -5656,6 +5960,224 @@ def show_results():
                 )
         else:
             st.info("No architecture components found. Run the pipeline to generate the 3D view.")
+
+    # ── Architect Narrator ──
+    with tab_list[10]:
+        st.markdown("### 🎬 Architect Narrator — AI Video Presenter")
+        st.markdown(
+            "Transform your BELAL proposal into a **personalised architect video** where your lead "
+            "architect's digital twin delivers the pitch. The pipeline is:\n\n"
+            "1. **Script** — BELAL summarises the proposal into a conversational ~200-word pitch\n"
+            "2. **Voice** — ElevenLabs synthesises the script in the architect's cloned voice\n"
+            "3. **Video** — HeyGen animates the architect avatar with perfect lip-sync\n\n"
+            "Configure ElevenLabs & HeyGen keys in the sidebar, then click **Generate**."
+        )
+        st.markdown("---")
+
+        narrator = ArchitectNarrator.from_session()
+
+        # Status pills
+        pill_cols = st.columns(3)
+        with pill_cols[0]:
+            ai_ok = AzureAI.from_session().is_live
+            st.markdown(
+                '<span style="background:' + ('rgba(0,212,170,.15);color:#00d4aa;border:1px solid #00d4aa' if ai_ok else 'rgba(255,107,107,.12);color:#ff6b6b;border:1px solid #ff6b6b') +
+                ';padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:600">' +
+                ('✓ Azure OpenAI ready' if ai_ok else '✗ Azure OpenAI not configured') + '</span>',
+                unsafe_allow_html=True,
+            )
+        with pill_cols[1]:
+            st.markdown(
+                '<span style="background:' + ('rgba(0,212,170,.15);color:#00d4aa;border:1px solid #00d4aa' if narrator.el_ready else 'rgba(255,107,107,.12);color:#ff6b6b;border:1px solid #ff6b6b') +
+                ';padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:600">' +
+                ('✓ ElevenLabs ready' if narrator.el_ready else '✗ ElevenLabs key missing') + '</span>',
+                unsafe_allow_html=True,
+            )
+        with pill_cols[2]:
+            st.markdown(
+                '<span style="background:' + ('rgba(0,212,170,.15);color:#00d4aa;border:1px solid #00d4aa' if narrator.hg_ready else 'rgba(255,107,107,.12);color:#ff6b6b;border:1px solid #ff6b6b') +
+                ';padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:600">' +
+                ('✓ HeyGen ready' if narrator.hg_ready else '✗ HeyGen key/avatar missing') + '</span>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("")
+
+        # Script preview / edit area
+        if "narrator_script" not in st.session_state:
+            st.session_state.narrator_script = ""
+
+        gen_cols = st.columns([3, 1])
+        with gen_cols[1]:
+            if st.button("✍️ Generate Script", use_container_width=True, key="btn_gen_script"):
+                with st.spinner("Writing architect pitch script…"):
+                    st.session_state.narrator_script = narrator.generate_script(r)
+                st.success("Script ready — review and edit below before generating audio/video.")
+
+        with gen_cols[0]:
+            st.markdown("**Step 1 — Architect Pitch Script**")
+
+        script_text = st.text_area(
+            "Script (edit freely before generating voice/video)",
+            value=st.session_state.narrator_script,
+            height=220,
+            key="narrator_script_area",
+            placeholder="Click 'Generate Script' to create a personalised pitch from the proposal data…",
+        )
+        # Keep session state in sync with edits
+        st.session_state.narrator_script = script_text
+
+        word_count = len(script_text.split()) if script_text.strip() else 0
+        st.caption(f"{word_count} words · ≈{max(1, word_count // 130)} min spoken")
+
+        st.markdown("---")
+
+        # ── Voice synthesis ──
+        st.markdown("**Step 2 — Voice Synthesis (ElevenLabs)**")
+        voice_cols = st.columns([3, 1])
+        with voice_cols[1]:
+            gen_voice = st.button("🎙️ Synthesise Voice", use_container_width=True,
+                                  key="btn_voice", disabled=not (script_text.strip() and narrator.el_ready))
+        with voice_cols[0]:
+            if not narrator.el_ready:
+                st.info("Add your ElevenLabs API key in the sidebar to enable voice synthesis.")
+            else:
+                st.caption("Calls ElevenLabs multilingual-v2 TTS with your configured voice ID.")
+
+        if gen_voice and script_text.strip():
+            with st.spinner("Calling ElevenLabs TTS — synthesising voice…"):
+                mp3_bytes, err = narrator.synthesize_voice(script_text)
+            if err:
+                st.error("Voice synthesis failed: " + err)
+                st.session_state["narrator_mp3"] = None
+            else:
+                st.session_state["narrator_mp3"] = mp3_bytes
+                st.success(f"Voice synthesised — {len(mp3_bytes):,} bytes of audio.")
+
+        if st.session_state.get("narrator_mp3"):
+            st.audio(st.session_state["narrator_mp3"], format="audio/mp3")
+            st.download_button(
+                "💾 Download MP3",
+                data=st.session_state["narrator_mp3"],
+                file_name="ECI_Architect_Narration_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".mp3",
+                mime="audio/mpeg",
+                key="dl_mp3",
+            )
+
+        st.markdown("---")
+
+        # ── Video generation ──
+        st.markdown("**Step 3 — Avatar Video Generation (HeyGen)**")
+
+        hg_cols = st.columns([3, 1])
+        with hg_cols[1]:
+            gen_video_btn = st.button(
+                "🎥 Generate Video",
+                use_container_width=True,
+                key="btn_video",
+                disabled=not (script_text.strip() and narrator.hg_ready),
+            )
+        with hg_cols[0]:
+            if not narrator.hg_ready:
+                st.info("Add HeyGen API Key and Avatar ID in the sidebar to generate the video.")
+            else:
+                mp3_ready = bool(st.session_state.get("narrator_mp3"))
+                if mp3_ready:
+                    st.caption("Avatar will lip-sync to the synthesised voice audio.")
+                else:
+                    st.caption("No voice audio — HeyGen will use built-in TTS. Generate voice first for best results.")
+
+        if gen_video_btn and script_text.strip():
+            mp3_bytes = st.session_state.get("narrator_mp3")
+            with st.spinner("Submitting to HeyGen — this may take 2–4 minutes…"):
+                video_id, err = narrator.generate_video(script_text, mp3_bytes)
+            if err:
+                st.error("Video generation failed: " + err)
+            else:
+                st.info(f"HeyGen job submitted (video_id: `{video_id}`). Polling for completion…")
+                progress_bar = st.progress(0)
+                status_ph = st.empty()
+                waited = 0
+                max_wait = 300
+                interval = 10
+                video_url = None
+                poll_err = None
+                import urllib.request
+                while waited < max_wait:
+                    progress_bar.progress(min(int(waited / max_wait * 100), 95))
+                    status_ph.caption(f"Waiting for HeyGen… {waited}s / {max_wait}s")
+                    time.sleep(interval)
+                    waited += interval
+                    # Poll status
+                    try:
+                        req = urllib.request.Request(
+                            f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                            headers={"X-Api-Key": narrator.hg_key, "Accept": "application/json"},
+                            method="GET",
+                        )
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            data = json.loads(resp.read().decode("utf-8"))
+                            status = (data.get("data") or {}).get("status", "")
+                            status_ph.caption(f"HeyGen status: **{status}** ({waited}s elapsed)")
+                            if status == "completed":
+                                video_url = (data.get("data") or {}).get("video_url", "")
+                                break
+                            if status in ("failed", "error"):
+                                poll_err = "HeyGen: " + safe_str((data.get("data") or {}).get("error", "generation failed"))
+                                break
+                    except Exception as pe:
+                        poll_err = str(pe)[:200]
+                        break
+                progress_bar.progress(100)
+                if poll_err:
+                    st.error(poll_err)
+                elif video_url:
+                    st.session_state["narrator_result"] = {"video_url": video_url, "video_id": video_id, "script": script_text}
+                    st.success("Video ready!")
+                else:
+                    st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
+                    st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text}
+
+        # ── Result display ──
+        nr = st.session_state.get("narrator_result")
+        if nr:
+            st.markdown("---")
+            st.markdown("**Result**")
+            if nr.get("video_url"):
+                r_cols = st.columns([2, 1])
+                with r_cols[0]:
+                    st.video(nr["video_url"])
+                with r_cols[1]:
+                    st.markdown("**Video Details**")
+                    st.markdown(f"- Video ID: `{nr.get('video_id', 'N/A')}`")
+                    st.markdown(f"- Words: {len(safe_str(nr.get('script','')).split())}")
+                    st.markdown("")
+                    st.markdown(f"[Open in browser]({nr['video_url']})", unsafe_allow_html=False)
+                    st.download_button(
+                        "📋 Copy Script",
+                        data=safe_str(nr.get("script", "")),
+                        file_name="ECI_Narrator_Script_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt",
+                        mime="text/plain",
+                        key="dl_script",
+                    )
+            elif nr.get("video_id"):
+                st.info(
+                    f"Video is processing. HeyGen video ID: `{nr['video_id']}`\n\n"
+                    "Check your [HeyGen dashboard](https://app.heygen.com) for the completed video."
+                )
+
+        st.markdown("---")
+        st.markdown(
+            '<div style="background:rgba(0,212,170,.07);border:1px solid rgba(0,212,170,.2);'
+            'border-radius:10px;padding:16px 20px;font-size:.8rem;color:#94a3b8;line-height:1.7">'
+            '<strong style="color:#00d4aa">How it works</strong><br>'
+            'Each proposal takes ~3 minutes end-to-end: BELAL writes the script from the live data, '
+            'ElevenLabs clones the architect\'s voice, and HeyGen animates the avatar with frame-perfect lip-sync. '
+            'The result is a polished 90-second presenter video your marketing team can embed directly in SharePoint, '
+            'Teams notifications, or client email — with zero recording time from the architect.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Delivery ──
     st.markdown("---")
