@@ -162,6 +162,15 @@ def inject_css():
     #MainMenu{visibility:hidden}footer{visibility:hidden}
     header[data-testid="stHeader"]{background:rgba(10,14,26,.95);backdrop-filter:blur(10px)}
     ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg0)}::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
+    /* ── Text visibility: force light colour on dark background ── */
+    .stMarkdown p,.stMarkdown li,.stMarkdown span:not(.tt),.stMarkdown label{color:var(--t1)!important}
+    .stMarkdown strong,.stMarkdown b{color:#ffffff!important}
+    .stMarkdown em,.stMarkdown i{color:var(--t2)!important}
+    .stMarkdown h1,.stMarkdown h2,.stMarkdown h3,.stMarkdown h4,.stMarkdown h5{color:var(--t1)!important}
+    .stMarkdown a{color:var(--c2)!important}
+    .stMarkdown code{color:var(--c5)!important;background:var(--bg2)!important}
+    [data-testid="stExpander"] summary p,[data-testid="stExpander"] summary span{color:var(--t1)!important}
+    [data-testid="stExpander"] details summary{color:var(--t1)!important}
     </style>""", unsafe_allow_html=True)
 
 
@@ -371,26 +380,18 @@ function downloadPNG(){
 # ═══════════════════════════════════════════════════════════════════════
 
 def generate_3d_flythrough_html(ar, ce):
-    """Generate a self-contained interactive 3D architecture fly-through HTML.
-
-    Uses Three.js (CDN) to render a 3D scene where each architecture component
-    is a clickable box. Clicking a component shows a HUD with infra cost and
-    specs. A camera fly-through path visits every component automatically.
-
-    Args:
-        ar: architecture dict with keys 'pattern', 'components', 'data_flow'.
-        ce: cost_estimate dict with key 'azure_costs'.
-
-    Returns:
-        HTML string (not bytes).
+    """Return a self-contained HTML string with an interactive Three.js 3D
+    architecture fly-through.  Uses ES-module importmap so OrbitControls loads
+    reliably in every modern browser (Chrome 89+, Firefox 108+, Safari 16.4+).
     """
+    import json as _json
+
     arch = safe_dict(ar)
     cost = safe_dict(ce)
     components = safe_list(arch.get("components"))
-    data_flow = safe_list(arch.get("data_flow"))
-    pattern = safe_str(arch.get("pattern", "Solution Architecture"))
+    data_flow  = safe_list(arch.get("data_flow"))
+    pattern    = safe_str(arch.get("pattern", "Solution Architecture"))
 
-    # Map component type keywords to tier names
     _type_to_tier = {
         "web app": "presentation", "frontend": "presentation",
         "ui": "presentation", "cdn": "presentation", "portal": "presentation",
@@ -398,15 +399,17 @@ def generate_3d_flythrough_html(ar, ce):
         "api": "application", "messaging": "application",
         "backend": "application", "compute": "application",
         "function": "application", "logic": "application",
+        "app service": "application",
         "database": "data", "storage": "data", "data": "data",
-        "cache": "data", "redis": "data", "cosmos": "data",
+        "cache": "data", "redis": "data", "cosmos": "data", "sql": "data",
         "identity": "security", "security": "security",
         "auth": "security", "firewall": "security", "keyvault": "security",
+        "key vault": "security",
         "operations": "operations", "devops": "operations",
         "monitoring": "operations", "logging": "operations",
+        "insights": "operations",
     }
 
-    # Build cost lookup: lowercase azure service or component name -> monthly $
     cost_map = {}
     for ac in safe_list(cost.get("azure_costs")):
         ac = safe_dict(ac)
@@ -415,20 +418,12 @@ def generate_3d_flythrough_html(ar, ce):
         if svc:
             cost_map[svc] = monthly
 
-    # Tier layout constants
-    tier_y = {
-        "presentation": 9,
-        "application":  4,
-        "data":         0,
-        "security":    -4,
-        "operations":  -8,
-    }
+    tier_y = {"presentation": 9, "application": 4, "data": 0, "security": -4, "operations": -8}
 
-    # Classify components into tiers and compute 3-D positions
     tier_buckets = {t: [] for t in tier_y}
     for comp in components:
         comp = safe_dict(comp)
-        ctype = safe_str(comp.get("type", "")).lower()
+        ctype       = safe_str(comp.get("type", "")).lower()
         cname_lower = safe_str(comp.get("name", "")).lower()
         tier = _type_to_tier.get(ctype)
         if tier is None:
@@ -436,8 +431,7 @@ def generate_3d_flythrough_html(ar, ce):
                 if kw in cname_lower:
                     tier = t
                     break
-        tier = tier or "application"
-        tier_buckets[tier].append(comp)
+        tier_buckets[tier or "application"].append(comp)
 
     components_3d = []
     for tier_name, comps_in_tier in tier_buckets.items():
@@ -446,99 +440,118 @@ def generate_3d_flythrough_html(ar, ce):
             continue
         y = tier_y[tier_name]
         for idx, comp in enumerate(comps_in_tier):
-            comp = safe_dict(comp)
-            name = safe_str(comp.get("name", "Component"))
+            comp      = safe_dict(comp)
+            name      = safe_str(comp.get("name", "Component"))
             azure_svc = safe_str(comp.get("azure_service", ""))
-            services = [safe_str(s) for s in safe_list(comp.get("services", []))[:5]]
-
-            # Spread along X; alternate Z for visual depth
+            services  = [safe_str(s) for s in safe_list(comp.get("services", []))[:5]]
             x = (idx - (n - 1) / 2.0) * 5.5
             z = (idx % 2) * 2.5
-
-            # Match cost
             monthly = 0
-            n_lower = name.lower()
-            a_lower = azure_svc.lower()
+            nl, al = name.lower(), azure_svc.lower()
             for ck, cv in cost_map.items():
-                if ck in n_lower or ck in a_lower or n_lower in ck or a_lower in ck:
+                if ck in nl or ck in al or nl in ck or al in ck:
                     monthly = cv
                     break
-
             components_3d.append({
-                "name": name,
-                "azure_service": azure_svc,
-                "services": services,
-                "tier": tier_name,
-                "x": round(x, 2),
-                "y": y,
-                "z": round(z, 2),
+                "name": name, "azure_service": azure_svc, "services": services,
+                "tier": tier_name, "x": round(x, 2), "y": y, "z": round(z, 2),
                 "monthly_cost": monthly,
             })
 
-    total_monthly = safe_int(cost.get("total_monthly_cost", 0))
-    pattern_js = pattern.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    # Guarantee a non-empty scene even before the AI runs
+    if not components_3d:
+        _demo = [
+            ("Web App",     "Azure App Service",   "presentation", ["Hosting","Auto-scale"]),
+            ("API Gateway", "Azure API Mgmt",      "application",  ["Rate-limit","Auth"]),
+            ("Database",    "Azure SQL",           "data",         ["Managed DB","Backups"]),
+            ("Cache",       "Azure Redis Cache",   "data",         ["In-memory cache"]),
+            ("Identity",    "Azure AD B2C",        "security",     ["SSO","MFA"]),
+            ("Monitoring",  "Azure Monitor",       "operations",   ["Alerts","Dashboards"]),
+        ]
+        _tc = {}
+        for nm, svc, tier, svcs in _demo:
+            i = _tc.get(tier, 0); _tc[tier] = i + 1
+            components_3d.append({"name": nm, "azure_service": svc, "services": svcs,
+                                   "tier": tier, "x": round((i - 0.5) * 5.5, 2),
+                                   "y": tier_y[tier], "z": 0.0, "monthly_cost": 0})
 
-    import json as _json
+    total_monthly = safe_int(cost.get("total_monthly_cost", 0))
+    pattern_js = (pattern
+                  .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                  .replace('"', "&quot;").replace("\n", " "))
     comp_json = _json.dumps(components_3d)
     flow_json = _json.dumps([safe_str(f) for f in data_flow])
 
-    html = r"""<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8">
+    # ------------------------------------------------------------------
+    # HTML / Three.js payload
+    # Uses importmap + type="module" — OrbitControls is a proper ES import,
+    # no legacy globals needed.  onclick handlers are exposed via window._3d.
+    # ------------------------------------------------------------------
+    html = (
+        """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
 <title>ECI 3D Architecture</title>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{overflow:hidden;background:#0a0e1a;font-family:'Segoe UI',Arial,sans-serif}
-canvas{display:block}
-#overlay{position:absolute;inset:0;pointer-events:none}
-#title-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);
-  background:rgba(10,14,26,.88);border:1px solid #1e2a4a;border-radius:20px;
-  padding:6px 22px;color:#e2e8f0;font-size:.78rem;white-space:nowrap;
-  pointer-events:none;text-align:center}
-#title-bar .hl{color:#00d4aa;font-weight:700}
-#legend{position:absolute;top:14px;left:14px;background:rgba(10,14,26,.88);
-  border:1px solid #1e2a4a;border-radius:10px;padding:12px 15px}
-#legend-hd{font-size:.65rem;color:#64748b;text-transform:uppercase;
-  letter-spacing:1px;margin-bottom:8px}
-.li{display:flex;align-items:center;gap:7px;margin-bottom:5px;
-  font-size:.72rem;color:#94a3b8}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0e1a;
+  font-family:'Segoe UI',Arial,sans-serif}
+#sw{position:absolute;inset:0}
+#sw canvas{width:100%!important;height:100%!important;display:block}
+#ov{position:absolute;inset:0;pointer-events:none}
+#tb{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  background:rgba(10,14,26,.9);border:1px solid #1e2a4a;border-radius:20px;
+  padding:5px 20px;color:#e2e8f0;font-size:.76rem;white-space:nowrap;text-align:center}
+.hl{color:#00d4aa;font-weight:700}
+#lg{position:absolute;top:12px;left:12px;background:rgba(10,14,26,.9);
+  border:1px solid #1e2a4a;border-radius:10px;padding:11px 14px}
+#lgh{font-size:.63rem;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px}
+.li{display:flex;align-items:center;gap:7px;margin-bottom:4px;font-size:.71rem;color:#94a3b8}
 .ld{width:10px;height:10px;border-radius:2px;flex-shrink:0}
-#hud{position:absolute;top:14px;right:14px;background:rgba(10,14,26,.96);
-  border:1px solid #1e2a4a;border-radius:12px;padding:16px 18px;
-  color:#e2e8f0;min-width:230px;max-width:270px;display:none;
-  backdrop-filter:blur(10px);pointer-events:all}
-#hud-x{float:right;cursor:pointer;color:#64748b;font-size:1rem;line-height:1}
-#hud-x:hover{color:#e2e8f0}
-#hud-name{font-size:.92rem;font-weight:700;color:#00d4aa;margin-bottom:3px;margin-right:20px}
-#hud-svc{font-size:.72rem;color:#00b4d8;margin-bottom:10px;letter-spacing:.4px}
-#hud-cl{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
-#hud-cost{font-size:1.25rem;font-weight:700;color:#ffd166;margin-bottom:10px;
+#hud{position:absolute;top:12px;right:12px;background:rgba(10,14,26,.97);
+  border:1px solid #1e2a4a;border-radius:12px;padding:15px 17px;
+  color:#e2e8f0;min-width:235px;max-width:275px;display:none;
+  backdrop-filter:blur(12px);pointer-events:all}
+#hx{float:right;cursor:pointer;color:#64748b;font-size:.95rem;line-height:1;margin-left:8px}
+#hx:hover{color:#e2e8f0}
+#hn{font-size:.9rem;font-weight:700;color:#00d4aa;margin-bottom:3px}
+#hs{font-size:.7rem;color:#00b4d8;margin-bottom:9px}
+.hl2{font-size:.6rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+#hc{font-size:1.2rem;font-weight:700;color:#ffd166;margin:2px 0 9px;
   font-family:'Courier New',monospace}
-#hud-sl{font-size:.62rem;color:#64748b;text-transform:uppercase;
-  letter-spacing:1px;margin-bottom:4px}
-#hud-svcs{font-size:.73rem;color:#94a3b8;line-height:1.7}
-#hud-tier{display:inline-block;font-size:.6rem;padding:2px 9px;
-  border-radius:10px;margin-top:9px;text-transform:uppercase;letter-spacing:1px}
-#total{position:absolute;bottom:54px;right:14px;background:rgba(10,14,26,.88);
-  border:1px solid #1e2a4a;border-radius:10px;padding:9px 13px;text-align:right}
-#total-l{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
-#total-v{font-size:1.05rem;font-weight:700;color:#ffd166;
-  font-family:'Courier New',monospace}
-#hint{position:absolute;bottom:54px;left:50%;transform:translateX(-50%);
-  color:#475569;font-size:.65rem;white-space:nowrap;pointer-events:none}
-#ctrl{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
-  display:flex;gap:8px;pointer-events:all}
-.cb{background:rgba(10,14,26,.92);border:1px solid #1e2a4a;color:#94a3b8;
-  padding:7px 15px;border-radius:8px;cursor:pointer;font-size:.75rem;
+#hv{font-size:.72rem;color:#94a3b8;line-height:1.7;margin-top:3px}
+#ht{display:inline-block;font-size:.58rem;padding:2px 8px;border-radius:10px;
+  margin-top:8px;text-transform:uppercase;letter-spacing:1px}
+#tot{position:absolute;bottom:52px;right:12px;background:rgba(10,14,26,.9);
+  border:1px solid #1e2a4a;border-radius:10px;padding:8px 13px;text-align:right}
+#totl{font-size:.6rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+#totv{font-size:1rem;font-weight:700;color:#ffd166;font-family:'Courier New',monospace}
+#hint{position:absolute;bottom:52px;left:50%;transform:translateX(-50%);
+  color:#475569;font-size:.63rem;white-space:nowrap}
+#ctrl{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+  display:flex;gap:7px;pointer-events:all}
+.cb{background:rgba(10,14,26,.94);border:1px solid #1e2a4a;color:#94a3b8;
+  padding:6px 14px;border-radius:8px;cursor:pointer;font-size:.73rem;
   transition:all .2s;white-space:nowrap}
 .cb:hover{border-color:#00d4aa;color:#00d4aa}
 .cb.on{background:rgba(0,212,170,.1);border-color:#00d4aa;color:#00d4aa}
-</style>
-</head><body>
-<div id="overlay">
-  <div id="title-bar"><span class="hl">""" + pattern_js + r"""</span> &nbsp;·&nbsp; 3D Architecture Fly-Through</div>
-  <div id="legend">
-    <div id="legend-hd">Tier</div>
+#spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:#0a0e1a;color:#64748b;font-size:.82rem;flex-direction:column;gap:12px;z-index:20}
+.sp{width:30px;height:30px;border:3px solid #1e2a4a;border-top-color:#00d4aa;
+  border-radius:50%;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+</style></head><body>
+<div id="spin"><div class="sp"></div><span>Loading 3D scene&hellip;</span></div>
+<div id="sw"></div>
+<div id="ov">
+  <div id="tb"><span class="hl">""" + pattern_js + """</span> &nbsp;&middot;&nbsp; 3D Architecture Fly-Through</div>
+  <div id="lg">
+    <div id="lgh">Tier</div>
     <div class="li"><div class="ld" style="background:#00b4d8"></div>Presentation</div>
     <div class="li"><div class="ld" style="background:#1b5c8c"></div>Application</div>
     <div class="li"><div class="ld" style="background:#00d4aa"></div>Data</div>
@@ -546,268 +559,212 @@ canvas{display:block}
     <div class="li"><div class="ld" style="background:#ffd166"></div>Operations</div>
   </div>
   <div id="hud">
-    <span id="hud-x" onclick="closeHUD()">&#10005;</span>
-    <div id="hud-name"></div>
-    <div id="hud-svc"></div>
-    <div id="hud-cl">Monthly Infra Cost</div>
-    <div id="hud-cost"></div>
-    <div id="hud-sl">Capabilities</div>
-    <div id="hud-svcs"></div>
-    <div id="hud-tier"></div>
+    <span id="hx" onclick="window._3d.closeHUD()">&#10005;</span>
+    <div id="hn"></div><div id="hs"></div>
+    <div class="hl2">Monthly Infra Cost</div><div id="hc"></div>
+    <div class="hl2">Capabilities</div><div id="hv"></div>
+    <div id="ht"></div>
   </div>
-  <div id="hint">Click a component to inspect &nbsp;·&nbsp; Drag to orbit &nbsp;·&nbsp; Scroll to zoom</div>
-  <div id="total">
-    <div id="total-l">Total Monthly</div>
-    <div id="total-v">$""" + str(total_monthly) + r"""/mo</div>
-  </div>
+  <div id="hint">Click a component &nbsp;&middot;&nbsp; Drag to orbit &nbsp;&middot;&nbsp; Scroll to zoom</div>
+  <div id="tot"><div id="totl">Total Monthly</div><div id="totv">$""" + str(total_monthly) + """/mo</div></div>
   <div id="ctrl">
-    <button class="cb" id="btn-fly" onclick="toggleFly()">&#9654; Play Fly-Through</button>
-    <button class="cb" onclick="resetCam()">&#8635; Reset</button>
-    <button class="cb" onclick="topCam()">&#8859; Top View</button>
+    <button class="cb" id="bfly" onclick="window._3d.toggleFly()">&#9654; Play Fly-Through</button>
+    <button class="cb" onclick="window._3d.resetCam()">&#8635; Reset</button>
+    <button class="cb" onclick="window._3d.topCam()">&#8859; Top View</button>
   </div>
 </div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
-<script>
-const COMPS=""" + comp_json + """;
-const FLOW=""" + flow_json + """;
+const COMPS="""
+        + comp_json
+        + """;
+const FLOW="""
+        + flow_json
+        + """;
+const THEX={presentation:0x00b4d8,application:0x1b5c8c,data:0x00d4aa,security:0x7b61ff,operations:0xffd166};
+const TCSS={presentation:'#00b4d8',application:'#1b5c8c',data:'#00d4aa',security:'#7b61ff',operations:'#ffd166'};
+const TBG={presentation:'rgba(0,180,216,.12)',application:'rgba(27,92,140,.12)',
+           data:'rgba(0,212,170,.12)',security:'rgba(123,97,255,.12)',operations:'rgba(255,209,102,.12)'};
 
-const TIER_HEX={presentation:0x00b4d8,application:0x1b5c8c,data:0x00d4aa,security:0x7b61ff,operations:0xffd166};
-const TIER_CSS={presentation:'#00b4d8',application:'#1b5c8c',data:'#00d4aa',security:'#7b61ff',operations:'#ffd166'};
-const TIER_BG={presentation:'rgba(0,180,216,.1)',application:'rgba(27,92,140,.1)',data:'rgba(0,212,170,.1)',security:'rgba(123,97,255,.1)',operations:'rgba(255,209,102,.1)'};
-
-// ── Scene ──
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x0a0e1a);
-scene.fog=new THREE.FogExp2(0x0a0e1a,0.016);
-
-const W=window.innerWidth,H=window.innerHeight;
-const camera=new THREE.PerspectiveCamera(58,W/H,0.1,1000);
-camera.position.set(0,22,40);
-
-const renderer=new THREE.WebGLRenderer({antialias:true});
+const wrap=document.getElementById('sw');
+const W=wrap.clientWidth||window.innerWidth, H=wrap.clientHeight||window.innerHeight;
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setSize(W,H);
-document.body.insertBefore(renderer.domElement,document.body.firstChild);
+renderer.setClearColor(0x0a0e1a,1);
+wrap.appendChild(renderer.domElement);
 
-const controls=new THREE.OrbitControls(camera,renderer.domElement);
-controls.enableDamping=true;controls.dampingFactor=0.08;
-controls.minDistance=4;controls.maxDistance=90;
-controls.target.set(0,0,0);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a0e1a);
+scene.fog=new THREE.FogExp2(0x0a0e1a,0.014);
 
-// ── Lights ──
-scene.add(new THREE.AmbientLight(0xffffff,0.4));
-const dLight=new THREE.DirectionalLight(0x00d4aa,1.6);
-dLight.position.set(10,20,15);scene.add(dLight);
-const pL1=new THREE.PointLight(0x00b4d8,2,70);pL1.position.set(-15,12,0);scene.add(pL1);
-const pL2=new THREE.PointLight(0x7b61ff,1.6,70);pL2.position.set(15,-4,10);scene.add(pL2);
+const camera=new THREE.PerspectiveCamera(55,W/H,0.1,1000);
+camera.position.set(0,20,38);
 
-// ── Grid ──
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.minDistance=4; controls.maxDistance=100;
+controls.target.set(0,0,0); controls.update();
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff,0.5));
+const dL=new THREE.DirectionalLight(0x00d4aa,1.8); dL.position.set(10,20,15); scene.add(dL);
+const pL1=new THREE.PointLight(0x00b4d8,2.2,80); pL1.position.set(-15,12,0); scene.add(pL1);
+const pL2=new THREE.PointLight(0x7b61ff,1.8,80); pL2.position.set(15,-4,10); scene.add(pL2);
+
+// Grid
 scene.add(new THREE.GridHelper(100,50,0x1e2a4a,0x111827));
 
-// ── Starfield ──
-(function(){
-  const g=new THREE.BufferGeometry();
-  const p=new Float32Array(2400);
-  for(let i=0;i<2400;i++) p[i]=(Math.random()-.5)*220;
-  g.setAttribute('position',new THREE.BufferAttribute(p,3));
-  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x94a3b8,size:.15,transparent:true,opacity:.55})));
-})();
+// Starfield
+{const g=new THREE.BufferGeometry(),p=new Float32Array(7200);
+ for(let i=0;i<p.length;i++)p[i]=(Math.random()-.5)*220;
+ g.setAttribute('position',new THREE.BufferAttribute(p,3));
+ scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x94a3b8,size:.15,transparent:true,opacity:.5})));}
 
-// ── Tier floor planes ──
-const tiers=[...new Set(COMPS.map(c=>c.tier))];
-tiers.forEach(tier=>{
-  const tc=COMPS.filter(c=>c.tier===tier);
-  if(!tc.length)return;
-  const ty=tc[0].y-1.4;
-  const mx=Math.max(...tc.map(c=>Math.abs(c.x)))+4.5;
-  const geo=new THREE.PlaneGeometry(mx*2+4,11);
-  const mat=new THREE.MeshBasicMaterial({color:TIER_HEX[tier]||0x1e2a4a,transparent:true,opacity:.055,side:THREE.DoubleSide});
-  const pl=new THREE.Mesh(geo,mat);
-  pl.rotation.x=-Math.PI/2;pl.position.set(0,ty,2);scene.add(pl);
-  const ol=new THREE.LineSegments(new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({color:TIER_HEX[tier]||0x1e2a4a,transparent:true,opacity:.2}));
-  ol.rotation.x=-Math.PI/2;ol.position.set(0,ty,2);scene.add(ol);
+// Tier floor plates
+[...new Set(COMPS.map(c=>c.tier))].forEach(tier=>{
+  const tc=COMPS.filter(c=>c.tier===tier); if(!tc.length)return;
+  const ty=tc[0].y-1.5, mx=Math.max(...tc.map(c=>Math.abs(c.x)))+5;
+  const geo=new THREE.PlaneGeometry(mx*2+4,12);
+  const pl=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:THEX[tier]||0x1e2a4a,transparent:true,opacity:.06,side:THREE.DoubleSide}));
+  pl.rotation.x=-Math.PI/2; pl.position.set(0,ty,2); scene.add(pl);
+  const el=new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({color:THEX[tier]||0x1e2a4a,transparent:true,opacity:.25}));
+  el.rotation.x=-Math.PI/2; el.position.set(0,ty,2); scene.add(el);
 });
 
-// ── Component boxes ──
-const meshes=[];
-const raycaster=new THREE.Raycaster();
-const mouse=new THREE.Vector2();
+// Label sprites
+function mkLabel(txt,col,sc){
+  const cv=document.createElement('canvas'); cv.width=512; cv.height=64;
+  const ctx=cv.getContext('2d');
+  ctx.font='bold 24px Segoe UI,Arial'; ctx.textAlign='center';
+  ctx.fillStyle='#'+col.toString(16).padStart(6,'0');
+  ctx.shadowColor='rgba(0,0,0,.8)'; ctx.shadowBlur=6;
+  ctx.fillText(txt.length>28?txt.slice(0,26)+'\u2026':txt,256,44);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true,depthTest:false}));
+  sp.scale.set(7*sc,.88*sc,1); return sp;
+}
 
+// Component boxes
+const meshes=[], ray=new THREE.Raycaster(), mouse=new THREE.Vector2();
 COMPS.forEach((c,i)=>{
-  const col=TIER_HEX[c.tier]||0x1e2a4a;
-  const geo=new THREE.BoxGeometry(3.6,1.9,2.4);
-  const mat=new THREE.MeshPhongMaterial({color:col,transparent:true,opacity:.75,shininess:90,specular:0x303030});
+  const col=THEX[c.tier]||0x1e2a4a;
+  const geo=new THREE.BoxGeometry(3.8,2.0,2.6);
+  const mat=new THREE.MeshPhongMaterial({color:col,transparent:true,opacity:.78,shininess:100,specular:0x404040});
   const mesh=new THREE.Mesh(geo,mat);
-  mesh.position.set(c.x,c.y,c.z);
-  mesh.userData={c,i,origCol:col};
-  scene.add(mesh);
+  mesh.position.set(c.x,c.y,c.z); mesh.userData={c,i}; scene.add(mesh);
   mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo),
-    new THREE.LineBasicMaterial({color:col,transparent:true,opacity:.85})));
-
-  // Name label
-  scene.add(makeSprite(c.name,col,c.x,c.y+1.95,c.z,0.72));
-  // Azure service sub-label
-  if(c.azure_service) scene.add(makeSprite(c.azure_service,0x94a3b8,c.x,c.y+1.28,c.z,0.52));
-
+    new THREE.LineBasicMaterial({color:col,transparent:true,opacity:.9})));
+  const nl=mkLabel(c.name,col,.75); nl.position.set(c.x,c.y+2.1,c.z); scene.add(nl);
+  if(c.azure_service){const sl=mkLabel(c.azure_service,0xaabbcc,.54);sl.position.set(c.x,c.y+1.3,c.z);scene.add(sl);}
   meshes.push(mesh);
 });
 
-// ── Sprite label helper ──
-function makeSprite(text,col,x,y,z,sc){
-  const cv=document.createElement('canvas');
-  cv.width=512;cv.height=60;
-  const ctx=cv.getContext('2d');
-  ctx.font='bold 22px Segoe UI,Arial';
-  ctx.textAlign='center';
-  ctx.fillStyle='#'+col.toString(16).padStart(6,'0');
-  const t=text.length>30?text.slice(0,28)+'…':text;
-  ctx.fillText(t,256,40);
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
-  sp.scale.set(6*sc,0.72*sc,1);
-  sp.position.set(x,y,z);
-  return sp;
-}
-
-// ── Data flow connections ──
-function findComp(name){
-  const nl=name.toLowerCase();
-  return COMPS.find(c=>c.name.toLowerCase().includes(nl)||nl.includes(c.name.toLowerCase()));
-}
+// Data-flow arcs
+function fc(n){const nl=n.toLowerCase();return COMPS.find(c=>c.name.toLowerCase().includes(nl)||nl.includes(c.name.toLowerCase()));}
 for(let i=0;i<FLOW.length-1;i++){
-  const a=findComp(FLOW[i]),b=findComp(FLOW[i+1]);
-  if(!a||!b)continue;
-  const pa=new THREE.Vector3(a.x,a.y,a.z);
-  const pb=new THREE.Vector3(b.x,b.y,b.z);
-  const pm=pa.clone().add(pb).multiplyScalar(.5);
-  pm.y+=Math.abs(a.y-b.y)*.5+2.5;
-  const pts=new THREE.QuadraticBezierCurve3(pa,pm,pb).getPoints(36);
-  scene.add(new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({color:0x00b4d8,transparent:true,opacity:.45})
-  ));
-  const dir=pb.clone().sub(pa).normalize();
-  scene.add(new THREE.ArrowHelper(dir,pb,0,0x00b4d8,.55,.32));
+  const a=fc(FLOW[i]),b=fc(FLOW[i+1]); if(!a||!b)continue;
+  const pa=new THREE.Vector3(a.x,a.y,a.z),pb=new THREE.Vector3(b.x,b.y,b.z);
+  const pm=pa.clone().add(pb).multiplyScalar(.5); pm.y+=Math.abs(a.y-b.y)*.5+2.5;
+  const pts=new THREE.QuadraticBezierCurve3(pa,pm,pb).getPoints(40);
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({color:0x00b4d8,transparent:true,opacity:.5})));
+  scene.add(new THREE.ArrowHelper(pb.clone().sub(pa).normalize(),pb,0,0x00b4d8,.6,.35));
 }
 
-// ── HUD ──
-let selMesh=null;
+// HUD
+let sel=null;
 function showHUD(c){
-  document.getElementById('hud-name').textContent=c.name;
-  document.getElementById('hud-svc').textContent=c.azure_service||'';
-  document.getElementById('hud-cost').textContent=c.monthly_cost>0?'$'+c.monthly_cost.toLocaleString()+'/mo':'Included in estimate';
-  document.getElementById('hud-svcs').innerHTML=c.services.length?c.services.map(s=>'&#8226; '+s).join('<br>'):'N/A';
-  const te=document.getElementById('hud-tier');
-  const tc=TIER_CSS[c.tier]||'#94a3b8';
+  document.getElementById('hn').textContent=c.name;
+  document.getElementById('hs').textContent=c.azure_service||'';
+  document.getElementById('hc').textContent=c.monthly_cost>0?'$'+c.monthly_cost.toLocaleString()+'/mo':'Included in estimate';
+  document.getElementById('hv').innerHTML=c.services.length?c.services.map(s=>'&#8226; '+s).join('<br>'):'N/A';
+  const te=document.getElementById('ht'),tc=TCSS[c.tier]||'#94a3b8';
   te.textContent=(c.tier||'').toUpperCase();
-  te.style.cssText='background:'+( TIER_BG[c.tier]||'transparent')+';color:'+tc+';border:1px solid '+tc;
+  te.style.cssText='background:'+(TBG[c.tier]||'transparent')+';color:'+tc+';border:1px solid '+tc;
   document.getElementById('hud').style.display='block';
 }
 function closeHUD(){document.getElementById('hud').style.display='none';}
 
-// ── Click handler ──
-let zoomTarget=null,zoomLook=null,doZoom=false;
+// Click ray-cast
+let zT=null,zL=null,doZ=false;
 renderer.domElement.addEventListener('click',e=>{
-  mouse.x=(e.clientX/W)*2-1;
-  mouse.y=-(e.clientY/H)*2+1;
-  raycaster.setFromCamera(mouse,camera);
-  const hits=raycaster.intersectObjects(meshes);
+  const r=renderer.domElement.getBoundingClientRect();
+  mouse.x=((e.clientX-r.left)/r.width)*2-1;
+  mouse.y=-((e.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(mouse,camera);
+  const hits=ray.intersectObjects(meshes);
   if(hits.length){
     const m=hits[0].object;
-    if(selMesh) selMesh.material.emissive.setHex(0);
-    selMesh=m;m.material.emissive.setHex(0x1a1a1a);
-    showHUD(m.userData.c);
-    if(flying) stopFly();
-    zoomTarget=new THREE.Vector3(m.position.x+9,m.position.y+6,m.position.z+13);
-    zoomLook=m.position.clone();doZoom=true;
-  } else {
-    if(selMesh){selMesh.material.emissive.setHex(0);selMesh=null;}
-    doZoom=false;closeHUD();
-  }
+    if(sel)sel.material.emissive.setHex(0); sel=m; m.material.emissive.setHex(0x1e1e1e);
+    showHUD(m.userData.c); if(fly)stopFly();
+    zT=new THREE.Vector3(m.position.x+9,m.position.y+6,m.position.z+14);
+    zL=m.position.clone(); doZ=true;
+  }else{if(sel){sel.material.emissive.setHex(0);sel=null;}doZ=false;closeHUD();}
 });
 
-// ── Camera presets ──
-const DEF_POS=new THREE.Vector3(0,22,40);
-const DEF_TGT=new THREE.Vector3(0,0,0);
-function resetCam(){doZoom=false;stopFly();controls.enabled=true;
-  camera.position.copy(DEF_POS);controls.target.copy(DEF_TGT);}
-function topCam(){doZoom=false;stopFly();controls.enabled=true;
-  camera.position.set(0,55,.01);controls.target.set(0,0,0);}
+// Camera presets
+const DP=new THREE.Vector3(0,20,38),DT=new THREE.Vector3(0,0,0);
+function resetCam(){doZ=false;stopFly();controls.enabled=true;camera.position.copy(DP);controls.target.copy(DT);}
+function topCam(){doZ=false;stopFly();controls.enabled=true;camera.position.set(0,55,.01);controls.target.set(0,0,0);}
 
-// ── Fly-through ──
-let flying=false,flyT=0;
-const FLY_SPEED=0.0018;
+// Fly-through (Catmull-Rom spline)
+let fly=false,flyT=0; const FS=0.0016;
 const WPS=COMPS.length?[
   {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,2,0)},
-  ...COMPS.map(c=>({pos:new THREE.Vector3(c.x+9,c.y+7,c.z+15),look:new THREE.Vector3(c.x,c.y,c.z)})),
+  ...COMPS.map(c=>({pos:new THREE.Vector3(c.x+9,c.y+7,c.z+16),look:new THREE.Vector3(c.x,c.y,c.z)})),
   {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,2,0)},
-]:[
-  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)},
-  {pos:new THREE.Vector3(22,10,22),look:new THREE.Vector3(0,0,0)},
-  {pos:new THREE.Vector3(-22,10,22),look:new THREE.Vector3(0,0,0)},
-  {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)},
-];
-function toggleFly(){flying?stopFly():startFly();}
-function startFly(){
-  flying=true;flyT=0;controls.enabled=false;doZoom=false;closeHUD();
-  document.getElementById('btn-fly').textContent='&#9646;&#9646; Pause';
-  document.getElementById('btn-fly').classList.add('on');
-}
-function stopFly(){
-  flying=false;controls.enabled=true;
-  document.getElementById('btn-fly').textContent='&#9654; Play Fly-Through';
-  document.getElementById('btn-fly').classList.remove('on');
-}
+]:[{pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)},
+   {pos:new THREE.Vector3(22,10,22),look:new THREE.Vector3(0,0,0)},
+   {pos:new THREE.Vector3(-22,10,22),look:new THREE.Vector3(0,0,0)},
+   {pos:new THREE.Vector3(0,22,42),look:new THREE.Vector3(0,0,0)}];
+function toggleFly(){fly?stopFly():startFly();}
+function startFly(){fly=true;flyT=0;controls.enabled=false;doZ=false;closeHUD();
+  document.getElementById('bfly').innerHTML='&#9646;&#9646; Pause';
+  document.getElementById('bfly').classList.add('on');}
+function stopFly(){fly=false;controls.enabled=true;
+  document.getElementById('bfly').innerHTML='&#9654; Play Fly-Through';
+  document.getElementById('bfly').classList.remove('on');}
 function crGet(t,pts){
-  const n=pts.length,seg=Math.min(Math.floor(t*(n-1)),n-2),lt=(t*(n-1))-seg;
+  const n=pts.length,seg=Math.min(Math.floor(t*(n-1)),n-2),lt=t*(n-1)-seg;
   const p0=pts[Math.max(0,seg-1)],p1=pts[seg],p2=pts[Math.min(n-1,seg+1)],p3=pts[Math.min(n-1,seg+2)];
-  return{pos:cr3(lt,p0.pos,p1.pos,p2.pos,p3.pos),look:cr3(lt,p0.look,p1.look,p2.look,p3.look)};
-}
+  return{pos:cr3(lt,p0.pos,p1.pos,p2.pos,p3.pos),look:cr3(lt,p0.look,p1.look,p2.look,p3.look)};}
 function cr3(t,p0,p1,p2,p3){
-  const t2=t*t,t3=t2*t;
-  const f=(a,b,c,d)=>.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3);
-  return new THREE.Vector3(f(p0.x,p1.x,p2.x,p3.x),f(p0.y,p1.y,p2.y,p3.y),f(p0.z,p1.z,p2.z,p3.z));
-}
+  const t2=t*t,t3=t2*t,f=(a,b,c,d)=>.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3);
+  return new THREE.Vector3(f(p0.x,p1.x,p2.x,p3.x),f(p0.y,p1.y,p2.y,p3.y),f(p0.z,p1.z,p2.z,p3.z));}
 
-// ── Animation loop ──
+// Animate
 let tick=0;
 function animate(){
-  requestAnimationFrame(animate);tick+=.012;
-  // Pulse meshes
+  requestAnimationFrame(animate); tick+=.012;
   meshes.forEach((m,i)=>{
-    m.material.opacity=.68+.09*Math.sin(tick+i*.9);
-    if(m===selMesh) m.scale.setScalar(1+.025*Math.sin(tick*2.5));
-    else m.scale.setScalar(1);
+    m.material.opacity=.72+.08*Math.sin(tick+i*.9);
+    m.scale.setScalar(m===sel?1+.02*Math.sin(tick*2.5):1);
   });
-  // Dynamic lights
-  pL1.intensity=1.6+.5*Math.sin(tick*.65);
-  pL2.intensity=1.3+.4*Math.sin(tick*.5+1.2);
-  // Fly-through
-  if(flying){
-    flyT+=FLY_SPEED;if(flyT>=1)flyT=0;
-    const pt=crGet(flyT,WPS);
-    camera.position.lerp(pt.pos,.025);
-    controls.target.lerp(pt.look,.04);
-  }
-  // Zoom to selected
-  if(doZoom&&zoomTarget&&zoomLook){
-    camera.position.lerp(zoomTarget,.04);
-    controls.target.lerp(zoomLook,.06);
-  }
+  pL1.intensity=1.8+.5*Math.sin(tick*.65); pL2.intensity=1.5+.4*Math.sin(tick*.5+1.2);
+  if(fly){flyT+=FS;if(flyT>=1)flyT=0;const pt=crGet(flyT,WPS);camera.position.lerp(pt.pos,.025);controls.target.lerp(pt.look,.04);}
+  if(doZ&&zT&&zL){camera.position.lerp(zT,.04);controls.target.lerp(zL,.06);}
   controls.update();
   renderer.render(scene,camera);
 }
 animate();
 
-// ── Resize ──
+// Resize
 window.addEventListener('resize',()=>{
-  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
+  const nw=wrap.clientWidth||window.innerWidth,nh=wrap.clientHeight||window.innerHeight;
+  camera.aspect=nw/nh; camera.updateProjectionMatrix(); renderer.setSize(nw,nh);
 });
+
+// Hide spinner after first frame
+setTimeout(()=>{const s=document.getElementById('spin');if(s)s.style.display='none';},500);
+
+// Expose onclick handlers (module scope != global scope)
+window._3d={toggleFly,resetCam,topCam,closeHUD};
 </script>
 </body></html>"""
+    )
     return html
 
 
@@ -5281,17 +5238,17 @@ def show_results():
                             '<th style="padding:6px 8px;text-align:left;">Justification</th>'
                             '</tr>' +
                             "".join(
-                                '<tr style="background:' + ("#f5f8fc" if ti % 2 == 0 else "#ffffff") + ';">'
-                                '<td style="padding:5px 8px;">' + safe_str(safe_dict(tk).get("name")) + '</td>'
-                                '<td style="padding:5px 8px;text-align:center;color:#1B3A5C;">' + safe_str(safe_dict(tk).get("role")) + '</td>'
-                                '<td style="padding:5px 8px;text-align:center;">' + str(safe_int(safe_dict(tk).get("low_hours", 0))) + '</td>'
-                                '<td style="padding:5px 8px;text-align:center;font-weight:bold;">' + str(safe_int(safe_dict(tk).get("hours", 0))) + '</td>'
-                                '<td style="padding:5px 8px;text-align:center;">' + str(safe_int(safe_dict(tk).get("high_hours", 0))) + '</td>'
-                                '<td style="padding:5px 8px;font-style:italic;color:#555;">' + safe_str(safe_dict(tk).get("justification", "")) + '</td>'
+                                '<tr style="background:' + ("#1a2a4a" if ti % 2 == 0 else "#0f1928") + ';color:#e2e8f0;">'
+                                '<td style="padding:5px 8px;color:#e2e8f0;">' + safe_str(safe_dict(tk).get("name")) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;color:#00b4d8;">' + safe_str(safe_dict(tk).get("role")) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;color:#94a3b8;">' + str(safe_int(safe_dict(tk).get("low_hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;font-weight:bold;color:#00d4aa;">' + str(safe_int(safe_dict(tk).get("hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;text-align:center;color:#94a3b8;">' + str(safe_int(safe_dict(tk).get("high_hours", 0))) + '</td>'
+                                '<td style="padding:5px 8px;font-style:italic;color:#94a3b8;">' + safe_str(safe_dict(tk).get("justification", "")) + '</td>'
                                 '</tr>'
                                 for ti, tk in enumerate(tasks)
                             ) +
-                            '<tr style="background:#E2EFDA;font-weight:bold;">'
+                            '<tr style="background:rgba(0,212,170,.15);color:#00d4aa;font-weight:bold;">'
                             '<td style="padding:5px 8px;" colspan="2">Phase Total</td>'
                             '<td style="padding:5px 8px;text-align:center;">' + str(ph_low) + '</td>'
                             '<td style="padding:5px 8px;text-align:center;">' + str(ph_avg) + '</td>'
