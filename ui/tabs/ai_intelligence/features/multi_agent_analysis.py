@@ -780,7 +780,8 @@ class MultiAgentAnalysisTab:
                 col_action1, col_action2, col_action3 = st.columns(3)
                 with col_action1:
                     if st.button("🔄 Refresh Analysis", key="refresh_debate"):
-                        st.session_state.debate_result = self.debate_system.start_debate(current_symbol)
+                        with st.spinner(f"🔄 Refreshing AI analysis for {current_symbol}…"):
+                            st.session_state.debate_result = self.debate_system.start_debate(current_symbol)
                         st.rerun()
                 
                 with col_action2:

@@ -1792,19 +1792,20 @@ class ScenarioModelingTab:
 
         # --- Main Action Button ---
         if st.button(f"🚀 Analyze Scenarios for {self.symbol}", type="primary", use_container_width=True):
-            
-            # --- Perform Analysis and Display Results ---
-            try:
-                scenarios = self.engine.generate_comprehensive_scenarios(self.symbol, timeframe)
-                if scenarios:
-                    st.session_state['scenario_results'] = scenarios
-                else:
-                    st.error("Scenario generation failed to produce results. Please try again.")
-                    st.session_state['scenario_results'] = None
 
-            except Exception as e:
-                st.error(f"An unexpected error occurred during analysis: {e}")
-                st.session_state['scenario_results'] = None
+            # --- Perform Analysis and Display Results ---
+            with st.spinner(f"🔍 Running scenario analysis for {self.symbol}… this may take a moment."):
+                try:
+                    scenarios = self.engine.generate_comprehensive_scenarios(self.symbol, timeframe)
+                    if scenarios:
+                        st.session_state['scenario_results'] = scenarios
+                    else:
+                        st.error("Scenario generation failed to produce results. Please try again.")
+                        st.session_state['scenario_results'] = None
+
+                except Exception as e:
+                    st.error(f"An unexpected error occurred during analysis: {e}")
+                    st.session_state['scenario_results'] = None
         
         # --- Display Cached or Newly Generated Results ---
         if st.session_state.get('scenario_results'):

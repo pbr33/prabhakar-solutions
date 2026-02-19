@@ -1699,26 +1699,28 @@ def render():
     
     with col1:
         if st.button("📊 Export Technical Data", key="export_tech"):
-            csv_data = enhanced_data.tail(100).to_csv()
+            with st.spinner("Preparing technical data export…"):
+                csv_data = enhanced_data.tail(100).to_csv()
             st.download_button(
                 label="💾 Download CSV",
                 data=csv_data,
                 file_name=f"{symbol}_technical_data_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
-    
+
     with col2:
         patterns = st.session_state.get('detected_patterns', [])
         if patterns and st.button("🎯 Export Patterns", key="export_patterns"):
-            pattern_df = pd.DataFrame(patterns)
-            csv_data = pattern_df.to_csv(index=False)
+            with st.spinner("Preparing patterns export…"):
+                pattern_df = pd.DataFrame(patterns)
+                csv_data = pattern_df.to_csv(index=False)
             st.download_button(
                 label="💾 Download Patterns",
                 data=csv_data,
                 file_name=f"{symbol}_patterns_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
-    
+
     with col3:
         if st.button("📈 Export Chart", key="export_chart"):
             st.info("Chart export functionality - would generate PNG/PDF of the current chart")
@@ -2420,7 +2422,8 @@ def render():
         with col1:
             if st.button("📊 Export Technical Data", key="export_tech"):
                 try:
-                    csv_data = enhanced_data.tail(100).to_csv()
+                    with st.spinner("Preparing technical data export…"):
+                        csv_data = enhanced_data.tail(100).to_csv()
                     st.download_button(
                         label="💾 Download CSV",
                         data=csv_data,
@@ -2429,13 +2432,14 @@ def render():
                     )
                 except Exception as export_error:
                     st.error(f"Export error: {str(export_error)}")
-        
+
         with col2:
             patterns = st.session_state.get('detected_patterns', [])
             if patterns and st.button("🎯 Export Patterns", key="export_patterns"):
                 try:
-                    pattern_df = pd.DataFrame(patterns)
-                    csv_data = pattern_df.to_csv(index=False)
+                    with st.spinner("Preparing patterns export…"):
+                        pattern_df = pd.DataFrame(patterns)
+                        csv_data = pattern_df.to_csv(index=False)
                     st.download_button(
                         label="💾 Download Patterns",
                         data=csv_data,
@@ -2444,7 +2448,7 @@ def render():
                     )
                 except Exception as pattern_export_error:
                     st.error(f"Pattern export error: {str(pattern_export_error)}")
-        
+
         with col3:
             if st.button("📈 Export Chart", key="export_chart"):
                 st.info("Chart export functionality - would generate PNG/PDF of the current chart")
