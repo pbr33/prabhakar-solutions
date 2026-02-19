@@ -14,6 +14,7 @@ from services.data_fetcher import (
     pro_get_fundamental_data,
     pro_get_news,
 )
+from analysis.technical import run_ma_crossover_backtest
 
 WATCHLIST_FILE = "watchlist.json"
 
@@ -419,8 +420,8 @@ def render():
             st.subheader(symbol)
 
         # Tabs
-        tab_chart, tab_fundamentals, tab_news = st.tabs([
-            "📈 Chart & Technicals", "💼 Fundamentals", "📰 News",
+        tab_chart, tab_fundamentals, tab_news, tab_backtest = st.tabs([
+            "📈 Chart & Technicals", "💼 Fundamentals", "📰 News", "🧪 Strategy Backtesting",
         ])
 
         # ── Chart Tab ───────────────────────────────────────────────────
@@ -523,3 +524,99 @@ def render():
                     """, unsafe_allow_html=True)
             else:
                 st.info("No recent news available for this symbol.")
+
+        # ── Strategy Backtesting Tab ──────────────────────────────────────
+        with tab_backtest:
+            st.markdown("##### ⚙️ Configure Strategy")
+
+            with st.form("backtest_form"):
+                bc1, bc2, bc3 = st.columns(3)
+                start_date      = bc1.date_input("Start Date",      datetime.now() - timedelta(days=365 * 2))
+                end_date        = bc2.date_input("End Date",         datetime.now())
+                initial_capital = bc3.number_input("Initial Capital ($)", 1000, 1_000_000, 10_000, step=1000)
+
+                bc4, bc5, _ = st.columns(3)
+                short_window = bc4.number_input("Short MA (days)", 1,  100,  40)
+                long_window  = bc5.number_input("Long MA (days)",  2,  250, 100)
+
+                run = st.form_submit_button("🚀 Run Backtest", use_container_width=True, type="primary")
+
+            if run:
+                with st.spinner("Running backtest on real historical data…"):
+                    results = run_ma_crossover_backtest(
+                        api_key, symbol,
+                        start_date, end_date,
+                        initial_capital, short_window, long_window,
+                    )
+                    st.session_state.backtest_results = results
+
+            if "backtest_results" in st.session_state:
+                res = st.session_state.backtest_results
+                if res.get("error"):
+                    st.error(res["error"])
+                else:
+                    # Summary metrics
+                    st.markdown("##### 📊 Results")
+                    rm1, rm2, rm3, rm4 = st.columns(4)
+                    final_val   = res["final_value"]
+                    total_ret   = res["total_return_pct"]
+                    buy_hold    = initial_capital  # fallback label
+                    trade_log   = res.get("trade_log", pd.DataFrame())
+                    n_trades    = len(trade_log) if not trade_log.empty else 0
+
+                    rm1.metric("Final Portfolio Value", f"${final_val:,.2f}")
+                    rm2.metric("Total Return",          f"{total_ret:.2f}%",
+                               delta_color="normal" if total_ret >= 0 else "inverse")
+                    rm3.metric("Net P&L",               f"${final_val - initial_capital:,.2f}",
+                               delta_color="normal" if final_val >= initial_capital else "inverse")
+                    rm4.metric("Total Trades",          str(n_trades))
+
+                    # Dual-axis chart — price + portfolio value
+                    df_plot = res["plot_data"]
+                    fig_bt = make_subplots(specs=[[{"secondary_y": True}]])
+
+                    fig_bt.add_trace(
+                        go.Scatter(x=df_plot.index, y=df_plot["close"],
+                                   name="Price", line=dict(color="#42A5F5", width=1.5)),
+                        secondary_y=False,
+                    )
+                    fig_bt.add_trace(
+                        go.Scatter(x=df_plot.index, y=df_plot["portfolio_value"],
+                                   name="Portfolio Value", line=dict(color="#26a69a", width=2),
+                                   fill="tozeroy", fillcolor="rgba(38,166,154,0.08)"),
+                        secondary_y=True,
+                    )
+
+                    # Mark buy/sell signals
+                    if "positions" in df_plot.columns:
+                        buys  = df_plot[df_plot["positions"] ==  1]
+                        sells = df_plot[df_plot["positions"] == -1]
+                        if not buys.empty:
+                            fig_bt.add_trace(go.Scatter(
+                                x=buys.index, y=buys["close"], mode="markers",
+                                marker=dict(symbol="triangle-up", size=10, color="#26a69a"),
+                                name="Buy Signal",
+                            ), secondary_y=False)
+                        if not sells.empty:
+                            fig_bt.add_trace(go.Scatter(
+                                x=sells.index, y=sells["close"], mode="markers",
+                                marker=dict(symbol="triangle-down", size=10, color="#ef5350"),
+                                name="Sell Signal",
+                            ), secondary_y=False)
+
+                    fig_bt.update_layout(
+                        height=420,
+                        paper_bgcolor="#0E1117", plot_bgcolor="#0E1117",
+                        font=dict(color="#FAFAFA", size=11),
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        legend=dict(orientation="h", y=1.08, bgcolor="rgba(0,0,0,0)"),
+                    )
+                    fig_bt.update_xaxes(gridcolor="#1E2130")
+                    fig_bt.update_yaxes(gridcolor="#1E2130", title_text="Price ($)",          secondary_y=False)
+                    fig_bt.update_yaxes(gridcolor="#1E2130", title_text="Portfolio Value ($)", secondary_y=True)
+                    st.plotly_chart(fig_bt, use_container_width=True)
+
+                    # Trade log table
+                    if not trade_log.empty:
+                        st.markdown("##### 📋 Trade Log")
+                        st.dataframe(trade_log, use_container_width=True, hide_index=True)
