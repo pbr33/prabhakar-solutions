@@ -931,39 +931,3 @@ class MultiAgentAnalysisTab:
         with perf_col5:
             st.metric("📊 Data Points", "10M+", "Real-time")
         
-        # Advanced features teaser
-        st.divider()
-        st.markdown("### 🚀 Advanced Features")
-        
-        feature_col1, feature_col2, feature_col3 = st.columns(3)
-        
-        with feature_col1:
-            with st.expander("🎯 Custom Agent Training"):
-                st.markdown("""
-                **Train your own AI agents:**
-                - Custom analysis parameters
-                - Sector-specific expertise
-                - Personal trading style adaptation
-                - Backtesting capabilities
-                """)
-        
-        with feature_col2:
-            with st.expander("📊 Advanced Analytics"):
-                st.markdown("""
-                **Deep market insights:**
-                - Multi-timeframe analysis
-                - Options flow integration
-                - Institutional activity tracking  
-                - Risk scenario modeling
-                """)
-        
-        with feature_col3:
-            with st.expander("🔔 Smart Alerts"):
-                st.markdown("""
-                **Intelligent notifications:**
-                - Consensus changes
-                - Confidence threshold breaches
-                - Cross-asset correlations
-                - Market regime shifts
-                """)
-                

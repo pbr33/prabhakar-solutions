@@ -1110,36 +1110,6 @@ class AIStorytellerTab:
                 - 📊 Market impact: TBD
                 """)
             
-            # Advanced features
-            st.markdown("#### 🚀 Advanced Features")
-            
-            with st.expander("🎨 Customization"):
-                st.markdown("""
-                **Story Style Options:**
-                - 📰 Bloomberg Terminal
-                - 📊 Technical Focus
-                - 💰 Fundamental Analysis
-                - 📱 Social Media Brief
-                """)
-            
-            with st.expander("🔔 Smart Alerts"):
-                st.markdown("""
-                **Available Alerts:**
-                - 📈 Price breakouts
-                - 📰 News catalysts
-                - 🎯 Technical signals
-                - 💹 Volume spikes
-                """)
-            
-            with st.expander("📊 Historical Stories"):
-                st.markdown("""
-                **Story Archive:**
-                - 📅 Daily stories
-                - 🎯 Performance tracking
-                - 📈 Accuracy metrics
-                - 💾 Export options
-                """)
-        
         # Performance metrics footer
         st.divider()
         st.markdown("### 📈 Storyteller Performance")
