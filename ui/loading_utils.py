@@ -6,6 +6,9 @@ Usage
 1.  Call `inject_global_loader()` once per page render (already wired into
     `apply_professional_theme()` in sidebar.py — no manual call needed).
 
+    The top-bar loader is pure-CSS and activates automatically whenever
+    *any* ``st.spinner()`` is active — no manual wiring required.
+
 2.  For step-based operations use `loading_bar`:
 
         with loading_bar("Fetching market data", total_steps=3) as pb:
@@ -13,18 +16,33 @@ Usage
             pb.advance("Running analysis…")
             result = analyse(data)
             pb.advance("Rendering charts…")
+
+Implementation note
+-------------------
+``st.markdown(unsafe_allow_html=True)`` uses React's dangerouslySetInnerHTML
+which **never executes <script> tags**.  All JavaScript that needs to run must
+be delivered via ``st.components.v1.html()`` (real iframe → scripts execute).
+The full-screen dashboard overlay therefore uses a hybrid approach:
+  - CSS + HTML  →  st.markdown()   (renders fine)
+  - Dismiss JS  →  components.html(height=0) using window.parent.document
 """
 
 import time
 import streamlit as st
+import streamlit.components.v1 as components
 from contextlib import contextmanager
 
 
-# ─── Global Top-Bar Loader ────────────────────────────────────────────────────
+# ─── Global Top-Bar Loader (pure CSS — zero JS required) ─────────────────────
+#
+# Uses the CSS :has() selector to activate whenever Streamlit's own spinner
+# element ([data-testid="stSpinner"]) is present in the DOM.  Because the
+# <style> block is injected into the global Streamlit document (not an iframe),
+# the selector targets real Streamlit DOM elements directly.
 
 _LOADER_HTML = """
 <style>
-/* ── Top progress bar ─────────────────────────────────────────────── */
+/* ── Top progress bar ───────────────────────────────────────────────────── */
 #ar-topbar {
     position: fixed;
     top: 0;
@@ -43,30 +61,25 @@ _LOADER_HTML = """
     opacity: 0;
     border-radius: 0 2px 2px 0;
     pointer-events: none;
-    transition: opacity 0.25s ease;
+    /* fade-out transition when spinner disappears */
+    transition: opacity 0.45s ease 0.15s, width 0.2s ease;
 }
-#ar-topbar.ar-loading {
+
+/* Activate when ANY Streamlit spinner is present */
+body:has([data-testid="stSpinner"]) #ar-topbar {
     opacity: 1;
     width: 85%;
-    animation: ar-slide 1.8s linear infinite, ar-shimmer 1.8s linear infinite;
-    transition: width 0.4s ease, opacity 0.25s ease;
+    animation: ar-topbar-slide 1.8s linear infinite;
+    /* fast fade-in */
+    transition: opacity 0.1s ease;
 }
-#ar-topbar.ar-done {
-    width: 100% !important;
-    opacity: 0;
-    animation: none;
-    transition: width 0.2s ease, opacity 0.45s ease 0.15s;
-}
-@keyframes ar-slide {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-@keyframes ar-shimmer {
+
+@keyframes ar-topbar-slide {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
 }
 
-/* ── Floating "Processing" badge ──────────────────────────────────── */
+/* ── Floating "Processing" badge ────────────────────────────────────────── */
 #ar-badge {
     position: fixed;
     top: 10px;
@@ -83,28 +96,33 @@ _LOADER_HTML = """
     align-items: center;
     gap: 7px;
     backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18);
     letter-spacing: 0.02em;
     font-family: 'Inter', -apple-system, sans-serif;
     pointer-events: none;
 }
-#ar-badge.ar-visible {
+
+body:has([data-testid="stSpinner"]) #ar-badge {
     display: flex !important;
-    animation: ar-fadein 0.2s ease;
+    animation: ar-badge-fadein 0.2s ease;
 }
-@keyframes ar-fadein {
+
+@keyframes ar-badge-fadein {
     from { opacity: 0; transform: translateY(-4px); }
     to   { opacity: 1; transform: translateY(0); }
 }
+
 .ar-dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: #10b981;
     flex-shrink: 0;
-    animation: ar-pulse 1s ease-in-out infinite;
+    animation: ar-dot-pulse 1s ease-in-out infinite;
 }
-@keyframes ar-pulse {
+
+@keyframes ar-dot-pulse {
     0%, 100% { transform: scale(1);   opacity: 1; }
     50%       { transform: scale(1.6); opacity: 0.55; }
 }
@@ -112,63 +130,6 @@ _LOADER_HTML = """
 
 <div id="ar-topbar"></div>
 <div id="ar-badge"><span class="ar-dot"></span>Processing&hellip;</div>
-
-<script>
-(function () {
-    var bar   = document.getElementById('ar-topbar');
-    var badge = document.getElementById('ar-badge');
-    if (!bar || !badge) return;
-
-    var doneTimer = null;
-    var active    = false;
-
-    function show() {
-        if (active) return;
-        active = true;
-        clearTimeout(doneTimer);
-        bar.classList.remove('ar-done');
-        bar.classList.add('ar-loading');
-        badge.classList.add('ar-visible');
-    }
-
-    function hide() {
-        if (!active) return;
-        active = false;
-        bar.classList.remove('ar-loading');
-        bar.classList.add('ar-done');
-        badge.classList.remove('ar-visible');
-        doneTimer = setTimeout(function () {
-            bar.classList.remove('ar-done');
-        }, 700);
-    }
-
-    /* Watch the DOM for Streamlit spinners */
-    var observer = new MutationObserver(function () {
-        var spinner =
-            document.querySelector('[data-testid="stSpinner"]') ||
-            document.querySelector('.stSpinner')               ||
-            document.querySelector('[data-testid="stStatusWidget"] [data-testid="stSpinner"]');
-        if (spinner) { show(); } else { hide(); }
-    });
-
-    observer.observe(document.body, {
-        childList:      true,
-        subtree:        true,
-        attributes:     true,
-        attributeFilter: ['class', 'data-testid', 'aria-label']
-    });
-
-    /* Also catch the initial Streamlit "connecting" state */
-    window.addEventListener('load', function () {
-        setTimeout(function () {
-            var spinner =
-                document.querySelector('[data-testid="stSpinner"]') ||
-                document.querySelector('.stSpinner');
-            if (!spinner) { hide(); }
-        }, 500);
-    });
-})();
-</script>
 """
 
 
@@ -176,16 +137,19 @@ def inject_global_loader() -> None:
     """
     Inject the global top-progress-bar and processing badge into the page.
 
-    This only needs to be called ONCE per render cycle.  `apply_professional_theme()`
+    This only needs to be called ONCE per render cycle.  ``apply_professional_theme()``
     in sidebar.py already calls it, so you do NOT need to call it manually.
 
-    The loader auto-shows/hides whenever any ``st.spinner()`` is active — no
-    changes to existing spinner calls are required.
+    The loader activates automatically via CSS ``:has([data-testid="stSpinner"])``
+    whenever any ``st.spinner()`` is running — no JavaScript or manual wiring needed.
     """
     st.markdown(_LOADER_HTML, unsafe_allow_html=True)
 
 
 # ─── Full-Screen Dashboard Transition Loader ──────────────────────────────────
+#
+# CSS + HTML → st.markdown()  (renders the overlay visually)
+# Dismiss JS → components.html(height=0)  (runs in real iframe, controls parent)
 
 _DASHBOARD_LOADER_HTML = """
 <style>
@@ -199,13 +163,9 @@ _DASHBOARD_LOADER_HTML = """
     align-items: center;
     justify-content: center;
     gap: 1.5rem;
-    transition: opacity 0.7s ease;
     opacity: 1;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-#ar-dl-overlay.ar-dl-hidden {
-    opacity: 0;
-    pointer-events: none;
+    transition: opacity 0.7s ease;
 }
 #ar-dl-overlay::before {
     content: '';
@@ -298,7 +258,7 @@ _DASHBOARD_LOADER_HTML = """
     height: 100%;
     border-radius: 2px;
     background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6);
-    animation: ar-dl-progress 3.5s ease-in-out forwards;
+    animation: ar-dl-progress 4s ease-in-out forwards;
 }
 .ar-dl-status {
     font-size: 0.85rem;
@@ -329,7 +289,7 @@ _DASHBOARD_LOADER_HTML = """
 
 <div id="ar-dl-overlay">
     <div class="ar-dl-logo-wrap">
-        <span class="ar-dl-emoji">🤖</span>
+        <span class="ar-dl-emoji">&#x1F916;</span>
         <div class="ar-dl-app-name">Agent RICH</div>
         <div class="ar-dl-tagline">Real-time Investment Capital Hub</div>
     </div>
@@ -342,15 +302,15 @@ _DASHBOARD_LOADER_HTML = """
     <div class="ar-dl-progress-track">
         <div class="ar-dl-progress-fill"></div>
     </div>
-    <div class="ar-dl-status" id="ar-dl-status-msg">Initializing dashboard\u2026</div>
+    <div class="ar-dl-status" id="ar-dl-status-msg">Initializing dashboard&hellip;</div>
 </div>
+"""
 
+# JavaScript delivered via components.html() so it actually executes.
+# Uses window.parent.document to reach the Streamlit frame where the overlay lives.
+_DASHBOARD_LOADER_JS = """
 <script>
 (function () {
-    var overlay  = document.getElementById('ar-dl-overlay');
-    var statusEl = document.getElementById('ar-dl-status-msg');
-    if (!overlay) return;
-
     var messages = [
         'Initializing dashboard\u2026',
         'Loading AI agents\u2026',
@@ -359,50 +319,77 @@ _DASHBOARD_LOADER_HTML = """
         'Preparing workspace\u2026',
         'Almost ready\u2026'
     ];
-    var msgIdx = 0;
 
-    var msgTimer = setInterval(function () {
-        msgIdx = Math.min(msgIdx + 1, messages.length - 1);
-        if (statusEl) {
-            statusEl.style.opacity = '0';
-            setTimeout(function () {
-                if (statusEl) {
-                    statusEl.textContent = messages[msgIdx];
-                    statusEl.style.opacity = '1';
-                }
-            }, 150);
+    function init() {
+        var pdoc     = window.parent.document;
+        var overlay  = pdoc.getElementById('ar-dl-overlay');
+        var statusEl = pdoc.getElementById('ar-dl-status-msg');
+
+        /* Retry until overlay is present in the parent frame */
+        if (!overlay) {
+            setTimeout(init, 120);
+            return;
         }
-        if (msgIdx === messages.length - 1) clearInterval(msgTimer);
-    }, 650);
 
-    function dismiss() {
-        clearInterval(msgTimer);
-        if (statusEl) statusEl.textContent = 'Ready!';
-        overlay.classList.add('ar-dl-hidden');
-        setTimeout(function () {
-            if (overlay && overlay.parentNode) {
-                overlay.parentNode.removeChild(overlay);
+        /* Prevent double-init if iframe somehow re-runs */
+        if (overlay.dataset.arInit) return;
+        overlay.dataset.arInit = '1';
+
+        /* ── Rotating status messages ── */
+        var msgIdx   = 0;
+        var msgTimer = setInterval(function () {
+            msgIdx = Math.min(msgIdx + 1, messages.length - 1);
+            if (statusEl) {
+                statusEl.style.opacity = '0';
+                setTimeout(function () {
+                    if (statusEl) {
+                        statusEl.textContent = messages[msgIdx];
+                        statusEl.style.opacity = '1';
+                    }
+                }, 150);
             }
-        }, 750);
+            if (msgIdx === messages.length - 1) clearInterval(msgTimer);
+        }, 650);
+
+        /* ── Dismiss logic ── */
+        function dismiss() {
+            clearInterval(msgTimer);
+            var ov = pdoc.getElementById('ar-dl-overlay');
+            if (!ov || ov.dataset.arDismissed) return;
+            ov.dataset.arDismissed = '1';
+            var se = pdoc.getElementById('ar-dl-status-msg');
+            if (se) se.textContent = 'Ready!';
+            ov.style.opacity       = '0';
+            ov.style.pointerEvents = 'none';
+            setTimeout(function () {
+                var el = pdoc.getElementById('ar-dl-overlay');
+                if (el && el.parentNode) el.parentNode.removeChild(el);
+            }, 800);
+        }
+
+        /* Hard safety-net: always dismiss after 7 s */
+        var maxTimer = setTimeout(dismiss, 7000);
+
+        /* Early dismiss once Streamlit has rendered real content */
+        var MO = (pdoc.defaultView || window.parent).MutationObserver;
+        var observer = new MO(function () {
+            var mainBlock =
+                pdoc.querySelector('[data-testid="stMainBlockContainer"]') ||
+                pdoc.querySelector('[data-testid="stAppViewBlockContainer"]') ||
+                pdoc.querySelector('.main .block-container');
+            if (mainBlock && mainBlock.children.length >= 2) {
+                setTimeout(function () {
+                    clearTimeout(maxTimer);
+                    dismiss();
+                    observer.disconnect();
+                }, 400);
+            }
+        });
+        observer.observe(pdoc.body, { childList: true, subtree: true });
     }
 
-    /* Safety-net: always dismiss after 5 s */
-    var maxTimer = setTimeout(dismiss, 5000);
-
-    /* Dismiss once Streamlit has rendered real content */
-    var observer = new MutationObserver(function () {
-        var mainBlock =
-            document.querySelector('[data-testid="stMainBlockContainer"]') ||
-            document.querySelector('.main .block-container');
-        if (mainBlock && mainBlock.children.length >= 2) {
-            setTimeout(function () {
-                clearTimeout(maxTimer);
-                dismiss();
-                observer.disconnect();
-            }, 500);
-        }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    /* Start after a short delay to let the parent frame settle */
+    setTimeout(init, 50);
 })();
 </script>
 """
@@ -413,17 +400,16 @@ def inject_dashboard_loader() -> None:
     Inject a full-screen transition overlay that covers the viewport while the
     dashboard modules are loading after login.
 
+    The overlay HTML/CSS is injected via ``st.markdown()`` (renders fine) and
+    the dismiss logic is injected via ``components.html(height=0)`` (scripts
+    actually execute in the iframe and reach the overlay via window.parent).
+
     Call this at the very top of the dashboard render path, guarded by
-    ``st.session_state.get('_dashboard_loading', False)``, and clear the flag
-    immediately afterwards so the overlay only shows on the first post-login
-    render cycle.
-
-    Example usage in main()::
-
-        if st.session_state.pop('_dashboard_loading', False):
-            inject_dashboard_loader()
+    ``st.session_state.pop('_dashboard_loading', False)`` so it only shows
+    on the first post-login render cycle.
     """
     st.markdown(_DASHBOARD_LOADER_HTML, unsafe_allow_html=True)
+    components.html(_DASHBOARD_LOADER_JS, height=0)
 
 
 # ─── Step-Based Progress Bar Context Manager ─────────────────────────────────
