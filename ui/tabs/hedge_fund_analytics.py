@@ -98,20 +98,52 @@ def create_pnl_distribution_chart(portfolio_df):
     )
     return fig
 
+def _get_positions_safe(trading_engine) -> dict:
+    """Return the positions dict regardless of which AutoTradingEngine layout is used.
+
+    Handles three cases:
+      - core engine:     trading_engine.positions  (direct dict attribute)
+      - auto-trading:    trading_engine.portfolio['positions']  (nested)
+      - fallback/None:   returns {}
+    """
+    if trading_engine is None:
+        return {}
+    pos = getattr(trading_engine, 'positions', None)
+    if pos is not None:
+        return pos
+    portfolio = getattr(trading_engine, 'portfolio', None)
+    if isinstance(portfolio, dict):
+        return portfolio.get('positions', {})
+    return {}
+
+
 def render_hedge_fund_analytics_tab(trading_engine):
     """Render the Hedge Fund Analytics tab"""
     st.markdown("## 🏦 Hedge Fund Portfolio Analytics")
-    
-    if not trading_engine or not trading_engine.positions:
+
+    hf_portfolio = _get_positions_safe(trading_engine)
+
+    if not hf_portfolio:
         st.info("No hedge fund positions available for analysis.")
         return
-    
+
     # Get live portfolio data
-    hf_portfolio = trading_engine.positions
     api_key = config.get_eodhd_api_key()
 
+    def _live_price(sym, fallback):
+        """Fetch live close price; handles list or dict response from EODHD."""
+        try:
+            rt = pro_get_real_time_data(sym, api_key)
+            if isinstance(rt, list) and rt:
+                rt = rt[0]
+            if isinstance(rt, dict):
+                return float(rt.get('close') or rt.get('last') or fallback)
+        except Exception:
+            pass
+        return fallback
+
     try:
-        live_prices = {s: pro_get_real_time_data(s, api_key).get('close', p['avg_price'])
+        live_prices = {s: _live_price(s, p['avg_price'])
                       for s, p in hf_portfolio.items()}
         
         positions_data = [{

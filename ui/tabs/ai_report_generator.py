@@ -100,16 +100,33 @@ REPORT_CATALOG = {
 # Data helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _get_positions_safe(trading_engine) -> dict:
+    """Return positions dict regardless of which AutoTradingEngine layout is active."""
+    if trading_engine is None:
+        return {}
+    pos = getattr(trading_engine, 'positions', None)
+    if pos is not None:
+        return pos
+    portfolio = getattr(trading_engine, 'portfolio', None)
+    if isinstance(portfolio, dict):
+        return portfolio.get('positions', {})
+    return {}
+
+
 def _hf_portfolio_df(trading_engine, api_key: str) -> pd.DataFrame:
     """Build a live-priced DataFrame from the trading engine's positions."""
-    if not trading_engine or not getattr(trading_engine, "positions", None):
+    positions = _get_positions_safe(trading_engine)
+    if not positions:
         return pd.DataFrame()
     rows = []
-    for symbol, pos in trading_engine.positions.items():
+    for symbol, pos in positions.items():
         qty = pos.get("quantity", 0)
         avg = pos.get("avg_price", 0)
-        live = pro_get_real_time_data(symbol, api_key) or {}
-        price = live.get("close") or avg
+        raw = pro_get_real_time_data(symbol, api_key) or {}
+        if isinstance(raw, list):
+            raw = raw[0] if raw else {}
+        live = raw if isinstance(raw, dict) else {}
+        price = live.get("close") or live.get("last") or avg
         mv = qty * price
         pnl = (price - avg) * qty
         ret_pct = ((price - avg) / avg * 100) if avg else 0.0

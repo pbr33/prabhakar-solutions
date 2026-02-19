@@ -53,10 +53,22 @@ def render():
     # --- Hedge Fund View ---
     st.markdown("### Hedge Fund Portfolio Overview")
 
-    # Positions live inside trading_engine.portfolio['positions'], NOT trading_engine.positions
-    hf_portfolio = {}
-    if trading_engine is not None:
-        hf_portfolio = trading_engine.portfolio.get('positions', {})
+    # Safe accessor — works for BOTH engine layouts:
+    #   core engine  → self.positions  (direct dict attribute)
+    #   auto-trading → self.portfolio['positions']  (nested)
+    #   fallback     → neither exists, returns {}
+    def _safe_positions(engine):
+        if engine is None:
+            return {}
+        pos = getattr(engine, 'positions', None)
+        if pos is not None:
+            return pos
+        portfolio = getattr(engine, 'portfolio', None)
+        if isinstance(portfolio, dict):
+            return portfolio.get('positions', {})
+        return {}
+
+    hf_portfolio = _safe_positions(trading_engine)
 
     if not hf_portfolio:
         st.info("No positions in the hedge fund portfolio.")

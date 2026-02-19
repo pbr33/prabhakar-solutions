@@ -1235,7 +1235,23 @@ def main():
         multi_agent_coordination = MockModule()
         
         class AutoTradingEngine:
-            pass
+            """Minimal fallback used when core.trading_engine fails to import."""
+            def __init__(self):
+                self.positions: dict = {}
+                self.portfolio_balance: float = 100000.0
+                self.is_active: bool = False
+                self.trades_executed: list = []
+                self.trade_history: list = []
+                self.max_position_size: float = 0.1
+                self.daily_loss_limit: float = 0.05
+                # Also expose the nested-dict layout used by some tabs
+                self.portfolio: dict = {
+                    'positions': self.positions,
+                    'cash': self.portfolio_balance,
+                    'total_value': self.portfolio_balance,
+                    'daily_pnl': 0.0,
+                    'total_trades': 0,
+                }
 
     # Apply custom CSS
     apply_custom_css()
