@@ -477,49 +477,69 @@ At the very end, provide:
         return f"Comprehensive analysis failed: {e}"
 
 def detect_fibonacci_levels(data: pd.DataFrame) -> dict:
-    """Detects Fibonacci retracement levels."""
+    """Detects Fibonacci retracement levels. Handles both uppercase and lowercase column names."""
     if data.empty:
         return {}
-    
-    max_price = data['High'].max()
-    min_price = data['Low'].min()
+
+    # Support both 'High'/'Low' (yfinance style) and 'high'/'low' (EODHD style)
+    high_col = 'High' if 'High' in data.columns else 'high'
+    low_col  = 'Low'  if 'Low'  in data.columns else 'low'
+    if high_col not in data.columns or low_col not in data.columns:
+        return {}
+
+    max_price   = data[high_col].max()
+    min_price   = data[low_col].min()
     price_range = max_price - min_price
 
     if price_range == 0:
         return {}
 
     return {
-        'Level 100%': max_price,
-        'Level 61.8%': max_price - 0.382 * price_range,
-        'Level 50.0%': max_price - 0.50 * price_range,
-        'Level 38.2%': max_price - 0.618 * price_range,
-        'Level 0%': min_price,
+        'Level 100%': float(max_price),
+        'Level 61.8%': float(max_price - 0.382 * price_range),
+        'Level 50.0%': float(max_price - 0.50  * price_range),
+        'Level 38.2%': float(max_price - 0.618 * price_range),
+        'Level 0%':    float(min_price),
     }
 
-@st.cache_data(ttl=600)
+# NOTE: @st.cache_data is intentionally NOT used here.
+# st.cache_data hashes the function's global scope via cloudpickle, which
+# triggers "unhashable type: 'dict'" on internal dicts inside the requests /
+# streamlit modules.  Results are cached in st.session_state by the caller.
 def run_ma_crossover_backtest(_api_key, ticker, start_date, end_date, initial_capital, short_window, long_window):
-    """Runs a Moving Average Crossover backtest."""
+    """Runs a Moving Average Crossover backtest using real EODHD historical data."""
     from_date_str = start_date.strftime('%Y-%m-%d')
-    to_date_str = end_date.strftime('%Y-%m-%d')
-    url = f"https://eodhd.com/api/eod/{ticker}?from={from_date_str}&to={to_date_str}&api_token={_api_key}&period=d&fmt=json"
-    
+    to_date_str   = end_date.strftime('%Y-%m-%d')
+    url = (
+        f"https://eodhd.com/api/eod/{ticker}"
+        f"?from={from_date_str}&to={to_date_str}"
+        f"&api_token={_api_key}&period=d&fmt=json"
+    )
+
     try:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, list) or len(data) == 0:
-             return {"error": "No data returned from API."}
+            return {"error": "No historical data returned from API for this symbol/date range."}
         df = pd.DataFrame(data)
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')[['open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         return {"error": f"Failed to fetch historical data: {e}"}
-        
-    df['short_mavg'] = df['close'].rolling(window=short_window).mean()
-    df['long_mavg'] = df['close'].rolling(window=long_window).mean()
 
+    if len(df) < long_window:
+        return {"error": f"Not enough data ({len(df)} bars) for the chosen long MA window ({long_window}). Try a shorter window or wider date range."}
+
+    df['short_mavg'] = df['close'].rolling(window=short_window).mean()
+    df['long_mavg']  = df['close'].rolling(window=long_window).mean()
+
+    # Use .loc to avoid pandas chained-assignment warning / silent no-op in pandas >= 2.0
     df['signal'] = 0.0
-    df['signal'][short_window:] = np.where(df['short_mavg'][short_window:] > df['long_mavg'][short_window:], 1.0, 0.0)
+    df.loc[df.index[short_window:], 'signal'] = np.where(
+        df['short_mavg'].iloc[short_window:] > df['long_mavg'].iloc[short_window:],
+        1.0, 0.0,
+    )
     df['positions'] = df['signal'].diff()
     
     cash = float(initial_capital)
