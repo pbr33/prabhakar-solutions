@@ -958,6 +958,7 @@ def render_login_page():
                 st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
+                st.session_state['_dashboard_loading'] = True
                 with st.spinner("Authenticating… loading your dashboard"):
                     time.sleep(1)
                 st.rerun()
@@ -974,6 +975,7 @@ def render_login_page():
             st.session_state.authenticated = True
             st.session_state.user_type = "guest"
             st.session_state.page = 'dashboard'
+            st.session_state['_dashboard_loading'] = True
             with st.spinner("Entering Guest Mode… loading platform"):
                 time.sleep(1)
             st.rerun()
@@ -1161,6 +1163,12 @@ def main():
         st.rerun()
     
     # If not landing or login page, continue with your existing app
+
+    # Show full-screen loader on the first render cycle after login
+    if st.session_state.pop('_dashboard_loading', False):
+        from ui.loading_utils import inject_dashboard_loader
+        inject_dashboard_loader()
+
     # Import components locally to avoid circular imports
     try:
         from langchain_openai import AzureChatOpenAI
