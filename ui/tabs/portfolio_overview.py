@@ -1119,7 +1119,6 @@ def render_portfolio_overview_tab(trading_engine=None, pe_portfolio=None):
     
     with col3:
         if st.button("📈 Generate Report", key="generate_report"):
-            st.balloons()
             st.success("📊 Executive report generated successfully!")
     
     with col4:
