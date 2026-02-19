@@ -958,25 +958,24 @@ def render_login_page():
                 st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
-                st.markdown('<div class="success-message">✅ Welcome! Redirecting to your dashboard...</div>', unsafe_allow_html=True)
-                time.sleep(1)
+                with st.spinner("Authenticating… loading your dashboard"):
+                    time.sleep(1)
                 st.rerun()
             else:
                 st.session_state.login_attempts = st.session_state.get('login_attempts', 0) + 1
                 st.session_state.show_hint = True
                 st.error("❌ Invalid credentials. Please check your username and password.")
-                
+
                 # Show demo credentials after 2 failed attempts
                 if st.session_state.login_attempts >= 2:
                     show_demo_credentials(demo_username, demo_password)
-                
+
         if guest_mode and enable_guest_mode:
             st.session_state.authenticated = True
             st.session_state.user_type = "guest"
             st.session_state.page = 'dashboard'
-            st.markdown('<div class="success-message">👀 Entering Guest Mode... Limited features available.</div>', unsafe_allow_html=True)
-            st.info("💡 Guest mode provides read-only access to explore the platform.")
-            time.sleep(1)
+            with st.spinner("Entering Guest Mode… loading platform"):
+                time.sleep(1)
             st.rerun()
     
     # Hint section (only visible on error or first visit)

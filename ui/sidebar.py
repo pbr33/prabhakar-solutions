@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import requests
 import json
 from translate import Translator
+from ui.loading_utils import inject_global_loader
 
 
 
@@ -876,10 +877,12 @@ def apply_professional_theme():
 
     </style>
     """
-    
-    
+
     st.markdown(professional_css, unsafe_allow_html=True)
-    
+
+    # Inject the global top-bar loader (auto-shows on every st.spinner call)
+    inject_global_loader()
+
 
 def get_data_source_status(source_name: str):
     """Get the connection status of a data source"""
