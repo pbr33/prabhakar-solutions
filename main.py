@@ -19,12 +19,6 @@ load_env_file()
 def render_landing_page():
     """Render the enhanced landing page with all capabilities showcase"""
 
-    # Detect navigation triggered by the HTML button via query param
-    if st.query_params.get("navigate") == "login":
-        st.query_params.clear()
-        st.session_state.page = 'login'
-        st.rerun()
-
     st.markdown("""
     <style>
         .stApp > header {
@@ -454,10 +448,10 @@ def render_landing_page():
                         real-time market analysis, and institutional-grade portfolio management. 
                         Experience the future of investment management with our cutting-edge AI agents.
                     </p>
-                    <button class="cta-button" id="launchBtn">
+                    <div class="cta-button" style="cursor: default; opacity: 0.85;">
                         <i class="fas fa-rocket"></i>
-                        Launch AI Dashboard
-                    </button>
+                        Scroll down to launch ↓
+                    </div>
                 </div>
                 <div class="hero-avatar">
                     <div class="avatar-container">
@@ -613,18 +607,6 @@ def render_landing_page():
 
         <script>
             document.addEventListener('DOMContentLoaded', function() {{
-                const launchBtn = document.getElementById('launchBtn');
-                if (launchBtn) {{
-                    launchBtn.addEventListener('click', function() {{
-                        // Visual feedback first
-                        this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Launching...';
-                        this.style.opacity = '0.85';
-                        // Navigate parent Streamlit window with query param so Python detects it
-                        const parentUrl = window.parent.location.href.split('?')[0];
-                        window.parent.location.href = parentUrl + '?navigate=login';
-                    }});
-                }}
-
                 // Staggered animation for floating elements
                 const floatingElements = document.querySelectorAll('.floating-element');
                 floatingElements.forEach((element, index) => {{
@@ -636,9 +618,52 @@ def render_landing_page():
     </html>
     """
     
-    # Display the landing page
+    # Style the CTA buttons and page background
+    st.markdown("""
+    <style>
+        .stApp {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        /* Style the launch buttons to match the CTA design */
+        .stButton > button {
+            background: linear-gradient(45deg, #10b981, #059669) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 12px !important;
+            font-size: 1.2rem !important;
+            font-weight: 600 !important;
+            height: 60px !important;
+            box-shadow: 0 8px 32px rgba(16, 185, 129, 0.4) !important;
+            transition: all 0.3s ease !important;
+            cursor: pointer !important;
+        }
+        .stButton > button:hover {
+            transform: translateY(-3px) !important;
+            box-shadow: 0 15px 45px rgba(16, 185, 129, 0.5) !important;
+            background: linear-gradient(45deg, #059669, #047857) !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Display the landing page capabilities showcase
     st.components.v1.html(landing_html, height=1400, scrolling=True)
-    
+
+    # ─── REAL working CTA buttons (native Streamlit – 100% reliable) ───
+    # Root cause of the bug: st.components.v1.html() runs in a sandboxed iframe
+    # that blocks window.parent.location.href from working. The HTML button JS
+    # changes text to "Launching..." but navigation silently fails.
+    # Native Streamlit buttons bypass this entirely and set session_state directly.
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Launch AI Dashboard", key="launch_main", use_container_width=True):
+            st.session_state.page = 'login'
+            st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+        # Backup button (kept as requested by user)
+        if st.button("Launch AI Dashboard", key="main_cta", use_container_width=True):
+            st.session_state.page = 'login'
+            st.rerun()
+
 
 def render_login_page():
     """Render a clean and professional login page with avatar"""
