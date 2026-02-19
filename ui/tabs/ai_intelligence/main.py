@@ -527,30 +527,9 @@ class AITradingIntelligence:
             st.rerun()
     
     def _render_compact_footer(self):
-        """Render compact footer with essential features."""
+        """Render compact footer."""
         st.markdown("---")
-        
-        # Compact additional features
-        st.markdown("### 🚀 Quick Actions")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if st.button("🚨 Smart Alerts", key="footer_smart_alerts", help="Setup intelligent alerts"):
-                st.success("Smart alerts configured!")
-        
-        with col2:
-            if st.button("📊 Portfolio Impact", key="footer_portfolio_impact", help="Analyze portfolio impact"):
-                st.info("Portfolio analysis complete!")
-        
-        with col3:
-            if st.button("🔮 Earnings Prediction", key="footer_earnings_prediction", help="Predict next earnings"):
-                self._show_earnings_prediction()
-        
-        with col4:
-            if st.button("⚙️ AI Settings", key="footer_ai_settings", help="Configure AI parameters"):
-                self._show_ai_configuration()
-        
+
         # Compact platform footer
         st.markdown("""
         <div style="text-align: center; color: #666; padding: 15px; margin-top: 20px; background-color: #f8f9fa; border-radius: 8px;">

@@ -1112,14 +1112,13 @@ def render_portfolio_overview_tab(trading_engine=None, pe_portfolio=None):
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        auto_refresh = st.checkbox("🔄 Live Updates", value=True, key="live_updates_premium")
+        auto_refresh = st.checkbox("🔄 Live Updates", value=False, key="live_updates_premium")
     
     with col2:
         view_mode = st.selectbox("📊 View Mode", ["Executive", "Detailed", "Analytics"], key="view_mode_premium")
     
     with col3:
         if st.button("📈 Generate Report", key="generate_report"):
-            st.balloons()
             st.success("📊 Executive report generated successfully!")
     
     with col4:

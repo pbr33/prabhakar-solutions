@@ -20,6 +20,13 @@ import xgboost as xgb
 import warnings
 warnings.filterwarnings('ignore')
 
+from config import config
+from services.data_fetcher import (
+    pro_get_historical_data,
+    pro_get_real_time_data,
+    pro_get_news,
+)
+
 # ========== ENUMS & DATA STRUCTURES ==========
 
 class OrderType(Enum):
@@ -125,39 +132,44 @@ class BrokerAPI:
         return True, "Connected to Mock Broker"
 
     def place_order(self, signal: TradingSignal) -> Dict:
-        """Place order with comprehensive error handling"""
+        """Place order — simulated execution with realistic fill price slippage."""
         if not self.is_connected:
             return {'success': False, 'message': 'Not connected to broker'}
 
-        # Simulate order placement with realistic latency
-        time.sleep(np.random.uniform(0.1, 0.5))
+        order_id = f"ORD_{int(time.time())}_{signal.symbol}"
 
-        order_id = f"ORD_{int(time.time())}{np.random.randint(1000, 9999)}"
+        # Realistic market-order slippage: ±0.05% of price (not random failure)
+        slippage = 0.0005
+        if signal.action == 'BUY':
+            fill_price = signal.price * (1 + slippage)   # pay slightly more on buy
+        else:
+            fill_price = signal.price * (1 - slippage)   # receive slightly less on sell
 
-        # Simulate occasional failures
-        if np.random.random() < 0.02:  # 2% failure rate
-            return {
-                'success': False,
-                'message': 'Order rejected: Insufficient buying power',
-                'error_code': 'INSUFFICIENT_FUNDS'
-            }
+        commission = signal.quantity * fill_price * 0.0005   # 0.05% commission
 
         return {
             'success': True,
             'order_id': order_id,
             'status': OrderStatus.FILLED.value,
-            'fill_price': signal.price * (1 + np.random.uniform(-0.001, 0.001)),
+            'fill_price': round(fill_price, 4),
             'timestamp': datetime.now(),
-            'commission': signal.quantity * signal.price * 0.0005  # 0.05% commission
+            'commission': round(commission, 4),
         }
 
-    def get_account_info(self) -> Dict:
-        """Get account information"""
+    def get_account_info(self, engine_portfolio: Dict = None) -> Dict:
+        """Return live account info derived from the engine portfolio."""
+        if engine_portfolio:
+            return {
+                'buying_power': engine_portfolio.get('cash', 0),
+                'portfolio_value': engine_portfolio.get('total_value', 0),
+                'open_positions': len(engine_portfolio.get('positions', {})),
+                'total_trades': engine_portfolio.get('total_trades', 0),
+            }
         return {
-            'buying_power': 100000,
-            'portfolio_value': 150000,
-            'day_trades_remaining': 3,
-            'positions': {}
+            'buying_power': 0,
+            'portfolio_value': 0,
+            'open_positions': 0,
+            'total_trades': 0,
         }
 
 # ========== AI-POWERED STRATEGY ENGINE ==========
@@ -386,6 +398,15 @@ class AIStrategyEngine:
                 'model_count': len(predictions)
             }
 
+            # Derive sentiment from RSI and recent price momentum (no random)
+            rsi_val = float(features['rsi'].iloc[-1]) if 'rsi' in features.columns else 50.0
+            recent_mom = float(features['price_change'].iloc[-5:].mean()) if 'price_change' in features.columns else 0.0
+            # RSI component: >50 → positive, <50 → negative, scaled to [-0.5, +0.5]
+            rsi_sentiment = (rsi_val - 50) / 100
+            # Momentum component clipped to [-0.5, +0.5]
+            mom_sentiment = float(np.clip(recent_mom * 25, -0.5, 0.5))
+            sentiment_score = float(np.clip(rsi_sentiment + mom_sentiment, -1.0, 1.0))
+
             return TradingSignal(
                 symbol=symbol,
                 action=action,
@@ -401,7 +422,7 @@ class AIStrategyEngine:
                 take_profit=abs(avg_prediction) * 2,
                 feature_importance=top_features,
                 market_regime=self._detect_market_regime(current_data),
-                sentiment_score=np.random.uniform(-1, 1)  # Would be real sentiment in production
+                sentiment_score=sentiment_score,
             )
 
         except Exception as e:
@@ -592,44 +613,38 @@ class AutoTradingEngine:
             return False
 
     def train_ai_models(self, symbols: List[str]) -> Dict:
-        """Train AI models for all symbols"""
-        # Generate mock historical data for training
-        training_data = self._generate_training_data(symbols)
+        """Train AI models for all symbols using real EODHD data"""
+        training_data = self._fetch_real_data(symbols)
         return self.ai_engine.train_models(training_data, symbols)
 
-    def _generate_training_data(self, symbols: List[str]) -> pd.DataFrame:
-        """Generate comprehensive training data"""
-        # In production, this would fetch real historical data
-        date_range = pd.date_range(end=datetime.now(), periods=1000, freq='1H')
-
-        all_data = []
+    def _fetch_real_data(self, symbols: List[str]) -> pd.DataFrame:
+        """Fetch real EODHD end-of-day historical data for training."""
+        api_key = config.get_eodhd_api_key()
+        all_frames = []
         for symbol in symbols:
-            # Generate realistic price data
-            base_price = np.random.uniform(50, 300)
-            returns = np.random.normal(0, 0.02, len(date_range))
-            prices = base_price * np.exp(returns.cumsum())
-
-            # Generate OHLC data
-            for i, (timestamp, price) in enumerate(zip(date_range, prices)):
-                noise = np.random.uniform(0.98, 1.02)
-                open_price = price * noise
-                high_price = max(price, open_price) * np.random.uniform(1.0, 1.05)
-                low_price = min(price, open_price) * np.random.uniform(0.95, 1.0)
-                volume = np.random.randint(10000, 1000000)
-
-                all_data.append({
-                    'timestamp': timestamp,
-                    'symbol': symbol,
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': price,
-                    'volume': volume
-                })
-
-        df = pd.DataFrame(all_data)
-        df.set_index('timestamp', inplace=True)
-        return df
+            try:
+                df = pro_get_historical_data(symbol, api_key)
+                if df.empty:
+                    continue
+                # Normalise column names to lower-case
+                df.columns = [c.lower() for c in df.columns]
+                # Keep only OHLCV; rename adjusted_close→close if needed
+                if 'adjusted_close' in df.columns and 'close' not in df.columns:
+                    df = df.rename(columns={'adjusted_close': 'close'})
+                df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+                df['symbol'] = symbol
+                # Ensure numeric
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df.dropna(inplace=True)
+                all_frames.append(df)
+            except Exception:
+                continue
+        if all_frames:
+            combined = pd.concat(all_frames)
+            combined.index = pd.to_datetime(combined.index)
+            return combined
+        return pd.DataFrame()
 
     def execute_trade(self, signal: TradingSignal, broker_name: str = None) -> Dict:
         """Execute trade with comprehensive error handling"""
@@ -674,7 +689,8 @@ class AutoTradingEngine:
                     'signal': signal.__dict__,
                     'order_result': order_result,
                     'portfolio_snapshot': self.portfolio.copy(),
-                    'validation_results': validation_results
+                    'validation_results': validation_results,
+                    'pnl': trade_result.get('pnl', 0),
                 }
 
                 self.trade_history.append(trade_log)
@@ -726,13 +742,21 @@ class AutoTradingEngine:
                 if pos['quantity'] <= 0:
                     del self.portfolio['positions'][signal.symbol]
 
-        # Update total portfolio value (simplified)
-        self.portfolio['total_value'] = self.portfolio['cash'] + sum(
+        # Update total portfolio value (mark positions at fill price)
+        position_value = sum(
             pos['quantity'] * pos['avg_price']
             for pos in self.portfolio['positions'].values()
         )
+        self.portfolio['total_value'] = self.portfolio['cash'] + position_value
 
-        return {'pnl': 0}  # Simplified P&L calculation
+        # Real P&L: proceeds minus cost for a round-trip sell, or 0 on a buy
+        if signal.action == 'SELL':
+            entry_price = self.portfolio['positions'].get(signal.symbol, {}).get('avg_price', fill_price)
+            pnl = (fill_price - entry_price) * signal.quantity - commission
+        else:
+            pnl = 0.0
+
+        return {'pnl': pnl}
 
     def get_performance_metrics(self) -> Dict:
         """Calculate comprehensive performance metrics"""
@@ -752,19 +776,54 @@ class AutoTradingEngine:
             for trade in self.trade_history
         ])
 
-        # Calculate metrics
+        # Calculate real P&L per trade from trade_history
+        pnl_list = []
+        for trade in self.trade_history:
+            pnl_list.append(trade.get('pnl', 0))
+
+        pnl_series = pd.Series(pnl_list)
+
+        profitable = int((pnl_series > 0).sum())
+        total = len(pnl_series)
+        win_rate = profitable / total if total > 0 else 0.0
+
+        # Portfolio value history (snapshot stored per trade)
+        portfolio_values = [
+            t.get('portfolio_snapshot', {}).get('total_value', self.portfolio['total_value'])
+            for t in self.trade_history
+        ]
+        pv_series = pd.Series(portfolio_values)
+
+        # Returns from portfolio value changes
+        pv_returns = pv_series.pct_change().dropna()
+
+        # Sharpe ratio (annualised, assuming daily trades ~ 252 periods)
+        if pv_returns.std() > 0:
+            sharpe = (pv_returns.mean() / pv_returns.std()) * np.sqrt(252)
+        else:
+            sharpe = 0.0
+
+        # Max drawdown
+        rolling_max = pv_series.cummax()
+        drawdown = (pv_series - rolling_max) / rolling_max
+        max_drawdown = float(abs(drawdown.min())) if not drawdown.empty else 0.0
+
+        # Calmar ratio
+        total_return = (pv_series.iloc[-1] / pv_series.iloc[0] - 1) if len(pv_series) > 1 else 0.0
+        calmar = total_return / max_drawdown if max_drawdown > 0 else 0.0
+
         metrics = {
-            'total_trades': len(trades_df),
-            'profitable_trades': 0,  # Would calculate from actual P&L
-            'win_rate': 0.65,  # Mock data
-            'avg_return': 0.023,
-            'sharpe_ratio': 1.34,
-            'max_drawdown': 0.047,
-            'volatility': 0.156,
-            'calmar_ratio': 0.489,
-            'avg_trade_duration': '4.2 hours',
+            'total_trades': total,
+            'profitable_trades': profitable,
+            'win_rate': win_rate,
+            'avg_return': float(pnl_series.mean()) if total > 0 else 0.0,
+            'total_pnl': float(pnl_series.sum()),
+            'sharpe_ratio': round(sharpe, 3),
+            'max_drawdown': round(max_drawdown, 4),
+            'volatility': round(float(pv_returns.std()) * np.sqrt(252), 4) if not pv_returns.empty else 0.0,
+            'calmar_ratio': round(calmar, 3),
             'best_performing_symbol': trades_df['symbol'].mode().iloc[0] if not trades_df.empty else 'N/A',
-            'strategy_breakdown': trades_df.groupby(trades_df['timestamp'].dt.date).size().to_dict() if not trades_df.empty else {}
+            'portfolio_value_history': portfolio_values,
         }
 
         return metrics
@@ -1136,10 +1195,20 @@ def render_live_signals(engine):
 
     with col3:
         if st.button("🔄 Generate Signal", type="primary"):
-            # Generate mock current data
-            current_data = engine._generate_training_data([selected_symbol]).tail(100)
-            signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
-            st.session_state.latest_signal = signal
+            with st.spinner(f"Fetching live data for {selected_symbol}…"):
+                api_key = config.get_eodhd_api_key()
+                current_data = pro_get_historical_data(selected_symbol, api_key)
+                if current_data.empty:
+                    st.error(f"Could not fetch data for {selected_symbol}. Check EODHD API key.")
+                else:
+                    current_data.columns = [c.lower() for c in current_data.columns]
+                    if 'adjusted_close' in current_data.columns and 'close' not in current_data.columns:
+                        current_data = current_data.rename(columns={'adjusted_close': 'close'})
+                    current_data = current_data[['open', 'high', 'low', 'close', 'volume']].apply(
+                        pd.to_numeric, errors='coerce'
+                    ).dropna()
+                    signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
+                    st.session_state.latest_signal = signal
 
     # Display latest signal
     if hasattr(st.session_state, 'latest_signal'):
@@ -1198,23 +1267,53 @@ def render_performance_analytics(engine):
         return
 
     # Key performance metrics
-    col1, col2, col3, col4 = st.columns(4)
-
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Trades", metrics.get('total_trades', 0))
-
     with col2:
-        st.metric("Win Rate", f"{metrics.get('win_rate', 0):.1%}")
-
+        win_rate = metrics.get('win_rate', 0)
+        st.metric("Win Rate", f"{win_rate:.1%}",
+                  delta="above 50%" if win_rate > 0.5 else "below 50%",
+                  delta_color="normal" if win_rate > 0.5 else "inverse")
     with col3:
         st.metric("Sharpe Ratio", f"{metrics.get('sharpe_ratio', 0):.2f}")
-
     with col4:
         st.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0):.1%}")
+    with col5:
+        total_pnl = metrics.get('total_pnl', 0)
+        st.metric("Total P&L", f"${total_pnl:+,.2f}",
+                  delta_color="normal" if total_pnl >= 0 else "inverse")
 
-    # Performance charts would go here
-    st.markdown("### Portfolio Performance")
-    st.info("📈 Interactive performance charts will be displayed here with real trading data.")
+    # Portfolio value chart from real trade history
+    st.markdown("### 📈 Portfolio Value Over Time")
+    pv_history = metrics.get('portfolio_value_history', [])
+    if pv_history and len(pv_history) > 1:
+        trade_times = [t['timestamp'].strftime('%m-%d %H:%M') for t in engine.trade_history]
+        fig_pv = go.Figure()
+        fig_pv.add_trace(go.Scatter(
+            x=trade_times, y=pv_history,
+            mode='lines+markers',
+            line=dict(color='#26a69a', width=2),
+            marker=dict(size=6, color='#26a69a'),
+            fill='tozeroy', fillcolor='rgba(38,166,154,0.08)',
+            name='Portfolio Value',
+        ))
+        # Starting capital reference line
+        fig_pv.add_hline(y=100000, line_dash='dash', line_color='#6B7280',
+                         annotation_text='Starting Capital $100k')
+        fig_pv.update_layout(
+            paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+            font=dict(color='#FAFAFA'), height=320,
+            margin=dict(l=0, r=0, t=10, b=0),
+            yaxis_title='Portfolio Value ($)',
+            xaxis_title='Trade',
+            showlegend=False,
+        )
+        fig_pv.update_xaxes(gridcolor='#1E2130', tickangle=-30)
+        fig_pv.update_yaxes(gridcolor='#1E2130', tickformat='$,.0f')
+        st.plotly_chart(fig_pv, use_container_width=True)
+    else:
+        st.info("Execute trades to see portfolio value history here.")
 
     # Trading history
     if engine.trade_history:
@@ -1257,21 +1356,78 @@ def render_risk_management(engine):
                 st.success("✅ Risk settings updated!")
 
     with col2:
-        st.markdown("### Risk Alerts")
+        st.markdown("### Live Risk Alerts")
 
-        # Mock risk alerts
-        alerts = [
-            "⚠️ Portfolio concentration in tech sector: 45%",
-            "🔴 Daily loss approaching limit: -2.8%",
-            "🟡 High correlation detected between AAPL and MSFT positions"
-        ]
+        alerts = []
+        positions = engine.portfolio.get('positions', {})
+        total_value = engine.portfolio.get('total_value', 1)
+        cash = engine.portfolio.get('cash', 0)
+        daily_pnl = engine.risk_manager.daily_pnl
 
+        # 1 — concentration check: any single position > 30% of portfolio
+        for sym, pos in positions.items():
+            pos_value = pos['quantity'] * pos['avg_price']
+            pct = pos_value / total_value * 100 if total_value else 0
+            if pct > 30:
+                alerts.append(f"🔴 High concentration: **{sym}** = {pct:.1f}% of portfolio")
+
+        # 2 — daily loss limit
+        daily_loss_limit = engine.risk_manager.risk_metrics.daily_loss_limit * total_value
+        if daily_pnl < 0 and abs(daily_pnl) > daily_loss_limit * 0.8:
+            alerts.append(f"🔴 Daily loss near limit: ${daily_pnl:+,.2f} (limit ${-daily_loss_limit:,.2f})")
+
+        # 3 — cash ratio warning (< 10% cash)
+        cash_pct = cash / total_value * 100 if total_value else 100
+        if cash_pct < 10:
+            alerts.append(f"⚠️ Low cash reserve: {cash_pct:.1f}% of portfolio")
+
+        # 4 — max positions
+        n_pos = len(positions)
+        max_pos = engine.risk_manager.risk_metrics.max_positions
+        if n_pos >= max_pos:
+            alerts.append(f"⚠️ At maximum positions limit: {n_pos}/{max_pos}")
+
+        # 5 — all clear
+        if not alerts:
+            st.success("✅ No risk alerts — portfolio within all limits")
         for alert in alerts:
             st.warning(alert)
 
-    # Risk metrics visualization
+    # Risk metrics visualisation
     st.markdown("### Current Risk Exposure")
-    st.info("🎯 Real-time risk metrics and exposure analysis will be displayed here.")
+
+    positions = engine.portfolio.get('positions', {})
+    total_value = engine.portfolio.get('total_value', 1)
+
+    if positions:
+        pos_data = []
+        for sym, pos in positions.items():
+            mv = pos['quantity'] * pos['avg_price']
+            pos_data.append({'Symbol': sym, 'Market Value': mv,
+                             'Weight %': mv / total_value * 100})
+        pos_df = pd.DataFrame(pos_data).sort_values('Weight %', ascending=False)
+
+        fig = go.Figure(go.Bar(
+            x=pos_df['Symbol'], y=pos_df['Weight %'],
+            marker_color=['#ef5350' if w > 30 else '#42A5F5' for w in pos_df['Weight %']],
+            text=[f"{w:.1f}%" for w in pos_df['Weight %']],
+            textposition='outside',
+        ))
+        fig.update_layout(
+            title='Position Concentration (red = >30%)',
+            yaxis_title='Portfolio Weight %',
+            paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+            font=dict(color='#FAFAFA'), height=300,
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        fig.update_xaxes(gridcolor='#1E2130')
+        fig.update_yaxes(gridcolor='#1E2130')
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(pos_df.style.format({'Market Value': '${:,.2f}', 'Weight %': '{:.1f}%'}),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.info("No open positions — deploy a bot and execute trades to see exposure.")
 
 # Main function to render the interface
 def render():

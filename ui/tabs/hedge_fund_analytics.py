@@ -107,11 +107,11 @@ def render_hedge_fund_analytics_tab(trading_engine):
         return
     
     # Get live portfolio data
-    cfg = get_config()
     hf_portfolio = trading_engine.positions
-    
+    api_key = config.get_eodhd_api_key()
+
     try:
-        live_prices = {s: pro_get_real_time_data(s, cfg['eodhd_api_key']).get('close', p['avg_price']) 
+        live_prices = {s: pro_get_real_time_data(s, api_key).get('close', p['avg_price'])
                       for s, p in hf_portfolio.items()}
         
         positions_data = [{

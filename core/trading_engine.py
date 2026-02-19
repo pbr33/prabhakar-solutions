@@ -76,8 +76,8 @@ class AutoTradingEngine:
                 self.positions[symbol]['avg_price'] = new_val / new_qty
                 self.positions[symbol]['quantity'] = new_qty
             else:
-                cfg = get_config()
-                fundamentals = pro_get_fundamental_data(symbol, cfg['eodhd_api_key'])
+                api_key = config.get_eodhd_api_key()
+                fundamentals = pro_get_fundamental_data(symbol, api_key) if api_key else {}
                 sector = fundamentals.get('General', {}).get('Sector', 'Unknown')
                 self.positions[symbol] = {
                     'quantity': quantity,

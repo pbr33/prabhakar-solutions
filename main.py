@@ -18,12 +18,19 @@ load_env_file()
 
 def render_landing_page():
     """Render the enhanced landing page with all capabilities showcase"""
+
+    # Detect navigation triggered by the HTML button via query param
+    if st.query_params.get("navigate") == "login":
+        st.query_params.clear()
+        st.session_state.page = 'login'
+        st.rerun()
+
     st.markdown("""
     <style>
         .stApp > header {
             background-color: transparent;
         }
-        
+
         .main > div {
             padding-top: 0rem;
         }
@@ -605,27 +612,20 @@ def render_landing_page():
         </section>
 
         <script>
-            // Add event listener when DOM is loaded
             document.addEventListener('DOMContentLoaded', function() {{
                 const launchBtn = document.getElementById('launchBtn');
                 if (launchBtn) {{
                     launchBtn.addEventListener('click', function() {{
-                        // Create a custom event that Streamlit can listen to
-                        const event = new CustomEvent('launchDashboard');
-                        window.dispatchEvent(event);
-                        
-                        // Visual feedback
+                        // Visual feedback first
                         this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Launching...';
-                        this.style.background = 'linear-gradient(45deg, #7c3aed, #6366f1)';
-                        
-                        // Fallback - show message if Streamlit doesn't respond
-                        setTimeout(() => {{
-                            alert('🚀 Redirecting to login page! Click OK to continue.');
-                        }}, 500);
+                        this.style.opacity = '0.85';
+                        // Navigate parent Streamlit window with query param so Python detects it
+                        const parentUrl = window.parent.location.href.split('?')[0];
+                        window.parent.location.href = parentUrl + '?navigate=login';
                     }});
                 }}
-                
-                // Add floating animation delays
+
+                // Staggered animation for floating elements
                 const floatingElements = document.querySelectorAll('.floating-element');
                 floatingElements.forEach((element, index) => {{
                     element.style.animationDelay = index * 0.5 + 's';
@@ -639,16 +639,6 @@ def render_landing_page():
     # Display the landing page
     st.components.v1.html(landing_html, height=1400, scrolling=True)
     
-    # FIXED: Use Streamlit button instead of JavaScript for navigation
-    # st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🚀 **Launch AI Dashboard**", 
-                    key="main_cta", 
-                    use_container_width=True,
-                    type="primary"):
-            st.session_state.page = 'login'
-            st.rerun()
 
 def render_login_page():
     """Render a clean and professional login page with avatar"""
@@ -1257,46 +1247,10 @@ def main():
         # st.markdown('<h1 class="main-header">🤖 {t(AI Trading Agents Dashboard)}</h1>', unsafe_allow_html=True)
         st.markdown(f'<h1 class="main-header">🤖 {t("AI Trading Agents Dashboard")}</h1>', unsafe_allow_html=True)
     with header_col2:
-        # Configuration status indicator
-        validation = config.validate_config()
-        if validation['eodhd'] and validation['azure_openai']:
-            st.markdown("""
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #10b981;">🟢 All APIs Ready</small>
-            </div>
-            """, unsafe_allow_html=True)
-        elif validation['eodhd'] or validation['azure_openai']:
-            st.markdown("""
-            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff8c00;">🟡 Partial Config</small>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background: rgba(255, 0, 0, 0.1); border: 1px solid rgba(255, 0, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff4444;">🔴 Config Needed</small>
-            </div>
-            """, unsafe_allow_html=True)
+        pass  # API status badges hidden
     
     with header_col3:
-        # User status indicator
-        if user_type == 'guest':
-            st.markdown("""
-            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff8c00;">🔓 Guest Mode</small>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #10b981;">🔐 Full Access</small>
-            </div>
-            """, unsafe_allow_html=True)
+        pass  # Access level badges hidden
 
     # --- Initialize Session State ---
     if 'trading_engine' not in st.session_state:
