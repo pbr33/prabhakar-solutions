@@ -880,12 +880,6 @@ def apply_professional_theme():
     
     st.markdown(professional_css, unsafe_allow_html=True)
     
-    # Theme indicator
-    st.markdown(f"""
-    <div class="theme-indicator">
-        {theme_mode} • {color_scheme}
-    </div>
-    """, unsafe_allow_html=True)
 
 def get_data_source_status(source_name: str):
     """Get the connection status of a data source"""
