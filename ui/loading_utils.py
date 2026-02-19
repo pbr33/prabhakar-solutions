@@ -148,169 +148,113 @@ def inject_global_loader() -> None:
 
 # ─── Full-Screen Dashboard Transition Loader ──────────────────────────────────
 #
-# CSS + HTML → st.markdown()  (renders the overlay visually)
-# Dismiss JS → components.html(height=0)  (runs in real iframe, controls parent)
+# The overlay is created ENTIRELY via components.html() JS using
+# window.parent.document.body.appendChild().  This keeps the element OUTSIDE
+# React's virtual DOM tree so React's reconciliation can never conflict with
+# our manual DOM removal — eliminating the NotFoundError: removeChild crash.
 
-_DASHBOARD_LOADER_HTML = """
-<style>
-#ar-dl-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    z-index: 2147483647;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1.5rem;
-    opacity: 1;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    transition: opacity 0.7s ease;
-}
-#ar-dl-overlay::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background:
-        radial-gradient(ellipse at 20% 50%, rgba(16,185,129,0.06) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 50%, rgba(59,130,246,0.06) 0%, transparent 50%);
-    pointer-events: none;
-}
-.ar-dl-logo-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.6rem;
-    position: relative;
-}
-.ar-dl-emoji {
-    font-size: 3.8rem;
-    animation: ar-dl-float 2.5s ease-in-out infinite;
-    filter: drop-shadow(0 0 24px rgba(16,185,129,0.45));
-}
-.ar-dl-app-name {
-    font-size: 1.9rem;
-    font-weight: 800;
-    letter-spacing: 0.07em;
-    background: linear-gradient(90deg, #10b981 0%, #3b82f6 50%, #8b5cf6 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-.ar-dl-tagline {
-    font-size: 0.75rem;
-    color: rgba(255,255,255,0.3);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-}
-.ar-dl-spinner-wrap {
-    position: relative;
-    width: 64px;
-    height: 64px;
-}
-.ar-dl-ring {
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-}
-.ar-dl-ring-1 {
-    border: 3px solid transparent;
-    border-top-color: #10b981;
-    border-right-color: #10b981;
-    animation: ar-dl-spin 0.85s linear infinite;
-}
-.ar-dl-ring-2 {
-    inset: 9px;
-    border: 2px solid transparent;
-    border-top-color: #3b82f6;
-    animation: ar-dl-spin 1.35s linear infinite reverse;
-}
-.ar-dl-ring-3 {
-    inset: 18px;
-    border: 2px solid transparent;
-    border-top-color: #8b5cf6;
-    animation: ar-dl-spin 1.9s linear infinite;
-}
-.ar-dl-center-dot {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.ar-dl-center-dot::after {
-    content: '';
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #10b981;
-    box-shadow: 0 0 10px #10b981;
-    animation: ar-dl-pulse-dot 1s ease-in-out infinite;
-}
-.ar-dl-progress-track {
-    width: 220px;
-    height: 2px;
-    background: rgba(255,255,255,0.07);
-    border-radius: 2px;
-    overflow: hidden;
-}
-.ar-dl-progress-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6);
-    animation: ar-dl-progress 4s ease-in-out forwards;
-}
-.ar-dl-status {
-    font-size: 0.85rem;
-    color: rgba(255,255,255,0.45);
-    letter-spacing: 0.03em;
-    min-height: 1.3em;
-    transition: opacity 0.3s ease;
-}
-@keyframes ar-dl-float {
-    0%, 100% { transform: translateY(0); }
-    50%       { transform: translateY(-10px); }
-}
-@keyframes ar-dl-spin {
-    to { transform: rotate(360deg); }
-}
-@keyframes ar-dl-pulse-dot {
-    0%, 100% { transform: scale(1);   opacity: 0.8; }
-    50%       { transform: scale(1.6); opacity: 1;   }
-}
-@keyframes ar-dl-progress {
-    0%   { width: 0%;  }
-    20%  { width: 20%; }
-    50%  { width: 55%; }
-    80%  { width: 82%; }
-    100% { width: 95%; }
-}
-</style>
-
-<div id="ar-dl-overlay">
-    <div class="ar-dl-logo-wrap">
-        <span class="ar-dl-emoji">&#x1F916;</span>
-        <div class="ar-dl-app-name">Agent RICH</div>
-        <div class="ar-dl-tagline">Real-time Investment Capital Hub</div>
-    </div>
-    <div class="ar-dl-spinner-wrap">
-        <div class="ar-dl-ring ar-dl-ring-1"></div>
-        <div class="ar-dl-ring ar-dl-ring-2"></div>
-        <div class="ar-dl-ring ar-dl-ring-3"></div>
-        <div class="ar-dl-center-dot"></div>
-    </div>
-    <div class="ar-dl-progress-track">
-        <div class="ar-dl-progress-fill"></div>
-    </div>
-    <div class="ar-dl-status" id="ar-dl-status-msg">Initializing dashboard&hellip;</div>
-</div>
-"""
-
-# JavaScript delivered via components.html() so it actually executes.
-# Uses window.parent.document to reach the Streamlit frame where the overlay lives.
 _DASHBOARD_LOADER_JS = """
 <script>
 (function () {
+    var pdoc = window.parent.document;
+
+    /* ── CSS injected into parent <head> ───────────────────────────────── */
+    var CSS = [
+        '#ar-dl-overlay{position:fixed;top:0;left:0;right:0;bottom:0;',
+        'background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);',
+        'z-index:2147483647;display:flex;flex-direction:column;',
+        'align-items:center;justify-content:center;gap:1.5rem;',
+        'opacity:1;transition:opacity .7s ease;',
+        "font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;}",
+
+        '#ar-dl-overlay::before{content:"";position:absolute;inset:0;',
+        'background:radial-gradient(ellipse at 20% 50%,rgba(16,185,129,.06) 0%,transparent 50%),',
+        'radial-gradient(ellipse at 80% 50%,rgba(59,130,246,.06) 0%,transparent 50%);',
+        'pointer-events:none;}',
+
+        /* RICH avatar */
+        '.ar-dl-avatar{width:92px;height:92px;border-radius:50%;',
+        'background:linear-gradient(135deg,#10b981 0%,#3b82f6 55%,#8b5cf6 100%);',
+        'display:flex;align-items:center;justify-content:center;',
+        'font-size:1.45rem;font-weight:900;color:#fff;letter-spacing:.12em;',
+        'box-shadow:0 0 0 3px rgba(16,185,129,.25),0 0 48px rgba(16,185,129,.45),0 0 90px rgba(59,130,246,.2);',
+        'animation:ar-dl-float 2.5s ease-in-out infinite;',
+        'position:relative;}',
+
+        '.ar-dl-avatar::after{content:"";position:absolute;inset:-4px;border-radius:50%;',
+        'background:conic-gradient(from 0deg,#10b981,#3b82f6,#8b5cf6,#10b981);',
+        'z-index:-1;opacity:.5;filter:blur(6px);}',
+
+        '.ar-dl-logo-wrap{display:flex;flex-direction:column;align-items:center;gap:.7rem;}',
+
+        '.ar-dl-app-name{font-size:1.9rem;font-weight:800;letter-spacing:.07em;',
+        'background:linear-gradient(90deg,#10b981 0%,#3b82f6 50%,#8b5cf6 100%);',
+        '-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}',
+
+        '.ar-dl-tagline{font-size:.75rem;color:rgba(255,255,255,.28);',
+        'letter-spacing:.2em;text-transform:uppercase;}',
+
+        '.ar-dl-spinner-wrap{position:relative;width:64px;height:64px;}',
+        '.ar-dl-ring{position:absolute;inset:0;border-radius:50%;}',
+        '.ar-dl-ring-1{border:3px solid transparent;border-top-color:#10b981;',
+        'border-right-color:#10b981;animation:ar-dl-spin .85s linear infinite;}',
+        '.ar-dl-ring-2{inset:9px;border:2px solid transparent;border-top-color:#3b82f6;',
+        'animation:ar-dl-spin 1.35s linear infinite reverse;}',
+        '.ar-dl-ring-3{inset:18px;border:2px solid transparent;border-top-color:#8b5cf6;',
+        'animation:ar-dl-spin 1.9s linear infinite;}',
+        '.ar-dl-center-dot{position:absolute;inset:0;display:flex;',
+        'align-items:center;justify-content:center;}',
+        '.ar-dl-center-dot::after{content:"";width:8px;height:8px;border-radius:50%;',
+        'background:#10b981;box-shadow:0 0 10px #10b981;',
+        'animation:ar-dl-pulse-dot 1s ease-in-out infinite;}',
+
+        '.ar-dl-progress-track{width:220px;height:2px;',
+        'background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden;}',
+        '.ar-dl-progress-fill{height:100%;border-radius:2px;',
+        'background:linear-gradient(90deg,#10b981,#3b82f6,#8b5cf6);',
+        'animation:ar-dl-progress 4s ease-in-out forwards;}',
+
+        '.ar-dl-status{font-size:.85rem;color:rgba(255,255,255,.42);',
+        'letter-spacing:.03em;min-height:1.3em;transition:opacity .3s ease;}',
+
+        '@keyframes ar-dl-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}',
+        '@keyframes ar-dl-spin{to{transform:rotate(360deg)}}',
+        '@keyframes ar-dl-pulse-dot{0%,100%{transform:scale(1);opacity:.8}50%{transform:scale(1.6);opacity:1}}',
+        '@keyframes ar-dl-progress{0%{width:0}20%{width:20%}50%{width:55%}80%{width:82%}100%{width:95%}}'
+    ].join('');
+
+    /* ── Only run once per page load ───────────────────────────────────── */
+    if (pdoc.getElementById('ar-dl-overlay')) return;
+
+    var styleEl = pdoc.createElement('style');
+    styleEl.id  = 'ar-dl-css';
+    styleEl.textContent = CSS;
+    pdoc.head.appendChild(styleEl);
+
+    /* ── Build overlay HTML and append DIRECTLY to <body> ──────────────
+       By appending to body (not inside any React component) we stay
+       completely outside React's virtual DOM — React can never trigger
+       a removeChild conflict on this element.                           */
+    var overlay = pdoc.createElement('div');
+    overlay.id  = 'ar-dl-overlay';
+    overlay.innerHTML = [
+        '<div class="ar-dl-logo-wrap">',
+        '  <div class="ar-dl-avatar">RICH</div>',
+        '  <div class="ar-dl-app-name">Agent RICH</div>',
+        '  <div class="ar-dl-tagline">Real-time Investment Capital Hub</div>',
+        '</div>',
+        '<div class="ar-dl-spinner-wrap">',
+        '  <div class="ar-dl-ring ar-dl-ring-1"></div>',
+        '  <div class="ar-dl-ring ar-dl-ring-2"></div>',
+        '  <div class="ar-dl-ring ar-dl-ring-3"></div>',
+        '  <div class="ar-dl-center-dot"></div>',
+        '</div>',
+        '<div class="ar-dl-progress-track"><div class="ar-dl-progress-fill"></div></div>',
+        '<div class="ar-dl-status" id="ar-dl-status-msg">Initializing dashboard\u2026</div>'
+    ].join('');
+    pdoc.body.appendChild(overlay);
+
+    /* ── Status message rotation ────────────────────────────────────── */
     var messages = [
         'Initializing dashboard\u2026',
         'Loading AI agents\u2026',
@@ -319,77 +263,57 @@ _DASHBOARD_LOADER_JS = """
         'Preparing workspace\u2026',
         'Almost ready\u2026'
     ];
-
-    function init() {
-        var pdoc     = window.parent.document;
-        var overlay  = pdoc.getElementById('ar-dl-overlay');
-        var statusEl = pdoc.getElementById('ar-dl-status-msg');
-
-        /* Retry until overlay is present in the parent frame */
-        if (!overlay) {
-            setTimeout(init, 120);
-            return;
-        }
-
-        /* Prevent double-init if iframe somehow re-runs */
-        if (overlay.dataset.arInit) return;
-        overlay.dataset.arInit = '1';
-
-        /* ── Rotating status messages ── */
-        var msgIdx   = 0;
-        var msgTimer = setInterval(function () {
-            msgIdx = Math.min(msgIdx + 1, messages.length - 1);
-            if (statusEl) {
-                statusEl.style.opacity = '0';
-                setTimeout(function () {
-                    if (statusEl) {
-                        statusEl.textContent = messages[msgIdx];
-                        statusEl.style.opacity = '1';
-                    }
-                }, 150);
-            }
-            if (msgIdx === messages.length - 1) clearInterval(msgTimer);
-        }, 650);
-
-        /* ── Dismiss logic ── */
-        function dismiss() {
-            clearInterval(msgTimer);
-            var ov = pdoc.getElementById('ar-dl-overlay');
-            if (!ov || ov.dataset.arDismissed) return;
-            ov.dataset.arDismissed = '1';
-            var se = pdoc.getElementById('ar-dl-status-msg');
-            if (se) se.textContent = 'Ready!';
-            ov.style.opacity       = '0';
-            ov.style.pointerEvents = 'none';
+    var msgIdx   = 0;
+    var statusEl = pdoc.getElementById('ar-dl-status-msg');
+    var msgTimer = setInterval(function () {
+        msgIdx = Math.min(msgIdx + 1, messages.length - 1);
+        if (statusEl) {
+            statusEl.style.opacity = '0';
             setTimeout(function () {
-                var el = pdoc.getElementById('ar-dl-overlay');
-                if (el && el.parentNode) el.parentNode.removeChild(el);
-            }, 800);
+                if (statusEl) { statusEl.textContent = messages[msgIdx]; statusEl.style.opacity = '1'; }
+            }, 150);
         }
+        if (msgIdx === messages.length - 1) clearInterval(msgTimer);
+    }, 650);
 
-        /* Hard safety-net: always dismiss after 7 s */
-        var maxTimer = setTimeout(dismiss, 7000);
-
-        /* Early dismiss once Streamlit has rendered real content */
-        var MO = (pdoc.defaultView || window.parent).MutationObserver;
-        var observer = new MO(function () {
-            var mainBlock =
-                pdoc.querySelector('[data-testid="stMainBlockContainer"]') ||
-                pdoc.querySelector('[data-testid="stAppViewBlockContainer"]') ||
-                pdoc.querySelector('.main .block-container');
-            if (mainBlock && mainBlock.children.length >= 2) {
-                setTimeout(function () {
-                    clearTimeout(maxTimer);
-                    dismiss();
-                    observer.disconnect();
-                }, 400);
-            }
-        });
-        observer.observe(pdoc.body, { childList: true, subtree: true });
+    /* ── Dismiss ────────────────────────────────────────────────────── */
+    function dismiss() {
+        clearInterval(msgTimer);
+        var ov = pdoc.getElementById('ar-dl-overlay');
+        if (!ov || ov.dataset.arDismissed) return;
+        ov.dataset.arDismissed = '1';
+        var se = pdoc.getElementById('ar-dl-status-msg');
+        if (se) se.textContent = 'Ready!';
+        ov.style.opacity       = '0';
+        ov.style.pointerEvents = 'none';
+        setTimeout(function () {
+            /* el.remove() is safe even if the element was already gone */
+            var el = pdoc.getElementById('ar-dl-overlay');
+            if (el) { try { el.remove(); } catch (e) {} }
+            var css = pdoc.getElementById('ar-dl-css');
+            if (css) { try { css.remove(); } catch (e) {} }
+        }, 800);
     }
 
-    /* Start after a short delay to let the parent frame settle */
-    setTimeout(init, 50);
+    /* Hard safety-net: always dismiss after 7 s */
+    var maxTimer = setTimeout(dismiss, 7000);
+
+    /* Early dismiss once Streamlit renders real content */
+    var MO = (pdoc.defaultView || window.parent).MutationObserver;
+    var observer = new MO(function () {
+        var mainBlock =
+            pdoc.querySelector('[data-testid="stMainBlockContainer"]')    ||
+            pdoc.querySelector('[data-testid="stAppViewBlockContainer"]') ||
+            pdoc.querySelector('.main .block-container');
+        if (mainBlock && mainBlock.children.length >= 2) {
+            setTimeout(function () {
+                clearTimeout(maxTimer);
+                dismiss();
+                observer.disconnect();
+            }, 400);
+        }
+    });
+    observer.observe(pdoc.body, { childList: true, subtree: true });
 })();
 </script>
 """
@@ -397,18 +321,16 @@ _DASHBOARD_LOADER_JS = """
 
 def inject_dashboard_loader() -> None:
     """
-    Inject a full-screen transition overlay that covers the viewport while the
-    dashboard modules are loading after login.
+    Inject a full-screen transition overlay after login.
 
-    The overlay HTML/CSS is injected via ``st.markdown()`` (renders fine) and
-    the dismiss logic is injected via ``components.html(height=0)`` (scripts
-    actually execute in the iframe and reach the overlay via window.parent).
+    The overlay is created entirely via ``components.html(height=0)`` JS
+    using ``window.parent.document.body.appendChild()``.  Because the element
+    lives directly in ``<body>`` — outside React's virtual DOM — React's
+    reconciliation can never trigger a ``removeChild`` conflict.
 
-    Call this at the very top of the dashboard render path, guarded by
-    ``st.session_state.pop('_dashboard_loading', False)`` so it only shows
-    on the first post-login render cycle.
+    Guarded by ``st.session_state.pop('_dashboard_loading', False)`` so it
+    only shows once on the first post-login render cycle.
     """
-    st.markdown(_DASHBOARD_LOADER_HTML, unsafe_allow_html=True)
     components.html(_DASHBOARD_LOADER_JS, height=0)
 
 
