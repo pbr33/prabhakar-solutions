@@ -132,39 +132,44 @@ class BrokerAPI:
         return True, "Connected to Mock Broker"
 
     def place_order(self, signal: TradingSignal) -> Dict:
-        """Place order with comprehensive error handling"""
+        """Place order — simulated execution with realistic fill price slippage."""
         if not self.is_connected:
             return {'success': False, 'message': 'Not connected to broker'}
 
-        # Simulate order placement with realistic latency
-        time.sleep(np.random.uniform(0.1, 0.5))
+        order_id = f"ORD_{int(time.time())}_{signal.symbol}"
 
-        order_id = f"ORD_{int(time.time())}{np.random.randint(1000, 9999)}"
+        # Realistic market-order slippage: ±0.05% of price (not random failure)
+        slippage = 0.0005
+        if signal.action == 'BUY':
+            fill_price = signal.price * (1 + slippage)   # pay slightly more on buy
+        else:
+            fill_price = signal.price * (1 - slippage)   # receive slightly less on sell
 
-        # Simulate occasional failures
-        if np.random.random() < 0.02:  # 2% failure rate
-            return {
-                'success': False,
-                'message': 'Order rejected: Insufficient buying power',
-                'error_code': 'INSUFFICIENT_FUNDS'
-            }
+        commission = signal.quantity * fill_price * 0.0005   # 0.05% commission
 
         return {
             'success': True,
             'order_id': order_id,
             'status': OrderStatus.FILLED.value,
-            'fill_price': signal.price * (1 + np.random.uniform(-0.001, 0.001)),
+            'fill_price': round(fill_price, 4),
             'timestamp': datetime.now(),
-            'commission': signal.quantity * signal.price * 0.0005  # 0.05% commission
+            'commission': round(commission, 4),
         }
 
-    def get_account_info(self) -> Dict:
-        """Get account information"""
+    def get_account_info(self, engine_portfolio: Dict = None) -> Dict:
+        """Return live account info derived from the engine portfolio."""
+        if engine_portfolio:
+            return {
+                'buying_power': engine_portfolio.get('cash', 0),
+                'portfolio_value': engine_portfolio.get('total_value', 0),
+                'open_positions': len(engine_portfolio.get('positions', {})),
+                'total_trades': engine_portfolio.get('total_trades', 0),
+            }
         return {
-            'buying_power': 100000,
-            'portfolio_value': 150000,
-            'day_trades_remaining': 3,
-            'positions': {}
+            'buying_power': 0,
+            'portfolio_value': 0,
+            'open_positions': 0,
+            'total_trades': 0,
         }
 
 # ========== AI-POWERED STRATEGY ENGINE ==========
