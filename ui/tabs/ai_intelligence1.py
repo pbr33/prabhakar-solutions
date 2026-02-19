@@ -1047,7 +1047,6 @@ The chart shows a {random.choice(['ascending triangle', 'bull flag', 'cup and ha
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; padding: 20px;">
-        <h4>🚀 AI Trading Intelligence Platform</h4>
         <p>Powered by advanced AI agents • Real-time analysis • Institutional-grade insights</p>
         <small>⚡ All analysis completed in under 3 seconds • 🎯 94.2% accuracy rate • 🛡️ Risk-managed recommendations</small>
     </div>
