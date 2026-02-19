@@ -1326,21 +1326,78 @@ def render_risk_management(engine):
                 st.success("✅ Risk settings updated!")
 
     with col2:
-        st.markdown("### Risk Alerts")
+        st.markdown("### Live Risk Alerts")
 
-        # Mock risk alerts
-        alerts = [
-            "⚠️ Portfolio concentration in tech sector: 45%",
-            "🔴 Daily loss approaching limit: -2.8%",
-            "🟡 High correlation detected between AAPL and MSFT positions"
-        ]
+        alerts = []
+        positions = engine.portfolio.get('positions', {})
+        total_value = engine.portfolio.get('total_value', 1)
+        cash = engine.portfolio.get('cash', 0)
+        daily_pnl = engine.risk_manager.daily_pnl
 
+        # 1 — concentration check: any single position > 30% of portfolio
+        for sym, pos in positions.items():
+            pos_value = pos['quantity'] * pos['avg_price']
+            pct = pos_value / total_value * 100 if total_value else 0
+            if pct > 30:
+                alerts.append(f"🔴 High concentration: **{sym}** = {pct:.1f}% of portfolio")
+
+        # 2 — daily loss limit
+        daily_loss_limit = engine.risk_manager.risk_metrics.daily_loss_limit * total_value
+        if daily_pnl < 0 and abs(daily_pnl) > daily_loss_limit * 0.8:
+            alerts.append(f"🔴 Daily loss near limit: ${daily_pnl:+,.2f} (limit ${-daily_loss_limit:,.2f})")
+
+        # 3 — cash ratio warning (< 10% cash)
+        cash_pct = cash / total_value * 100 if total_value else 100
+        if cash_pct < 10:
+            alerts.append(f"⚠️ Low cash reserve: {cash_pct:.1f}% of portfolio")
+
+        # 4 — max positions
+        n_pos = len(positions)
+        max_pos = engine.risk_manager.risk_metrics.max_positions
+        if n_pos >= max_pos:
+            alerts.append(f"⚠️ At maximum positions limit: {n_pos}/{max_pos}")
+
+        # 5 — all clear
+        if not alerts:
+            st.success("✅ No risk alerts — portfolio within all limits")
         for alert in alerts:
             st.warning(alert)
 
-    # Risk metrics visualization
+    # Risk metrics visualisation
     st.markdown("### Current Risk Exposure")
-    st.info("🎯 Real-time risk metrics and exposure analysis will be displayed here.")
+
+    positions = engine.portfolio.get('positions', {})
+    total_value = engine.portfolio.get('total_value', 1)
+
+    if positions:
+        pos_data = []
+        for sym, pos in positions.items():
+            mv = pos['quantity'] * pos['avg_price']
+            pos_data.append({'Symbol': sym, 'Market Value': mv,
+                             'Weight %': mv / total_value * 100})
+        pos_df = pd.DataFrame(pos_data).sort_values('Weight %', ascending=False)
+
+        fig = go.Figure(go.Bar(
+            x=pos_df['Symbol'], y=pos_df['Weight %'],
+            marker_color=['#ef5350' if w > 30 else '#42A5F5' for w in pos_df['Weight %']],
+            text=[f"{w:.1f}%" for w in pos_df['Weight %']],
+            textposition='outside',
+        ))
+        fig.update_layout(
+            title='Position Concentration (red = >30%)',
+            yaxis_title='Portfolio Weight %',
+            paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+            font=dict(color='#FAFAFA'), height=300,
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        fig.update_xaxes(gridcolor='#1E2130')
+        fig.update_yaxes(gridcolor='#1E2130')
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(pos_df.style.format({'Market Value': '${:,.2f}', 'Weight %': '{:.1f}%'}),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.info("No open positions — deploy a bot and execute trades to see exposure.")
 
 # Main function to render the interface
 def render():
