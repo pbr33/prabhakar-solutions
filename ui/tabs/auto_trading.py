@@ -393,6 +393,15 @@ class AIStrategyEngine:
                 'model_count': len(predictions)
             }
 
+            # Derive sentiment from RSI and recent price momentum (no random)
+            rsi_val = float(features['rsi'].iloc[-1]) if 'rsi' in features.columns else 50.0
+            recent_mom = float(features['price_change'].iloc[-5:].mean()) if 'price_change' in features.columns else 0.0
+            # RSI component: >50 → positive, <50 → negative, scaled to [-0.5, +0.5]
+            rsi_sentiment = (rsi_val - 50) / 100
+            # Momentum component clipped to [-0.5, +0.5]
+            mom_sentiment = float(np.clip(recent_mom * 25, -0.5, 0.5))
+            sentiment_score = float(np.clip(rsi_sentiment + mom_sentiment, -1.0, 1.0))
+
             return TradingSignal(
                 symbol=symbol,
                 action=action,
@@ -408,7 +417,7 @@ class AIStrategyEngine:
                 take_profit=abs(avg_prediction) * 2,
                 feature_importance=top_features,
                 market_regime=self._detect_market_regime(current_data),
-                sentiment_score=np.random.uniform(-1, 1)  # Would be real sentiment in production
+                sentiment_score=sentiment_score,
             )
 
         except Exception as e:
