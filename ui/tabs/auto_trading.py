@@ -20,6 +20,13 @@ import xgboost as xgb
 import warnings
 warnings.filterwarnings('ignore')
 
+from config import config
+from services.data_fetcher import (
+    pro_get_historical_data,
+    pro_get_real_time_data,
+    pro_get_news,
+)
+
 # ========== ENUMS & DATA STRUCTURES ==========
 
 class OrderType(Enum):
@@ -592,44 +599,38 @@ class AutoTradingEngine:
             return False
 
     def train_ai_models(self, symbols: List[str]) -> Dict:
-        """Train AI models for all symbols"""
-        # Generate mock historical data for training
-        training_data = self._generate_training_data(symbols)
+        """Train AI models for all symbols using real EODHD data"""
+        training_data = self._fetch_real_data(symbols)
         return self.ai_engine.train_models(training_data, symbols)
 
-    def _generate_training_data(self, symbols: List[str]) -> pd.DataFrame:
-        """Generate comprehensive training data"""
-        # In production, this would fetch real historical data
-        date_range = pd.date_range(end=datetime.now(), periods=1000, freq='1H')
-
-        all_data = []
+    def _fetch_real_data(self, symbols: List[str]) -> pd.DataFrame:
+        """Fetch real EODHD end-of-day historical data for training."""
+        api_key = config.get_eodhd_api_key()
+        all_frames = []
         for symbol in symbols:
-            # Generate realistic price data
-            base_price = np.random.uniform(50, 300)
-            returns = np.random.normal(0, 0.02, len(date_range))
-            prices = base_price * np.exp(returns.cumsum())
-
-            # Generate OHLC data
-            for i, (timestamp, price) in enumerate(zip(date_range, prices)):
-                noise = np.random.uniform(0.98, 1.02)
-                open_price = price * noise
-                high_price = max(price, open_price) * np.random.uniform(1.0, 1.05)
-                low_price = min(price, open_price) * np.random.uniform(0.95, 1.0)
-                volume = np.random.randint(10000, 1000000)
-
-                all_data.append({
-                    'timestamp': timestamp,
-                    'symbol': symbol,
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': price,
-                    'volume': volume
-                })
-
-        df = pd.DataFrame(all_data)
-        df.set_index('timestamp', inplace=True)
-        return df
+            try:
+                df = pro_get_historical_data(symbol, api_key)
+                if df.empty:
+                    continue
+                # Normalise column names to lower-case
+                df.columns = [c.lower() for c in df.columns]
+                # Keep only OHLCV; rename adjusted_close→close if needed
+                if 'adjusted_close' in df.columns and 'close' not in df.columns:
+                    df = df.rename(columns={'adjusted_close': 'close'})
+                df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+                df['symbol'] = symbol
+                # Ensure numeric
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df.dropna(inplace=True)
+                all_frames.append(df)
+            except Exception:
+                continue
+        if all_frames:
+            combined = pd.concat(all_frames)
+            combined.index = pd.to_datetime(combined.index)
+            return combined
+        return pd.DataFrame()
 
     def execute_trade(self, signal: TradingSignal, broker_name: str = None) -> Dict:
         """Execute trade with comprehensive error handling"""
