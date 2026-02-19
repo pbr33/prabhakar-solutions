@@ -21,10 +21,184 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from config import config
+
+
+# ========== HELPER UTILITIES ==========
+
+# Popular tickers shown by default in the search widget
+_DEFAULT_TICKERS = [
+    'AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'NVDA', 'META', 'NFLX',
+    'SPY', 'QQQ', 'AMZN', 'BABA', 'BRK-B', 'V', 'JPM', 'JNJ', 'WMT',
+    'UNH', 'XOM', 'MA',
+]
+
+_PERIOD_DAYS = {
+    "1 month": 30,
+    "3 months": 90,
+    "6 months": 180,
+    "1 year": 365,
+    "2 years": 730,
+    "5 years": 1825,
+}
+
+
+def _period_to_dates(period: str):
+    """Convert a human-readable period string to (from_date, to_date) strings.
+
+    Returns:
+        Tuple of ('YYYY-MM-DD', 'YYYY-MM-DD') for EODHD API.
+    """
+    today = datetime.now().date()
+    days = _PERIOD_DAYS.get(period, 180)
+    from_date = (today - timedelta(days=days)).strftime('%Y-%m-%d')
+    to_date = today.strftime('%Y-%m-%d')
+    return from_date, to_date
+
+
+def render_ticker_search_widget(
+    key: str,
+    label: str = "Select Tickers",
+    default: list = None,
+    multi: bool = True,
+):
+    """Reusable searchable ticker selection widget.
+
+    Renders a search-by-name/symbol box backed by the EODHD search API plus a
+    manual comma-separated entry field.  Selected tickers are persisted in
+    ``st.session_state`` under ``ticker_sel_{key}``.
+
+    Args:
+        key:     Unique key suffix to namespace session-state entries.
+        label:   Section heading shown above the widget.
+        default: Pre-selected ticker list on first render.
+        multi:   When False only a single ticker is tracked (last one wins).
+
+    Returns:
+        List of selected ticker symbols (strings).
+    """
+    api_key = config.get_eodhd_api_key()
+
+    sel_key = f"ticker_sel_{key}"
+    res_key = f"ticker_res_{key}"
+
+    if sel_key not in st.session_state:
+        st.session_state[sel_key] = list(default or [])
+    if res_key not in st.session_state:
+        st.session_state[res_key] = []
+
+    st.markdown(f"**{label}**")
+
+    # ── Search row ──────────────────────────────────────────────────────────
+    scol, bcol = st.columns([4, 1])
+    with scol:
+        query = st.text_input(
+            "Search by company name or ticker symbol",
+            key=f"ticker_q_{key}",
+            placeholder="e.g. Apple, AAPL, Tesla, NVDA, Nvidia…",
+            label_visibility="collapsed",
+        )
+    with bcol:
+        search_clicked = st.button("Search", key=f"ticker_sb_{key}", use_container_width=True)
+
+    if search_clicked:
+        q = (query or "").strip()
+        if not q:
+            st.warning("Enter a name or symbol to search.")
+        elif not api_key:
+            st.warning("EODHD API key not configured – cannot search. Use manual entry below.")
+        else:
+            with st.spinner("Searching EODHD…"):
+                results = search_tickers_eodhd(q, api_key, limit=25)
+            if results:
+                st.session_state[res_key] = results
+            else:
+                st.info(f"No results found for '{q}'.")
+
+    # ── Show search results ──────────────────────────────────────────────────
+    results = st.session_state.get(res_key, [])
+    if results:
+        options = []
+        code_map = {}  # display label → ticker code
+        for r in results:
+            code = r.get('Code', '').strip()
+            exchange = r.get('Exchange', 'US').strip()
+            name = r.get('Name', code).strip()
+            itype = r.get('Type', '').strip()
+            label_str = f"{code} – {name} ({exchange})"
+            if itype:
+                label_str += f" [{itype}]"
+            options.append(label_str)
+            code_map[label_str] = code
+
+        chosen = st.multiselect(
+            "Select from search results:",
+            options=options,
+            key=f"ticker_rsel_{key}",
+            label_visibility="collapsed",
+        )
+        if st.button("Add to selection", key=f"ticker_radd_{key}"):
+            for lbl in chosen:
+                code = code_map.get(lbl, lbl.split(' – ')[0].strip())
+                if code and code not in st.session_state[sel_key]:
+                    if not multi:
+                        st.session_state[sel_key] = [code]
+                    else:
+                        st.session_state[sel_key].append(code)
+            st.rerun()
+
+    # ── Manual entry ────────────────────────────────────────────────────────
+    st.caption("Or type tickers directly (comma-separated):")
+    mcol, acol, clrcol = st.columns([4, 1, 1])
+    with mcol:
+        manual = st.text_input(
+            "Manual tickers",
+            key=f"ticker_manual_{key}",
+            placeholder="AAPL, GOOGL, MSFT, TSLA…",
+            label_visibility="collapsed",
+        )
+    with acol:
+        if st.button("Add", key=f"ticker_madd_{key}", use_container_width=True):
+            new = [t.strip().upper() for t in (manual or "").split(",") if t.strip()]
+            if new:
+                if not multi:
+                    st.session_state[sel_key] = [new[-1]]
+                else:
+                    existing = st.session_state[sel_key]
+                    st.session_state[sel_key] = list(
+                        dict.fromkeys(existing + new)  # dedup, preserve order
+                    )
+            st.rerun()
+    with clrcol:
+        if st.button("Clear", key=f"ticker_clr_{key}", use_container_width=True):
+            st.session_state[sel_key] = []
+            st.session_state[res_key] = []
+            st.rerun()
+
+    # ── Current selection display ────────────────────────────────────────────
+    selected = st.session_state[sel_key]
+    if selected:
+        if multi:
+            # Allow de-selecting individual tickers
+            kept = st.multiselect(
+                f"Currently selected ({len(selected)})",
+                options=selected,
+                default=selected,
+                key=f"ticker_desel_{key}",
+            )
+            if kept != selected:
+                st.session_state[sel_key] = kept
+                st.rerun()
+        else:
+            st.success(f"Selected ticker: **{selected[0]}**")
+    else:
+        st.info("No tickers selected yet.")
+
+    return st.session_state[sel_key]
 from services.data_fetcher import (
     pro_get_historical_data,
     pro_get_real_time_data,
     pro_get_news,
+    search_tickers_eodhd,
 )
 
 # ========== ENUMS & DATA STRUCTURES ==========
@@ -185,77 +359,140 @@ class AIStrategyEngine:
         self.scaler = StandardScaler()
         self.is_trained = False
 
-    def train_models(self, market_data: pd.DataFrame, symbols: List[str]) -> Dict:
-        """Train multiple AI models for different strategies"""
+    def train_models(self, market_data: pd.DataFrame, symbols: List[str],
+                     model_types: List[str] = None) -> Dict:
+        """Train multiple AI models for different strategies.
+
+        Args:
+            market_data:  Combined OHLCV DataFrame (may contain a 'symbol' column).
+            symbols:      List of ticker symbols to train models for.
+            model_types:  Which model types to include, e.g. ["XGBoost",
+                          "Random Forest"].  Defaults to both.
+        """
+        if model_types is None:
+            model_types = ["XGBoost", "Random Forest", "Ensemble"]
+
+        train_xgb = any(m in model_types for m in ("XGBoost", "Ensemble"))
+        train_rf = any(m in model_types for m in ("Random Forest", "Ensemble"))
+
         training_results = {}
 
         for symbol in symbols:
             try:
-                # Prepare features
-                features = self._engineer_features(market_data, symbol)
-                if features.empty:
+                # --- FIX: filter data to only the current symbol's rows ---
+                if 'symbol' in market_data.columns:
+                    symbol_data = (
+                        market_data[market_data['symbol'] == symbol]
+                        .drop(columns=['symbol'])
+                        .copy()
+                    )
+                else:
+                    symbol_data = market_data.copy()
+
+                if symbol_data.empty:
+                    training_results[symbol] = {
+                        'status': 'error',
+                        'error': 'No data available for this symbol'
+                    }
                     continue
 
-                # Create target variables for different strategies
-                features['future_return_1h'] = features['close'].pct_change().shift(-1)
-                features['future_return_1d'] = features['close'].pct_change(24).shift(-24)
-                features['volatility_target'] = features['close'].rolling(24).std()
+                # Sort chronologically
+                symbol_data = symbol_data.sort_index()
+
+                # Prepare features
+                features = self._engineer_features(symbol_data, symbol)
+                if features.empty:
+                    training_results[symbol] = {
+                        'status': 'error',
+                        'error': 'Feature engineering returned empty result'
+                    }
+                    continue
+
+                # Target: next-day return (EOD data, shift by 1 trading day)
+                features['next_day_return'] = features['close'].pct_change().shift(-1)
+                # 5-day forward return for medium-term signal
+                features['next_5d_return'] = features['close'].pct_change(5).shift(-5)
+                features['volatility_target'] = features['close'].rolling(20).std()
 
                 # Remove NaN values
                 features = features.dropna()
 
-                if len(features) < 100:  # Need sufficient data
+                min_rows = 60  # minimum viable for time-series CV
+                if len(features) < min_rows:
+                    training_results[symbol] = {
+                        'status': 'error',
+                        'error': (
+                            f'Insufficient data: {len(features)} rows '
+                            f'(need at least {min_rows}). '
+                            'Try a longer training period (6 months or more).'
+                        )
+                    }
                     continue
 
                 # Train ensemble of models
                 models = {}
-
-                # XGBoost for price prediction
-                X = features.drop(['future_return_1h', 'future_return_1d', 'volatility_target'], axis=1)
-                y_returns = features['future_return_1h']
+                X = features.drop(
+                    ['next_day_return', 'next_5d_return', 'volatility_target'],
+                    axis=1
+                )
+                y_returns = features['next_day_return']
 
                 # Time series split for proper validation
-                tscv = TimeSeriesSplit(n_splits=3)
+                n_splits = min(3, max(2, len(X) // 30))
+                tscv = TimeSeriesSplit(n_splits=n_splits)
 
                 for i, (train_idx, val_idx) in enumerate(tscv.split(X)):
-                    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                    y_train, y_val = y_returns.iloc[train_idx], y_returns.iloc[val_idx]
+                    X_train = X.iloc[train_idx]
+                    y_train = y_returns.iloc[train_idx]
 
                     # Scale features
-                    X_train_scaled = self.scaler.fit_transform(X_train)
-                    X_val_scaled = self.scaler.transform(X_val)
+                    scaler_i = StandardScaler()
+                    X_train_scaled = scaler_i.fit_transform(X_train)
 
-                    # XGBoost model
-                    xgb_model = xgb.XGBRegressor(
-                        n_estimators=100,
-                        max_depth=6,
-                        learning_rate=0.1,
-                        random_state=42
-                    )
-                    xgb_model.fit(X_train_scaled, y_train)
+                    if train_xgb:
+                        xgb_model = xgb.XGBRegressor(
+                            n_estimators=100,
+                            max_depth=6,
+                            learning_rate=0.05,
+                            subsample=0.8,
+                            colsample_bytree=0.8,
+                            random_state=42,
+                            verbosity=0,
+                        )
+                        xgb_model.fit(X_train_scaled, y_train)
+                        models[f'xgb_fold_{i}'] = (xgb_model, scaler_i)
+                        self.feature_importance[f'{symbol}_xgb'] = dict(
+                            zip(X.columns, xgb_model.feature_importances_)
+                        )
 
-                    # Random Forest for comparison
-                    rf_model = RandomForestRegressor(
-                        n_estimators=100,
-                        max_depth=10,
-                        random_state=42
-                    )
-                    rf_model.fit(X_train_scaled, y_train)
+                    if train_rf:
+                        rf_model = RandomForestRegressor(
+                            n_estimators=100,
+                            max_depth=8,
+                            min_samples_leaf=5,
+                            random_state=42,
+                            n_jobs=-1,
+                        )
+                        rf_model.fit(X_train_scaled, y_train)
+                        models[f'rf_fold_{i}'] = (rf_model, scaler_i)
+                        self.feature_importance[f'{symbol}_rf'] = dict(
+                            zip(X.columns, rf_model.feature_importances_)
+                        )
 
-                    # Store models
-                    models[f'xgb_fold_{i}'] = xgb_model
-                    models[f'rf_fold_{i}'] = rf_model
-
-                    # Calculate feature importance
-                    self.feature_importance[f'{symbol}_xgb'] = dict(zip(X.columns, xgb_model.feature_importances_))
-                    self.feature_importance[f'{symbol}_rf'] = dict(zip(X.columns, rf_model.feature_importances_))
+                if not models:
+                    training_results[symbol] = {
+                        'status': 'error',
+                        'error': 'No model types selected or all models failed'
+                    }
+                    continue
 
                 self.models[symbol] = models
                 training_results[symbol] = {
                     'status': 'success',
                     'models_trained': len(models),
                     'features_count': len(X.columns),
-                    'training_samples': len(X)
+                    'training_samples': len(X),
+                    'data_rows': len(symbol_data),
                 }
 
             except Exception as e:
@@ -349,19 +586,29 @@ class AIStrategyEngine:
             if features.empty:
                 return self._fallback_signal(symbol, current_data)
 
-            # Get latest features
-            latest_features = features.iloc[-1:].drop(['open', 'high', 'low', 'close', 'volume'], axis=1, errors='ignore')
+            # Get latest features (drop raw OHLCV – models were trained without them)
+            feature_cols_to_drop = [
+                c for c in ['open', 'high', 'low', 'close', 'volume']
+                if c in features.columns
+            ]
+            latest_features = features.iloc[-1:].drop(columns=feature_cols_to_drop, errors='ignore')
 
-            # Scale features
-            latest_scaled = self.scaler.transform(latest_features)
-
-            # Get ensemble predictions
+            # Get ensemble predictions (each model carries its own scaler)
             predictions = []
             models = self.models[symbol]
 
-            for model_name, model in models.items():
-                pred = model.predict(latest_scaled)[0]
-                predictions.append(pred)
+            for model_name, model_entry in models.items():
+                try:
+                    if isinstance(model_entry, tuple):
+                        model, model_scaler = model_entry
+                        latest_scaled = model_scaler.transform(latest_features)
+                    else:
+                        model = model_entry  # legacy fallback
+                        latest_scaled = latest_features.values
+                    pred = model.predict(latest_scaled)[0]
+                    predictions.append(float(pred))
+                except Exception:
+                    continue
 
             # Ensemble prediction
             avg_prediction = np.mean(predictions)
@@ -612,39 +859,101 @@ class AutoTradingEngine:
             st.error(f"Error adding broker {name}: {e}")
             return False
 
-    def train_ai_models(self, symbols: List[str]) -> Dict:
-        """Train AI models for all symbols using real EODHD data"""
-        training_data = self._fetch_real_data(symbols)
-        return self.ai_engine.train_models(training_data, symbols)
+    def train_ai_models(self, symbols: List[str], from_date: str = None,
+                        to_date: str = None, model_types: List[str] = None) -> Dict:
+        """Train AI models for all symbols using real EODHD data.
 
-    def _fetch_real_data(self, symbols: List[str]) -> pd.DataFrame:
-        """Fetch real EODHD end-of-day historical data for training."""
+        Args:
+            symbols:     List of ticker symbols to train on.
+            from_date:   Start date for training data ('YYYY-MM-DD'). Fetches
+                         all available history when omitted.
+            to_date:     End date for training data ('YYYY-MM-DD'). Defaults
+                         to today when omitted.
+            model_types: Which model types to train (e.g. ['XGBoost',
+                         'Random Forest']).  Defaults to both.
+        """
+        training_data, fetch_errors = self._fetch_real_data(
+            symbols, from_date=from_date, to_date=to_date
+        )
+        results = self.ai_engine.train_models(training_data, symbols, model_types=model_types)
+
+        # Surface fetch errors in results for symbols where we got no data
+        for symbol, error_msg in fetch_errors.items():
+            if symbol not in results:
+                results[symbol] = {'status': 'error', 'error': error_msg}
+
+        return results
+
+    def _fetch_real_data(self, symbols: List[str], from_date: str = None,
+                         to_date: str = None):
+        """Fetch real EODHD end-of-day historical data for training.
+
+        Returns:
+            Tuple of (combined_dataframe, error_dict).
+            error_dict maps symbol → error message for symbols that failed.
+        """
         api_key = config.get_eodhd_api_key()
+        if not api_key:
+            error_msg = "EODHD API key is not configured. Set EODHD_API_KEY in your .env file."
+            return pd.DataFrame(), {s: error_msg for s in symbols}
+
         all_frames = []
+        fetch_errors: Dict[str, str] = {}
+
         for symbol in symbols:
             try:
-                df = pro_get_historical_data(symbol, api_key)
+                df = pro_get_historical_data(
+                    symbol, api_key,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
                 if df.empty:
+                    fetch_errors[symbol] = (
+                        f"No data returned from EODHD for '{symbol}'. "
+                        "Verify the ticker symbol and API key."
+                    )
                     continue
+
                 # Normalise column names to lower-case
                 df.columns = [c.lower() for c in df.columns]
-                # Keep only OHLCV; rename adjusted_close→close if needed
+
+                # Keep only OHLCV; rename adjusted_close → close if needed
                 if 'adjusted_close' in df.columns and 'close' not in df.columns:
                     df = df.rename(columns={'adjusted_close': 'close'})
-                df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+
+                required = ['open', 'high', 'low', 'close', 'volume']
+                missing = [c for c in required if c not in df.columns]
+                if missing:
+                    fetch_errors[symbol] = (
+                        f"Missing columns in EODHD response: {missing}"
+                    )
+                    continue
+
+                df = df[required].copy()
                 df['symbol'] = symbol
-                # Ensure numeric
-                for col in ['open', 'high', 'low', 'close', 'volume']:
+
+                # Ensure numeric values
+                for col in required:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 df.dropna(inplace=True)
+
+                if df.empty:
+                    fetch_errors[symbol] = (
+                        "Data contained only NaN values after cleaning."
+                    )
+                    continue
+
                 all_frames.append(df)
-            except Exception:
-                continue
+
+            except Exception as exc:
+                fetch_errors[symbol] = f"Unexpected error fetching data: {exc}"
+
         if all_frames:
             combined = pd.concat(all_frames)
             combined.index = pd.to_datetime(combined.index)
-            return combined
-        return pd.DataFrame()
+            return combined, fetch_errors
+
+        return pd.DataFrame(), fetch_errors
 
     def execute_trade(self, signal: TradingSignal, broker_name: str = None) -> Dict:
         """Execute trade with comprehensive error handling"""
@@ -911,10 +1220,11 @@ def render_bot_management(engine):
             with col1:
                 st.markdown("#### Bot Configuration")
                 bot_name = st.text_input("Bot Name", f"AI-Bot-{len(st.session_state.trading_bots) + 1}")
-                symbols = st.multiselect(
-                    "Trading Symbols",
-                    ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'NVDA', 'META', 'NFLX'],
-                    default=['AAPL']
+                symbols = render_ticker_search_widget(
+                    key="bot_deploy",
+                    label="Trading Symbols",
+                    default=['AAPL'],
+                    multi=True,
                 )
                 broker = st.selectbox("Broker", list(engine.broker_apis.keys()) if engine.broker_apis else ['None'])
 
@@ -1015,84 +1325,142 @@ def render_bot_management(engine):
 def render_ai_training(engine):
     """Render AI model training interface"""
     st.markdown("## 🧠 AI Model Training Center")
+    st.caption(
+        "Train ensemble models on **real EODHD end-of-day data**. "
+        "Search for any ticker by name or symbol, pick your training window, "
+        "and start training."
+    )
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.markdown("### Model Training Configuration")
-
-        symbols_to_train = st.multiselect(
-            "Select symbols for training",
-            ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'NVDA', 'META', 'NFLX', 'SPY', 'QQQ'],
-            default=['AAPL', 'GOOGL', 'MSFT', 'TSLA']
+        st.markdown("### Ticker Selection")
+        symbols_to_train = render_ticker_search_widget(
+            key="train",
+            label="Tickers to train on",
+            default=_DEFAULT_TICKERS[:4],
+            multi=True,
         )
 
-        training_period = st.selectbox(
-            "Training Data Period",
-            ["1 month", "3 months", "6 months", "1 year", "2 years"],
-            index=2
-        )
+        st.markdown("### Training Configuration")
+        cfg_col1, cfg_col2 = st.columns(2)
 
-        model_types = st.multiselect(
-            "Model Types to Train",
-            ["XGBoost", "Random Forest", "LSTM", "Transformer", "Ensemble"],
-            default=["XGBoost", "Random Forest", "Ensemble"]
-        )
+        with cfg_col1:
+            training_period = st.selectbox(
+                "Training Data Period",
+                list(_PERIOD_DAYS.keys()),
+                index=3,  # default: 1 year
+                help="Longer periods give more data but take more time to fetch.",
+            )
+
+        with cfg_col2:
+            model_types = st.multiselect(
+                "Model Types",
+                ["XGBoost", "Random Forest", "Ensemble"],
+                default=["XGBoost", "Random Forest", "Ensemble"],
+                help=(
+                    "XGBoost: gradient boosting.\n"
+                    "Random Forest: ensemble of trees.\n"
+                    "Ensemble: trains both and averages predictions."
+                ),
+            )
+
+        # Warn if period is very short
+        period_days = _PERIOD_DAYS.get(training_period, 180)
+        if period_days < 120:
+            st.warning(
+                "Short training period may have insufficient data for reliable models. "
+                "We recommend **6 months or more**."
+            )
 
         if st.button("🚀 Start AI Training", type="primary"):
             if not symbols_to_train:
-                st.error("Please select at least one symbol for training!")
-            else:
-                with st.spinner("Training AI models... This may take a few minutes."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                st.error("Please select at least one ticker above.")
+                return
+            if not model_types:
+                st.error("Please select at least one model type.")
+                return
 
-                    # Simulate training progress
-                    for i in range(101):
-                        progress_bar.progress(i)
-                        if i < 30:
-                            status_text.text(f"Fetching historical data... {i}%")
-                        elif i < 70:
-                            status_text.text(f"Engineering features... {i}%")
-                        elif i < 95:
-                            status_text.text(f"Training models... {i}%")
-                        else:
-                            status_text.text(f"Validating performance... {i}%")
-                        time.sleep(0.05)
+            from_date, to_date = _period_to_dates(training_period)
 
-                    # Actually train the models
-                    training_results = engine.train_ai_models(symbols_to_train)
+            with st.status("Training AI models on real EODHD data…", expanded=True) as status:
+                st.write(
+                    f"Fetching **{training_period}** of EODHD data for: "
+                    f"{', '.join(symbols_to_train)}"
+                )
 
-                    if training_results:
-                        st.success("✅ AI models trained successfully!")
+                training_results = engine.train_ai_models(
+                    symbols_to_train,
+                    from_date=from_date,
+                    to_date=to_date,
+                    model_types=model_types,
+                )
 
-                        # Display training results
-                        st.markdown("#### Training Results")
-                        for symbol, result in training_results.items():
-                            if result['status'] == 'success':
-                                st.success(f"✅ {symbol}: {result['models_trained']} models trained with {result['features_count']} features")
-                            else:
-                                st.error(f"❌ {symbol}: Training failed - {result['error']}")
+                successes = [
+                    s for s, r in training_results.items()
+                    if r.get('status') == 'success'
+                ]
+                failures = [
+                    s for s, r in training_results.items()
+                    if r.get('status') != 'success'
+                ]
+
+                if successes:
+                    status.update(
+                        label=f"Training complete — {len(successes)}/{len(symbols_to_train)} symbols trained",
+                        state="complete",
+                    )
+                else:
+                    status.update(
+                        label="Training failed — no models were trained",
+                        state="error",
+                    )
+
+                st.markdown("#### Training Results")
+                for symbol, result in training_results.items():
+                    if result.get('status') == 'success':
+                        st.success(
+                            f"**{symbol}**: {result['models_trained']} model folds trained "
+                            f"— {result['features_count']} features, "
+                            f"{result['training_samples']} training samples "
+                            f"({result.get('data_rows', '?')} data rows)"
+                        )
                     else:
-                        st.error("❌ Training failed!")
+                        st.error(
+                            f"**{symbol}**: {result.get('error', 'Unknown error')}"
+                        )
 
     with col2:
         st.markdown("### Training Status")
 
         if engine.ai_engine.is_trained:
             st.success("🟢 AI Models: **TRAINED**")
-            st.metric("Models Available", len(engine.ai_engine.models))
+            st.metric("Symbols with models", len(engine.ai_engine.models))
+            trained_symbols = list(engine.ai_engine.models.keys())
+            if trained_symbols:
+                st.caption("Trained on: " + ", ".join(trained_symbols))
         else:
             st.warning("🔴 AI Models: **NOT TRAINED**")
 
         if engine.ai_engine.feature_importance:
-            st.markdown("#### Top Features")
-            # Show feature importance for first available symbol
-            first_symbol = list(engine.ai_engine.feature_importance.keys())[0]
-            importance_data = engine.ai_engine.feature_importance[first_symbol]
-
-            for feature, importance in list(importance_data.items())[:5]:
-                st.progress(float(importance), text=f"{feature}: {importance:.3f}")
+            st.markdown("#### Top Features (most recent model)")
+            # Pick the last trained symbol's XGBoost feature importance
+            fi_keys = [
+                k for k in engine.ai_engine.feature_importance
+                if k.endswith('_xgb')
+            ]
+            if not fi_keys:
+                fi_keys = list(engine.ai_engine.feature_importance.keys())
+            if fi_keys:
+                importance_data = engine.ai_engine.feature_importance[fi_keys[-1]]
+                top5 = sorted(
+                    importance_data.items(), key=lambda x: x[1], reverse=True
+                )[:5]
+                for feature, importance in top5:
+                    st.progress(
+                        min(float(importance), 1.0),
+                        text=f"{feature}: {importance:.4f}",
+                    )
 
 def render_broker_setup(engine):
     """Render broker setup interface"""
@@ -1185,30 +1553,62 @@ def render_live_signals(engine):
         return
 
     # Signal generation controls
-    col1, col2, col3 = st.columns(3)
+    st.markdown("#### Select Ticker")
+    sig_tickers = render_ticker_search_widget(
+        key="live_sig",
+        label="Ticker for signal generation",
+        default=['AAPL'],
+        multi=False,
+    )
+    selected_symbol = sig_tickers[0] if sig_tickers else None
 
-    with col1:
-        selected_symbol = st.selectbox("Symbol", ['AAPL', 'GOOGL', 'MSFT', 'TSLA'])
+    col_strat, col_btn = st.columns([2, 1])
+    with col_strat:
+        strategy = st.selectbox(
+            "Strategy",
+            ["Multi-Model Ensemble", "XGBoost Momentum", "Random Forest"],
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        generate_btn = st.button("🔄 Generate Signal", type="primary", use_container_width=True)
 
-    with col2:
-        strategy = st.selectbox("Strategy", ["Multi-Model Ensemble", "XGBoost Momentum", "Random Forest"])
-
-    with col3:
-        if st.button("🔄 Generate Signal", type="primary"):
-            with st.spinner(f"Fetching live data for {selected_symbol}…"):
+    if generate_btn:
+        if not selected_symbol:
+            st.error("Please select a ticker first.")
+        elif selected_symbol not in engine.ai_engine.models:
+            st.warning(
+                f"No trained model for **{selected_symbol}**. "
+                "Go to the 🧠 AI Training tab and train on this ticker first."
+            )
+        else:
+            with st.spinner(f"Fetching live data for {selected_symbol} from EODHD…"):
                 api_key = config.get_eodhd_api_key()
-                current_data = pro_get_historical_data(selected_symbol, api_key)
-                if current_data.empty:
-                    st.error(f"Could not fetch data for {selected_symbol}. Check EODHD API key.")
+                if not api_key:
+                    st.error("EODHD API key is not configured.")
                 else:
-                    current_data.columns = [c.lower() for c in current_data.columns]
-                    if 'adjusted_close' in current_data.columns and 'close' not in current_data.columns:
-                        current_data = current_data.rename(columns={'adjusted_close': 'close'})
-                    current_data = current_data[['open', 'high', 'low', 'close', 'volume']].apply(
-                        pd.to_numeric, errors='coerce'
-                    ).dropna()
-                    signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
-                    st.session_state.latest_signal = signal
+                    # Fetch last 6 months for reliable feature computation
+                    from_date, to_date = _period_to_dates("6 months")
+                    current_data = pro_get_historical_data(
+                        selected_symbol, api_key,
+                        from_date=from_date, to_date=to_date,
+                    )
+                    if current_data.empty:
+                        st.error(
+                            f"No data returned from EODHD for '{selected_symbol}'. "
+                            "Check the ticker symbol and your API key."
+                        )
+                    else:
+                        current_data.columns = [c.lower() for c in current_data.columns]
+                        if 'adjusted_close' in current_data.columns and 'close' not in current_data.columns:
+                            current_data = current_data.rename(columns={'adjusted_close': 'close'})
+                        current_data = current_data[['open', 'high', 'low', 'close', 'volume']].apply(
+                            pd.to_numeric, errors='coerce'
+                        ).dropna()
+                        if current_data.empty:
+                            st.error("Data was empty after cleaning. Cannot generate signal.")
+                        else:
+                            signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
+                            st.session_state.latest_signal = signal
 
     # Display latest signal
     if hasattr(st.session_state, 'latest_signal'):

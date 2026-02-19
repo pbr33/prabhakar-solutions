@@ -45,18 +45,68 @@ def pro_get_fundamental_data(ticker, api_key):
     except Exception:
         return {}
 
-def pro_get_historical_data(ticker, api_key):
-    """Fetches historical end-of-day data from EODHD."""
+def pro_get_historical_data(ticker, api_key, from_date=None, to_date=None):
+    """Fetches historical end-of-day data from EODHD.
+
+    Args:
+        ticker:    Stock symbol, e.g. 'AAPL' or 'AAPL.US'.
+        api_key:   EODHD API key.
+        from_date: Optional start date as 'YYYY-MM-DD' string.
+        to_date:   Optional end date as 'YYYY-MM-DD' string.
+
+    Returns:
+        DataFrame indexed by date, or empty DataFrame on failure.
+    """
     url = f"https://eodhd.com/api/eod/{ticker}?api_token={api_key}&period=d&fmt=json"
+    if from_date:
+        url += f"&from={from_date}"
+    if to_date:
+        url += f"&to={to_date}"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
         data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return pd.DataFrame()
         df = pd.DataFrame(data)
         df['date'] = pd.to_datetime(df['date'])
         return df.set_index('date')
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 'unknown'
+        if status == 404:
+            return pd.DataFrame()  # Ticker not found – silent fail is OK
+        return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def search_tickers_eodhd(query: str, api_key: str, limit: int = 20) -> list:
+    """Search for tickers / companies via the EODHD search endpoint.
+
+    Args:
+        query:   Partial company name or ticker symbol (e.g. 'Apple', 'AAPL').
+        api_key: EODHD API key.
+        limit:   Maximum results to return (default 20).
+
+    Returns:
+        List of result dicts with keys: Code, Name, Country, Exchange,
+        Currency, Type.  Empty list on failure or missing key.
+    """
+    if not api_key or not query or not query.strip():
+        return []
+    url = (
+        f"https://eodhd.com/api/search/{query.strip()}"
+        f"?api_token={api_key}&limit={limit}&fmt=json"
+    )
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        results = response.json()
+        if isinstance(results, list):
+            return results
+        return []
+    except Exception:
+        return []
 
 def pro_get_intraday_data(ticker, api_key, interval='1m'):
     """Fetches intraday data from EODHD."""
