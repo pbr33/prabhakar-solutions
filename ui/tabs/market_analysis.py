@@ -391,12 +391,60 @@ class EODHDClient:
         """Get fundamental data"""
         data = self._make_request(f"fundamentals/{symbol}")
         if data:
+            highlights = data.get('Highlights', {})
+            valuation  = data.get('Valuation', {})
+            technicals = data.get('Technicals', {})
+            general    = data.get('General', {})
+
+            def _float(val):
+                try:
+                    return float(val or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            # Revenue and net income from most-recent yearly income statement
+            revenue = net_income = 0.0
+            yearly_is = data.get('Financials', {}).get('Income_Statement', {}).get('yearly', {})
+            if yearly_is:
+                try:
+                    latest = max(yearly_is.keys())
+                    revenue    = _float(yearly_is[latest].get('totalRevenue'))
+                    net_income = _float(yearly_is[latest].get('netIncome'))
+                except Exception:
+                    pass
+
+            # Debt-to-equity from most-recent yearly balance sheet
+            debt_to_equity = 0.0
+            yearly_bs = data.get('Financials', {}).get('Balance_Sheet', {}).get('yearly', {})
+            if yearly_bs:
+                try:
+                    latest = max(yearly_bs.keys())
+                    liab   = _float(yearly_bs[latest].get('totalLiabilities'))
+                    equity = _float(yearly_bs[latest].get('totalStockholderEquity')) or 1
+                    debt_to_equity = liab / equity
+                except Exception:
+                    pass
+
             return {
-                'market_cap': data.get('SharesStats', {}).get('SharesOutstanding', 0),
-                'pe_ratio': data.get('Valuation', {}).get('PeRatio', 0),
-                'eps': data.get('Earnings', {}).get('Annual', {}).get('earnings_per_share', 0),
-                'dividend_yield': data.get('Valuation', {}).get('DividendYield', 0),
-                'revenue': data.get('Financials', {}).get('Income_Statement', {}).get('quarterly', {}).get('totalRevenue', 0)
+                'sector':          general.get('Sector', 'N/A') or 'N/A',
+                'industry':        general.get('Industry', 'N/A') or 'N/A',
+                'market_cap':      _float(highlights.get('MarketCapitalization')),
+                'pe_ratio':        _float(highlights.get('PERatio')),
+                'peg_ratio':       _float(highlights.get('PEGRatio')),
+                'eps':             _float(highlights.get('EarningsShare')),
+                'dividend_yield':  _float(highlights.get('DividendYield')) * 100,
+                'revenue':         revenue,
+                'net_income':      net_income,
+                'ebitda':          _float(highlights.get('EBITDA')),
+                'profit_margin':   _float(highlights.get('ProfitMargin')) * 100,
+                'roe':             _float(highlights.get('ReturnOnEquityTTM')) * 100,
+                'roa':             _float(highlights.get('ReturnOnAssetsTTM')) * 100,
+                'price_to_book':   _float(valuation.get('PriceBookMRQ')),
+                'price_to_sales':  _float(valuation.get('PriceSalesTTM')),
+                'beta':            _float(technicals.get('Beta')),
+                '52_week_high':    _float(technicals.get('52WeekHigh')),
+                '52_week_low':     _float(technicals.get('52WeekLow')),
+                'debt_to_equity':  debt_to_equity,
             }
         return {}
     
@@ -1545,14 +1593,40 @@ def render():
                 fundamentals = eodhd.get_fundamentals(symbol)
                 if fundamentals:
                     st.markdown("#### 💼 Fundamental Data")
-                    
+
+                    def _fmt_large(v):
+                        if v >= 1e12: return f"${v/1e12:.2f}T"
+                        if v >= 1e9:  return f"${v/1e9:.2f}B"
+                        if v >= 1e6:  return f"${v/1e6:.2f}M"
+                        return f"${v:,.0f}"
+
+                    mc  = fundamentals.get('market_cap', 0)
+                    rev = fundamentals.get('revenue', 0)
+                    ni  = fundamentals.get('net_income', 0)
+                    ebi = fundamentals.get('ebitda', 0)
+
                     fund_df = pd.DataFrame([
-                        {"Metric": "Market Cap", "Value": f"${fundamentals.get('market_cap', 0):,.0f}"},
-                        {"Metric": "P/E Ratio", "Value": f"{fundamentals.get('pe_ratio', 0):.2f}"},
-                        {"Metric": "EPS", "Value": f"${fundamentals.get('eps', 0):.2f}"},
-                        {"Metric": "Dividend Yield", "Value": f"{fundamentals.get('dividend_yield', 0):.2f}%"}
+                        {"Metric": "Sector",         "Value": fundamentals.get('sector', 'N/A')},
+                        {"Metric": "Industry",        "Value": fundamentals.get('industry', 'N/A')},
+                        {"Metric": "Market Cap",      "Value": _fmt_large(mc) if mc else "N/A"},
+                        {"Metric": "Revenue (TTM)",   "Value": _fmt_large(rev) if rev else "N/A"},
+                        {"Metric": "Net Income",      "Value": _fmt_large(ni) if ni else "N/A"},
+                        {"Metric": "EBITDA",          "Value": _fmt_large(ebi) if ebi else "N/A"},
+                        {"Metric": "P/E Ratio",       "Value": f"{fundamentals.get('pe_ratio', 0):.2f}"},
+                        {"Metric": "PEG Ratio",       "Value": f"{fundamentals.get('peg_ratio', 0):.2f}"},
+                        {"Metric": "P/B Ratio",       "Value": f"{fundamentals.get('price_to_book', 0):.2f}"},
+                        {"Metric": "P/S Ratio",       "Value": f"{fundamentals.get('price_to_sales', 0):.2f}"},
+                        {"Metric": "EPS",             "Value": f"${fundamentals.get('eps', 0):.2f}"},
+                        {"Metric": "Dividend Yield",  "Value": f"{fundamentals.get('dividend_yield', 0):.2f}%"},
+                        {"Metric": "Profit Margin",   "Value": f"{fundamentals.get('profit_margin', 0):.2f}%"},
+                        {"Metric": "ROE",             "Value": f"{fundamentals.get('roe', 0):.2f}%"},
+                        {"Metric": "ROA",             "Value": f"{fundamentals.get('roa', 0):.2f}%"},
+                        {"Metric": "Debt/Equity",     "Value": f"{fundamentals.get('debt_to_equity', 0):.2f}"},
+                        {"Metric": "Beta",            "Value": f"{fundamentals.get('beta', 0):.2f}"},
+                        {"Metric": "52W High",        "Value": f"${fundamentals.get('52_week_high', 0):.2f}"},
+                        {"Metric": "52W Low",         "Value": f"${fundamentals.get('52_week_low', 0):.2f}"},
                     ])
-                    
+
                     st.dataframe(fund_df, hide_index=True, use_container_width=True)
                 else:
                     st.info("Fundamental data not available for this symbol.")
@@ -2247,14 +2321,40 @@ def render():
                         fundamentals = eodhd.get_fundamentals(symbol)
                         if fundamentals and any(fundamentals.values()):
                             st.markdown("#### 💼 Fundamental Data")
-                            
+
+                            def _fmt_large(v):
+                                if v >= 1e12: return f"${v/1e12:.2f}T"
+                                if v >= 1e9:  return f"${v/1e9:.2f}B"
+                                if v >= 1e6:  return f"${v/1e6:.2f}M"
+                                return f"${v:,.0f}"
+
+                            mc  = fundamentals.get('market_cap', 0)
+                            rev = fundamentals.get('revenue', 0)
+                            ni  = fundamentals.get('net_income', 0)
+                            ebi = fundamentals.get('ebitda', 0)
+
                             fund_df = pd.DataFrame([
-                                {"Metric": "Market Cap", "Value": f"${fundamentals.get('market_cap', 0):,.0f}"},
-                                {"Metric": "P/E Ratio", "Value": f"{fundamentals.get('pe_ratio', 0):.2f}"},
-                                {"Metric": "EPS", "Value": f"${fundamentals.get('eps', 0):.2f}"},
-                                {"Metric": "Dividend Yield", "Value": f"{fundamentals.get('dividend_yield', 0):.2f}%"}
+                                {"Metric": "Sector",         "Value": fundamentals.get('sector', 'N/A')},
+                                {"Metric": "Industry",        "Value": fundamentals.get('industry', 'N/A')},
+                                {"Metric": "Market Cap",      "Value": _fmt_large(mc) if mc else "N/A"},
+                                {"Metric": "Revenue (TTM)",   "Value": _fmt_large(rev) if rev else "N/A"},
+                                {"Metric": "Net Income",      "Value": _fmt_large(ni) if ni else "N/A"},
+                                {"Metric": "EBITDA",          "Value": _fmt_large(ebi) if ebi else "N/A"},
+                                {"Metric": "P/E Ratio",       "Value": f"{fundamentals.get('pe_ratio', 0):.2f}"},
+                                {"Metric": "PEG Ratio",       "Value": f"{fundamentals.get('peg_ratio', 0):.2f}"},
+                                {"Metric": "P/B Ratio",       "Value": f"{fundamentals.get('price_to_book', 0):.2f}"},
+                                {"Metric": "P/S Ratio",       "Value": f"{fundamentals.get('price_to_sales', 0):.2f}"},
+                                {"Metric": "EPS",             "Value": f"${fundamentals.get('eps', 0):.2f}"},
+                                {"Metric": "Dividend Yield",  "Value": f"{fundamentals.get('dividend_yield', 0):.2f}%"},
+                                {"Metric": "Profit Margin",   "Value": f"{fundamentals.get('profit_margin', 0):.2f}%"},
+                                {"Metric": "ROE",             "Value": f"{fundamentals.get('roe', 0):.2f}%"},
+                                {"Metric": "ROA",             "Value": f"{fundamentals.get('roa', 0):.2f}%"},
+                                {"Metric": "Debt/Equity",     "Value": f"{fundamentals.get('debt_to_equity', 0):.2f}"},
+                                {"Metric": "Beta",            "Value": f"{fundamentals.get('beta', 0):.2f}"},
+                                {"Metric": "52W High",        "Value": f"${fundamentals.get('52_week_high', 0):.2f}"},
+                                {"Metric": "52W Low",         "Value": f"${fundamentals.get('52_week_low', 0):.2f}"},
                             ])
-                            
+
                             st.dataframe(fund_df, hide_index=True, use_container_width=True)
                         else:
                             st.info("Fundamental data not available for this symbol.")
