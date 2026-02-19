@@ -1356,12 +1356,11 @@ def main():
     # --- Main Application Tabs ---
     # Adjust tab availability based on user type and configuration
     if user_type == 'full_access':
-        tab_ai, tab_multi_agent, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
+        tab_ai, tab_market, tab_pro, tab_portfolio, tab_autotrade = st.tabs([
             "🤖 AI Intelligence",
-            "🤖🔄 Multi-Agent Coordination",
             "📊 Market Analysis",
             "📈 Pro Dashboard",
-            "💼 Portfolio View", 
+            "💼 Portfolio View",
             "🚀 Auto-Trading"
         ])
     else:
@@ -1381,15 +1380,6 @@ def main():
                 if config.get('app', 'debug_mode', False):
                     st.exception(e)
                 st.info("AI Intelligence features require proper API configuration.")
-
-        with tab_multi_agent:
-            try:
-                multi_agent_coordination.render()
-            except Exception as e:
-                st.error(f"Multi-Agent Coordination error: {e}")
-                if config.get('app', 'debug_mode', False):
-                    st.exception(e)
-                st.info("Multi-Agent Coordination features require proper API configuration.")
 
         with tab_market:
             try:
