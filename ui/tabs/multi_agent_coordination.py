@@ -504,8 +504,6 @@ class VideoAnalysisEngine:
 
 def render():
     """Main render function for Multi-Agent Coordination tab"""
-    st.markdown("# 🤖 Multi-Agent Coordination & Intelligence")
-    st.markdown("*Advanced AI agent orchestration with multi-modal analysis capabilities*")
     # Get configuration
     api_key = config.get_eodhd_api_key()
     symbol = st.session_state.get('selected_symbol', 'AAPL.US')
