@@ -139,7 +139,7 @@ def render_landing_page():
             }}
 
             .hero {{
-                min-height: 70vh;
+                min-height: 480px;
                 display: flex;
                 align-items: center;
                 padding: 2rem;
@@ -636,8 +636,37 @@ def render_landing_page():
     </html>
     """
     
+    # Native Streamlit launch button — always visible outside the iframe
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(45deg, #10b981, #059669);
+            border: none;
+            border-radius: 12px;
+            font-size: 1.15rem;
+            font-weight: 700;
+            padding: 0.85rem 2.5rem;
+            box-shadow: 0 8px 32px rgba(16,185,129,0.4);
+            color: white;
+            letter-spacing: 0.02em;
+        }
+        div[data-testid="stButton"] > button[kind="primary"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 40px rgba(16,185,129,0.55);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_l, col_c, col_r = st.columns([3, 2, 3])
+    with col_c:
+        if st.button("🚀 Launch AI Dashboard", type="primary", use_container_width=True, key="native_launch_btn"):
+            st.session_state.page = 'login'
+            st.rerun()
+
     # Display the landing page
-    st.components.v1.html(landing_html, height=1400, scrolling=True)
+    st.components.v1.html(landing_html, height=2600, scrolling=True)
     
 
 def render_login_page():
