@@ -1257,46 +1257,10 @@ def main():
         # st.markdown('<h1 class="main-header">🤖 {t(AI Trading Agents Dashboard)}</h1>', unsafe_allow_html=True)
         st.markdown(f'<h1 class="main-header">🤖 {t("AI Trading Agents Dashboard")}</h1>', unsafe_allow_html=True)
     with header_col2:
-        # Configuration status indicator
-        validation = config.validate_config()
-        if validation['eodhd'] and validation['azure_openai']:
-            st.markdown("""
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #10b981;">🟢 All APIs Ready</small>
-            </div>
-            """, unsafe_allow_html=True)
-        elif validation['eodhd'] or validation['azure_openai']:
-            st.markdown("""
-            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff8c00;">🟡 Partial Config</small>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background: rgba(255, 0, 0, 0.1); border: 1px solid rgba(255, 0, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff4444;">🔴 Config Needed</small>
-            </div>
-            """, unsafe_allow_html=True)
+        pass  # API status badges hidden
     
     with header_col3:
-        # User status indicator
-        if user_type == 'guest':
-            st.markdown("""
-            <div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #ff8c00;">🔓 Guest Mode</small>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); 
-                        border-radius: 8px; padding: 0.5rem; text-align: center; margin-top: 1rem;">
-                <small style="color: #10b981;">🔐 Full Access</small>
-            </div>
-            """, unsafe_allow_html=True)
+        pass  # Access level badges hidden
 
     # --- Initialize Session State ---
     if 'trading_engine' not in st.session_state:

@@ -898,25 +898,4 @@ class MultiAgentAnalysisTab:
                             st.markdown(f"**{agent['name']}**")
                             st.caption(f"{agent['specialty']} Analysis")
                         st.divider()
-        
-        # Performance metrics footer
-        st.divider()
-        st.markdown("### 📈 System Performance")
-        
-        perf_col1, perf_col2, perf_col3, perf_col4, perf_col5 = st.columns(5)
-        
-        with perf_col1:
-            st.metric("⚡ Analysis Speed", "2.1s", "-0.3s")
-        
-        with perf_col2:
-            st.metric("🎯 Accuracy Rate", "94.7%", "+2.3%")
-        
-        with perf_col3:
-            st.metric("🔄 Daily Debates", "1,847", "+127")
-        
-        with perf_col4:
-            st.metric("🌍 Markets Covered", "50+", "Global")
-        
-        with perf_col5:
-            st.metric("📊 Data Points", "10M+", "Real-time")
-        
+
