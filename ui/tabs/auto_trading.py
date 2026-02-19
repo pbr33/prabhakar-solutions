@@ -689,7 +689,8 @@ class AutoTradingEngine:
                     'signal': signal.__dict__,
                     'order_result': order_result,
                     'portfolio_snapshot': self.portfolio.copy(),
-                    'validation_results': validation_results
+                    'validation_results': validation_results,
+                    'pnl': trade_result.get('pnl', 0),
                 }
 
                 self.trade_history.append(trade_log)
@@ -741,13 +742,21 @@ class AutoTradingEngine:
                 if pos['quantity'] <= 0:
                     del self.portfolio['positions'][signal.symbol]
 
-        # Update total portfolio value (simplified)
-        self.portfolio['total_value'] = self.portfolio['cash'] + sum(
+        # Update total portfolio value (mark positions at fill price)
+        position_value = sum(
             pos['quantity'] * pos['avg_price']
             for pos in self.portfolio['positions'].values()
         )
+        self.portfolio['total_value'] = self.portfolio['cash'] + position_value
 
-        return {'pnl': 0}  # Simplified P&L calculation
+        # Real P&L: proceeds minus cost for a round-trip sell, or 0 on a buy
+        if signal.action == 'SELL':
+            entry_price = self.portfolio['positions'].get(signal.symbol, {}).get('avg_price', fill_price)
+            pnl = (fill_price - entry_price) * signal.quantity - commission
+        else:
+            pnl = 0.0
+
+        return {'pnl': pnl}
 
     def get_performance_metrics(self) -> Dict:
         """Calculate comprehensive performance metrics"""
@@ -767,19 +776,54 @@ class AutoTradingEngine:
             for trade in self.trade_history
         ])
 
-        # Calculate metrics
+        # Calculate real P&L per trade from trade_history
+        pnl_list = []
+        for trade in self.trade_history:
+            pnl_list.append(trade.get('pnl', 0))
+
+        pnl_series = pd.Series(pnl_list)
+
+        profitable = int((pnl_series > 0).sum())
+        total = len(pnl_series)
+        win_rate = profitable / total if total > 0 else 0.0
+
+        # Portfolio value history (snapshot stored per trade)
+        portfolio_values = [
+            t.get('portfolio_snapshot', {}).get('total_value', self.portfolio['total_value'])
+            for t in self.trade_history
+        ]
+        pv_series = pd.Series(portfolio_values)
+
+        # Returns from portfolio value changes
+        pv_returns = pv_series.pct_change().dropna()
+
+        # Sharpe ratio (annualised, assuming daily trades ~ 252 periods)
+        if pv_returns.std() > 0:
+            sharpe = (pv_returns.mean() / pv_returns.std()) * np.sqrt(252)
+        else:
+            sharpe = 0.0
+
+        # Max drawdown
+        rolling_max = pv_series.cummax()
+        drawdown = (pv_series - rolling_max) / rolling_max
+        max_drawdown = float(abs(drawdown.min())) if not drawdown.empty else 0.0
+
+        # Calmar ratio
+        total_return = (pv_series.iloc[-1] / pv_series.iloc[0] - 1) if len(pv_series) > 1 else 0.0
+        calmar = total_return / max_drawdown if max_drawdown > 0 else 0.0
+
         metrics = {
-            'total_trades': len(trades_df),
-            'profitable_trades': 0,  # Would calculate from actual P&L
-            'win_rate': 0.65,  # Mock data
-            'avg_return': 0.023,
-            'sharpe_ratio': 1.34,
-            'max_drawdown': 0.047,
-            'volatility': 0.156,
-            'calmar_ratio': 0.489,
-            'avg_trade_duration': '4.2 hours',
+            'total_trades': total,
+            'profitable_trades': profitable,
+            'win_rate': win_rate,
+            'avg_return': float(pnl_series.mean()) if total > 0 else 0.0,
+            'total_pnl': float(pnl_series.sum()),
+            'sharpe_ratio': round(sharpe, 3),
+            'max_drawdown': round(max_drawdown, 4),
+            'volatility': round(float(pv_returns.std()) * np.sqrt(252), 4) if not pv_returns.empty else 0.0,
+            'calmar_ratio': round(calmar, 3),
             'best_performing_symbol': trades_df['symbol'].mode().iloc[0] if not trades_df.empty else 'N/A',
-            'strategy_breakdown': trades_df.groupby(trades_df['timestamp'].dt.date).size().to_dict() if not trades_df.empty else {}
+            'portfolio_value_history': portfolio_values,
         }
 
         return metrics
