@@ -74,14 +74,36 @@ def pro_get_intraday_data(ticker, api_key, interval='1m'):
         return pd.DataFrame()
 
 def pro_get_news(ticker, api_key):
-    """Fetches news from EODHD."""
-    url = f"https://eodhd.com/api/news?s={ticker}&api_token={api_key}&limit=5&fmt=json"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception:
-        return []
+    """
+    Fetches news from EODHD for a given ticker.
+
+    EODHD news API works most reliably with the bare ticker symbol (no exchange
+    suffix).  We try the bare symbol first (e.g. 'AAPL'), then fall back to
+    the full symbol (e.g. 'AAPL.US') if no results are returned.
+    """
+    # Bare symbol (strip exchange suffix like '.US', '.LSE', etc.)
+    bare = ticker.split('.')[0]
+    candidates = [bare] if bare != ticker else [ticker]
+    if bare != ticker:
+        candidates.append(ticker)   # fallback: try full symbol too
+
+    for sym in candidates:
+        url = (
+            f"https://eodhd.com/api/news"
+            f"?s={sym}&offset=0&limit=20"
+            f"&api_token={api_key}&fmt=json"
+        )
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            # EODHD returns a list on success; a dict on error
+            if isinstance(data, list) and len(data) > 0:
+                return data
+        except Exception:
+            continue
+
+    return []
 
 def fetch_all_tickers(api_key: str):
     """Fetches all tickers from all available exchanges via EODHD."""

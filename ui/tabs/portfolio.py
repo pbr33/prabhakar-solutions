@@ -40,18 +40,49 @@ def generate_pe_portfolio_data():
 def render():
     """Renders the Institutional Portfolio Views tab."""
     st.markdown("## 💼 Institutional Portfolio Views")
-    cfg = get_config()
-    llm = cfg['llm']
-    trading_engine = st.session_state.trading_engine
+
+    # LLM from session state (set by the sidebar when credentials are configured)
+    llm = st.session_state.get('llm', None)
+
+    # EODHD API key via the proper Config accessor
+    api_key = config.get_eodhd_api_key()
+
+    # trading_engine is initialised in main.py; guard if user hasn't visited Auto-Trading yet
+    trading_engine = st.session_state.get('trading_engine', None)
 
     # --- Hedge Fund View ---
     st.markdown("### Hedge Fund Portfolio Overview")
-    hf_portfolio = trading_engine.positions
+
+    # Safe accessor — works for BOTH engine layouts:
+    #   core engine  → self.positions  (direct dict attribute)
+    #   auto-trading → self.portfolio['positions']  (nested)
+    #   fallback     → neither exists, returns {}
+    def _safe_positions(engine):
+        if engine is None:
+            return {}
+        pos = getattr(engine, 'positions', None)
+        if pos is not None:
+            return pos
+        portfolio = getattr(engine, 'portfolio', None)
+        if isinstance(portfolio, dict):
+            return portfolio.get('positions', {})
+        return {}
+
+    hf_portfolio = _safe_positions(trading_engine)
+
     if not hf_portfolio:
         st.info("No positions in the hedge fund portfolio.")
         hf_df = pd.DataFrame()  # Create empty DataFrame for later use
     else:
-        live_prices = {s: pro_get_real_time_data(s, cfg['eodhd_api_key']).get('close', p['avg_price']) for s, p in hf_portfolio.items()}
+        def _rt_price(sym, fallback):
+            rt = pro_get_real_time_data(sym, api_key)
+            if isinstance(rt, list) and rt:   # EODHD sometimes returns a 1-element list
+                rt = rt[0]
+            if isinstance(rt, dict):
+                return float(rt.get('close') or rt.get('last') or fallback)
+            return fallback
+
+        live_prices = {s: _rt_price(s, p['avg_price']) for s, p in hf_portfolio.items()}
         positions_data = [{
             'Symbol': symbol, 
             'Quantity': pos['quantity'], 

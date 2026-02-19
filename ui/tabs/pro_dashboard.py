@@ -333,8 +333,10 @@ def render():
         for ticker in watchlist:
             rt = pro_get_real_time_data(ticker, api_key)
             price    = change_p = 0.0
+            if isinstance(rt, list) and rt:   # EODHD sometimes returns a 1-element list
+                rt = rt[0]
             if rt and isinstance(rt, dict):
-                price    = _float(rt.get("close") or rt.get("last"))
+                price    = _float(rt.get("close") or rt.get("last") or rt.get("previousClose"))
                 change_p = _float(rt.get("change_p"))
 
             is_selected = ticker == symbol
@@ -346,7 +348,7 @@ def render():
 
             st.markdown(f"""
             <div style="background:#1E2130; border-radius:8px; padding:0.55rem 0.8rem;
-                        margin-bottom:0.35rem; border-left:3px solid {border_color};">
+                        margin-bottom:0.2rem; border-left:3px solid {border_color};">
                 <div style="font-weight:600; color:#FAFAFA; font-size:0.8rem;">
                     {"🔵 " if is_selected else ""}{ticker}
                 </div>
@@ -361,9 +363,23 @@ def render():
             </div>
             """, unsafe_allow_html=True)
 
-            if st.button(f"✕ {ticker}", key=f"rm_{ticker}", use_container_width=True,
-                         help=f"Remove {ticker} from watchlist"):
-                to_remove = ticker
+            btn_col1, btn_col2 = st.columns([3, 1])
+            with btn_col1:
+                if st.button(
+                    f"{'▶ ' if is_selected else ''}{ticker}",
+                    key=f"sel_{ticker}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                    help=f"View {ticker}",
+                ):
+                    st.session_state.selected_symbol = ticker
+                    # Clear old backtest results when switching symbols
+                    st.session_state.pop("backtest_results", None)
+                    st.rerun()
+            with btn_col2:
+                if st.button("✕", key=f"rm_{ticker}", use_container_width=True,
+                             help=f"Remove {ticker}"):
+                    to_remove = ticker
 
         if to_remove:
             watchlist.remove(to_remove)
@@ -375,6 +391,8 @@ def render():
 
         # Live price header
         rt = pro_get_real_time_data(symbol, api_key)
+        if isinstance(rt, list) and rt:   # EODHD sometimes wraps single ticker in a list
+            rt = rt[0]
         if rt and isinstance(rt, dict):
             price    = _float(rt.get("close") or rt.get("last"))
             change   = _float(rt.get("change"))
@@ -499,16 +517,56 @@ def render():
                 news = pro_get_news(symbol, api_key)
 
             if news and isinstance(news, list):
-                for article in news[:10]:
+                st.markdown(f"**{len(news)} articles** for `{symbol}`")
+                for article in news[:20]:
                     if not isinstance(article, dict):
                         continue
-                    title   = article.get("title", "No title")
-                    date    = article.get("date", "")
-                    content = (article.get("content") or "")[:250]
-                    sent    = article.get("sentiment", "neutral")
+
+                    # EODHD uses different field names across API versions
+                    title = (
+                        article.get("title")
+                        or article.get("headline")
+                        or article.get("summary")
+                        or "No title"
+                    )
+                    date = (
+                        article.get("date")
+                        or article.get("publishedAt")
+                        or article.get("datetime")
+                        or ""
+                    )
+                    # Format date if it's an ISO string
+                    if date and "T" in str(date):
+                        try:
+                            date = datetime.fromisoformat(str(date).replace("Z", "+00:00")).strftime("%b %d, %Y %H:%M")
+                        except Exception:
+                            pass
+
+                    body_raw = (
+                        article.get("content")
+                        or article.get("description")
+                        or article.get("text")
+                        or ""
+                    )
+                    body = str(body_raw)[:280]
+
+                    # Sentiment: EODHD returns "positive"/"negative"/"neutral"
+                    # or a polarity float, or nothing
+                    sent_raw = article.get("sentiment") or article.get("polarity") or "neutral"
+                    if isinstance(sent_raw, (int, float)):
+                        sent = "positive" if sent_raw > 0.1 else "negative" if sent_raw < -0.1 else "neutral"
+                    else:
+                        sent = str(sent_raw).lower()
 
                     border = {"positive": "#26a69a", "negative": "#ef5350"}.get(sent, "#FFA726")
                     icon   = {"positive": "🟢",       "negative": "🔴"      }.get(sent, "🟡")
+
+                    url_link = article.get("link") or article.get("url") or ""
+                    link_html = (
+                        f'<a href="{url_link}" target="_blank" '
+                        f'style="color:#60A5FA;font-size:0.72rem;">Read full article ↗</a>'
+                        if url_link else ""
+                    )
 
                     st.markdown(f"""
                     <div style="background:#1E2130; border-radius:8px; padding:0.8rem 1rem;
@@ -516,14 +574,18 @@ def render():
                         <div style="font-weight:600; color:#FAFAFA; margin-bottom:0.25rem; line-height:1.4;">
                             {icon} {title}
                         </div>
-                        <div style="color:#6B7280; font-size:0.73rem; margin-bottom:0.3rem;">{date}</div>
-                        <div style="color:#D1D5DB; font-size:0.83rem; line-height:1.5;">
-                            {content}{"…" if len(article.get("content") or "") > 250 else ""}
+                        <div style="color:#6B7280; font-size:0.73rem; margin-bottom:0.4rem;">{date}</div>
+                        <div style="color:#D1D5DB; font-size:0.83rem; line-height:1.5; margin-bottom:0.35rem;">
+                            {body}{"…" if len(str(body_raw)) > 280 else ""}
                         </div>
+                        {link_html}
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.info("No recent news available for this symbol.")
+                st.info(
+                    f"No recent news found for **{symbol}**. "
+                    "This can happen for non-US tickers or if the API key does not include news access."
+                )
 
         # ── Strategy Backtesting Tab ──────────────────────────────────────
         with tab_backtest:
@@ -548,27 +610,32 @@ def render():
                         start_date, end_date,
                         initial_capital, short_window, long_window,
                     )
-                    st.session_state.backtest_results = results
+                    st.session_state.backtest_results  = results
+                    # Persist capital so the results block can reference it
+                    # even on re-renders when the form hasn't been re-submitted
+                    st.session_state.backtest_capital  = float(initial_capital)
 
             if "backtest_results" in st.session_state:
                 res = st.session_state.backtest_results
                 if res.get("error"):
                     st.error(res["error"])
                 else:
+                    # Use persisted capital for display (form value may differ on re-render)
+                    cap = st.session_state.get("backtest_capital", float(initial_capital))
+
                     # Summary metrics
                     st.markdown("##### 📊 Results")
                     rm1, rm2, rm3, rm4 = st.columns(4)
-                    final_val   = res["final_value"]
-                    total_ret   = res["total_return_pct"]
-                    buy_hold    = initial_capital  # fallback label
-                    trade_log   = res.get("trade_log", pd.DataFrame())
-                    n_trades    = len(trade_log) if not trade_log.empty else 0
+                    final_val = res["final_value"]
+                    total_ret = res["total_return_pct"]
+                    trade_log = res.get("trade_log", pd.DataFrame())
+                    n_trades  = len(trade_log) if not trade_log.empty else 0
 
                     rm1.metric("Final Portfolio Value", f"${final_val:,.2f}")
                     rm2.metric("Total Return",          f"{total_ret:.2f}%",
                                delta_color="normal" if total_ret >= 0 else "inverse")
-                    rm3.metric("Net P&L",               f"${final_val - initial_capital:,.2f}",
-                               delta_color="normal" if final_val >= initial_capital else "inverse")
+                    rm3.metric("Net P&L",               f"${final_val - cap:,.2f}",
+                               delta_color="normal" if final_val >= cap else "inverse")
                     rm4.metric("Total Trades",          str(n_trades))
 
                     # Dual-axis chart — price + portfolio value

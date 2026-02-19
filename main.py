@@ -139,7 +139,7 @@ def render_landing_page():
             }}
 
             .hero {{
-                min-height: 70vh;
+                min-height: 480px;
                 display: flex;
                 align-items: center;
                 padding: 2rem;
@@ -636,8 +636,37 @@ def render_landing_page():
     </html>
     """
     
+    # Native Streamlit launch button — always visible outside the iframe
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(45deg, #10b981, #059669);
+            border: none;
+            border-radius: 12px;
+            font-size: 1.15rem;
+            font-weight: 700;
+            padding: 0.85rem 2.5rem;
+            box-shadow: 0 8px 32px rgba(16,185,129,0.4);
+            color: white;
+            letter-spacing: 0.02em;
+        }
+        div[data-testid="stButton"] > button[kind="primary"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 40px rgba(16,185,129,0.55);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_l, col_c, col_r = st.columns([3, 2, 3])
+    with col_c:
+        if st.button("🚀 Launch AI Dashboard", type="primary", use_container_width=True, key="native_launch_btn"):
+            st.session_state.page = 'login'
+            st.rerun()
+
     # Display the landing page
-    st.components.v1.html(landing_html, height=1400, scrolling=True)
+    st.components.v1.html(landing_html, height=2600, scrolling=True)
     
 
 def render_login_page():
@@ -929,25 +958,24 @@ def render_login_page():
                 st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
-                st.markdown('<div class="success-message">✅ Welcome! Redirecting to your dashboard...</div>', unsafe_allow_html=True)
-                time.sleep(1)
+                with st.spinner("Authenticating… loading your dashboard"):
+                    time.sleep(1)
                 st.rerun()
             else:
                 st.session_state.login_attempts = st.session_state.get('login_attempts', 0) + 1
                 st.session_state.show_hint = True
                 st.error("❌ Invalid credentials. Please check your username and password.")
-                
+
                 # Show demo credentials after 2 failed attempts
                 if st.session_state.login_attempts >= 2:
                     show_demo_credentials(demo_username, demo_password)
-                
+
         if guest_mode and enable_guest_mode:
             st.session_state.authenticated = True
             st.session_state.user_type = "guest"
             st.session_state.page = 'dashboard'
-            st.markdown('<div class="success-message">👀 Entering Guest Mode... Limited features available.</div>', unsafe_allow_html=True)
-            st.info("💡 Guest mode provides read-only access to explore the platform.")
-            time.sleep(1)
+            with st.spinner("Entering Guest Mode… loading platform"):
+                time.sleep(1)
             st.rerun()
     
     # Hint section (only visible on error or first visit)
@@ -1207,7 +1235,23 @@ def main():
         multi_agent_coordination = MockModule()
         
         class AutoTradingEngine:
-            pass
+            """Minimal fallback used when core.trading_engine fails to import."""
+            def __init__(self):
+                self.positions: dict = {}
+                self.portfolio_balance: float = 100000.0
+                self.is_active: bool = False
+                self.trades_executed: list = []
+                self.trade_history: list = []
+                self.max_position_size: float = 0.1
+                self.daily_loss_limit: float = 0.05
+                # Also expose the nested-dict layout used by some tabs
+                self.portfolio: dict = {
+                    'positions': self.positions,
+                    'cash': self.portfolio_balance,
+                    'total_value': self.portfolio_balance,
+                    'daily_pnl': 0.0,
+                    'total_trades': 0,
+                }
 
     # Apply custom CSS
     apply_custom_css()
