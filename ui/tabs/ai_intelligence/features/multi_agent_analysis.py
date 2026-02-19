@@ -869,21 +869,10 @@ class MultiAgentAnalysisTab:
                     
                     with consensus_col2:
                         st.markdown("#### Vote Breakdown")
-                        
-                        # Vote columns
-                        vote_col1, vote_col2, vote_col3 = st.columns(3)
-                        
-                        with vote_col1:
-                            buy_votes = consensus.get('buy_votes', 0)
-                            st.metric("🟢 BUY", buy_votes)
-                        
-                        with vote_col2:
-                            hold_votes = consensus.get('hold_votes', 0)
-                            st.metric("🟡 HOLD", hold_votes)
-                        
-                        with vote_col3:
-                            sell_votes = consensus.get('sell_votes', 0)
-                            st.metric("🔴 SELL", sell_votes)
+                        buy_votes = consensus.get('buy_votes', 0)
+                        hold_votes = consensus.get('hold_votes', 0)
+                        sell_votes = consensus.get('sell_votes', 0)
+                        st.markdown(f"🟢 **BUY** {buy_votes} &nbsp;|&nbsp; 🟡 **HOLD** {hold_votes} &nbsp;|&nbsp; 🔴 **SELL** {sell_votes}")
                     
                     # Agreement level
                     agreement = consensus.get('agreement', 0)
@@ -909,61 +898,4 @@ class MultiAgentAnalysisTab:
                             st.markdown(f"**{agent['name']}**")
                             st.caption(f"{agent['specialty']} Analysis")
                         st.divider()
-        
-        # Performance metrics footer
-        st.divider()
-        st.markdown("### 📈 System Performance")
-        
-        perf_col1, perf_col2, perf_col3, perf_col4, perf_col5 = st.columns(5)
-        
-        with perf_col1:
-            st.metric("⚡ Analysis Speed", "2.1s", "-0.3s")
-        
-        with perf_col2:
-            st.metric("🎯 Accuracy Rate", "94.7%", "+2.3%")
-        
-        with perf_col3:
-            st.metric("🔄 Daily Debates", "1,847", "+127")
-        
-        with perf_col4:
-            st.metric("🌍 Markets Covered", "50+", "Global")
-        
-        with perf_col5:
-            st.metric("📊 Data Points", "10M+", "Real-time")
-        
-        # Advanced features teaser
-        st.divider()
-        st.markdown("### 🚀 Advanced Features")
-        
-        feature_col1, feature_col2, feature_col3 = st.columns(3)
-        
-        with feature_col1:
-            with st.expander("🎯 Custom Agent Training"):
-                st.markdown("""
-                **Train your own AI agents:**
-                - Custom analysis parameters
-                - Sector-specific expertise
-                - Personal trading style adaptation
-                - Backtesting capabilities
-                """)
-        
-        with feature_col2:
-            with st.expander("📊 Advanced Analytics"):
-                st.markdown("""
-                **Deep market insights:**
-                - Multi-timeframe analysis
-                - Options flow integration
-                - Institutional activity tracking  
-                - Risk scenario modeling
-                """)
-        
-        with feature_col3:
-            with st.expander("🔔 Smart Alerts"):
-                st.markdown("""
-                **Intelligent notifications:**
-                - Consensus changes
-                - Confidence threshold breaches
-                - Cross-asset correlations
-                - Market regime shifts
-                """)
-                
+

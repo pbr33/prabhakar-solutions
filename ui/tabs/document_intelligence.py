@@ -950,7 +950,7 @@ def download_files_from_source(connector, files):
         if error_count > 0:
             st.warning(f"⚠️ Failed to process {error_count} files")
 
-def render_batch_analysis():
+def render_batch_analysis(llm=None):
     """Render batch analysis interface"""
     st.markdown("### 🔄 Batch Analysis")
     
@@ -999,19 +999,14 @@ def render_batch_analysis():
         # Batch analysis execution
         if st.button("🚀 Start Batch Analysis", type="primary"):
             if selected_indices:
-                run_batch_analysis(selected_indices, batch_document_type, batch_analysis_mode, batch_custom_questions)
+                run_batch_analysis(selected_indices, batch_document_type, batch_analysis_mode, batch_custom_questions, llm)
             else:
                 st.warning("Please select at least one document for analysis")
 
-def run_batch_analysis(selected_indices, document_type, analysis_mode, custom_questions):
+def run_batch_analysis(selected_indices, document_type, analysis_mode, custom_questions, llm=None):
     """Execute batch analysis on selected documents"""
     st.markdown("### 📊 Batch Analysis Results")
-    
-    # Get LLM from config
-    from config import config
-    cfg = get_config()
-    llm = cfg.get('llm')
-    
+
     if not llm:
         st.error("LLM not configured. Please set up AI configuration first.")
         return
@@ -1615,7 +1610,7 @@ Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
     
     # Batch Processing Tab
     with main_tabs[4]:
-        render_batch_analysis()
+        render_batch_analysis(llm=llm)
     
     # Analytics Tab
     with main_tabs[5]:
