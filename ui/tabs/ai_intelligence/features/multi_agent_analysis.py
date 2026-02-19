@@ -869,21 +869,10 @@ class MultiAgentAnalysisTab:
                     
                     with consensus_col2:
                         st.markdown("#### Vote Breakdown")
-                        
-                        # Vote columns
-                        vote_col1, vote_col2, vote_col3 = st.columns(3)
-                        
-                        with vote_col1:
-                            buy_votes = consensus.get('buy_votes', 0)
-                            st.metric("🟢 BUY", buy_votes)
-                        
-                        with vote_col2:
-                            hold_votes = consensus.get('hold_votes', 0)
-                            st.metric("🟡 HOLD", hold_votes)
-                        
-                        with vote_col3:
-                            sell_votes = consensus.get('sell_votes', 0)
-                            st.metric("🔴 SELL", sell_votes)
+                        buy_votes = consensus.get('buy_votes', 0)
+                        hold_votes = consensus.get('hold_votes', 0)
+                        sell_votes = consensus.get('sell_votes', 0)
+                        st.markdown(f"🟢 **BUY** {buy_votes} &nbsp;|&nbsp; 🟡 **HOLD** {hold_votes} &nbsp;|&nbsp; 🔴 **SELL** {sell_votes}")
                     
                     # Agreement level
                     agreement = consensus.get('agreement', 0)
