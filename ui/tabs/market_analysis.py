@@ -1770,7 +1770,7 @@ def render():
             show_patterns = st.checkbox("Show Patterns", value=True, key="show_patterns_enhanced")
         
         with col3:
-            show_real_time = st.checkbox("Real-Time Data", value=True, key="show_realtime_enhanced")
+            show_real_time = st.checkbox("Real-Time Data", value=False, key="show_realtime_enhanced")
         
         with col4:
             auto_refresh = st.checkbox("Auto Refresh (30s)", value=False, key="auto_refresh_enhanced")
