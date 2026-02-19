@@ -1137,10 +1137,20 @@ def render_live_signals(engine):
 
     with col3:
         if st.button("🔄 Generate Signal", type="primary"):
-            # Generate mock current data
-            current_data = engine._generate_training_data([selected_symbol]).tail(100)
-            signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
-            st.session_state.latest_signal = signal
+            with st.spinner(f"Fetching live data for {selected_symbol}…"):
+                api_key = config.get_eodhd_api_key()
+                current_data = pro_get_historical_data(selected_symbol, api_key)
+                if current_data.empty:
+                    st.error(f"Could not fetch data for {selected_symbol}. Check EODHD API key.")
+                else:
+                    current_data.columns = [c.lower() for c in current_data.columns]
+                    if 'adjusted_close' in current_data.columns and 'close' not in current_data.columns:
+                        current_data = current_data.rename(columns={'adjusted_close': 'close'})
+                    current_data = current_data[['open', 'high', 'low', 'close', 'volume']].apply(
+                        pd.to_numeric, errors='coerce'
+                    ).dropna()
+                    signal = engine.ai_engine.generate_signal(selected_symbol, current_data, strategy)
+                    st.session_state.latest_signal = signal
 
     # Display latest signal
     if hasattr(st.session_state, 'latest_signal'):
