@@ -1267,96 +1267,81 @@ def create_main_technical_chart(df, symbol, real_time_data=None):
 
 def render_clean_pattern_analysis(enhanced_data, symbol, real_time_data=None):
     """Render clean pattern analysis with separate chart"""
-    
+
     st.markdown("### 🎯 Clean Pattern Detection & Analysis")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("🔍 Detect & Show Patterns (Clean Chart)", key="clean_pattern_detection"):
-            with st.spinner("🎯 Detecting patterns and creating clean visualization..."):
-                try:
-                    # Detect patterns
-                    candlestick_patterns = AdvancedPatternDetector.detect_candlestick_patterns(enhanced_data)
-                    chart_patterns = AdvancedPatternDetector.detect_chart_patterns(enhanced_data)
-                    all_patterns = candlestick_patterns + chart_patterns
-                    
-                    if all_patterns:
-                        st.session_state.detected_patterns = all_patterns
-                        
-                        # Create clean pattern chart
-                        clean_fig = create_clean_pattern_chart(enhanced_data, all_patterns, symbol, real_time_data)
-                        
-                        # Display the clean chart
-                        st.plotly_chart(clean_fig, use_container_width=True)
-                        
-                        # Pattern statistics
-                        pattern_counts = {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
-                        high_confidence_patterns = 0
-                        
-                        for pattern in all_patterns:
-                            pattern_counts[pattern['type']] += 1
-                            if pattern.get('confidence', 0) >= 80:
-                                high_confidence_patterns += 1
-                        
-                        # Display statistics
-                        st.markdown("#### 📊 Pattern Detection Summary")
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            st.metric("🟢 Bullish", pattern_counts['Bullish'])
-                        
-                        with col2:
-                            st.metric("🔴 Bearish", pattern_counts['Bearish'])
-                        
-                        with col3:
-                            st.metric("🟡 Neutral", pattern_counts['Neutral'])
-                        
-                        with col4:
-                            st.metric("⭐ High Confidence", high_confidence_patterns)
-                        
-                        # Pattern summary table
-                        st.markdown("#### 📋 Pattern Details")
-                        
-                        pattern_table = create_pattern_summary_table(all_patterns)
-                        if not pattern_table.empty:
-                            st.dataframe(
-                                pattern_table,
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "Type": st.column_config.TextColumn(
-                                        width="small",
-                                    ),
-                                    "Confidence": st.column_config.TextColumn(
-                                        width="small",
-                                    ),
-                                    "Description": st.column_config.TextColumn(
-                                        width="large",
-                                    )
-                                }
-                            )
-                        
-                        st.success(f"✅ Detected {len(all_patterns)} patterns with clean visualization!")
-                        
-                    else:
-                        st.info("ℹ️ No significant patterns detected in the current time frame.")
-                        
-                except Exception as e:
-                    st.error(f"❌ Error detecting patterns: {str(e)}")
-    
-    with col2:
-        st.markdown("#### 🎯 Pattern Detection Features")
-        
-        # Feature stats without long descriptions
-        col2a, col2b = st.columns(2)
-        with col2a:
-            st.metric("Single Candle", "5 Types")
-            st.metric("Multi-Candle", "7 Types") 
-        with col2b:
-            st.metric("Chart Patterns", "3 Types")
-            st.metric("Confidence Levels", "3 Tiers")
+
+    if st.button("🔍 Detect & Show Patterns (Clean Chart)", key="clean_pattern_detection"):
+        with st.spinner("🎯 Detecting patterns and creating clean visualization..."):
+            try:
+                # Detect patterns
+                candlestick_patterns = AdvancedPatternDetector.detect_candlestick_patterns(enhanced_data)
+                chart_patterns = AdvancedPatternDetector.detect_chart_patterns(enhanced_data)
+                all_patterns = candlestick_patterns + chart_patterns
+
+                if all_patterns:
+                    st.session_state.detected_patterns = all_patterns
+
+                    # Create clean pattern chart
+                    clean_fig = create_clean_pattern_chart(enhanced_data, all_patterns, symbol, real_time_data)
+
+                    # Display the clean chart
+                    st.plotly_chart(clean_fig, use_container_width=True)
+
+                    # Pattern statistics
+                    pattern_counts = {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
+                    high_confidence_patterns = 0
+
+                    for pattern in all_patterns:
+                        pattern_counts[pattern['type']] += 1
+                        if pattern.get('confidence', 0) >= 80:
+                            high_confidence_patterns += 1
+
+                    # Display statistics
+                    st.markdown("#### 📊 Pattern Detection Summary")
+
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        st.metric("🟢 Bullish", pattern_counts['Bullish'])
+
+                    with col2:
+                        st.metric("🔴 Bearish", pattern_counts['Bearish'])
+
+                    with col3:
+                        st.metric("🟡 Neutral", pattern_counts['Neutral'])
+
+                    with col4:
+                        st.metric("⭐ High Confidence", high_confidence_patterns)
+
+                    # Pattern summary table
+                    st.markdown("#### 📋 Pattern Details")
+
+                    pattern_table = create_pattern_summary_table(all_patterns)
+                    if not pattern_table.empty:
+                        st.dataframe(
+                            pattern_table,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Type": st.column_config.TextColumn(
+                                    width="small",
+                                ),
+                                "Confidence": st.column_config.TextColumn(
+                                    width="small",
+                                ),
+                                "Description": st.column_config.TextColumn(
+                                    width="large",
+                                )
+                            }
+                        )
+
+                    st.success(f"✅ Detected {len(all_patterns)} patterns with clean visualization!")
+
+                else:
+                    st.info("ℹ️ No significant patterns detected in the current time frame.")
+
+            except Exception as e:
+                st.error(f"❌ Error detecting patterns: {str(e)}")
 
 # ========================= MAIN RENDER FUNCTION =========================
 
