@@ -1267,23 +1267,53 @@ def render_performance_analytics(engine):
         return
 
     # Key performance metrics
-    col1, col2, col3, col4 = st.columns(4)
-
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Trades", metrics.get('total_trades', 0))
-
     with col2:
-        st.metric("Win Rate", f"{metrics.get('win_rate', 0):.1%}")
-
+        win_rate = metrics.get('win_rate', 0)
+        st.metric("Win Rate", f"{win_rate:.1%}",
+                  delta="above 50%" if win_rate > 0.5 else "below 50%",
+                  delta_color="normal" if win_rate > 0.5 else "inverse")
     with col3:
         st.metric("Sharpe Ratio", f"{metrics.get('sharpe_ratio', 0):.2f}")
-
     with col4:
         st.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0):.1%}")
+    with col5:
+        total_pnl = metrics.get('total_pnl', 0)
+        st.metric("Total P&L", f"${total_pnl:+,.2f}",
+                  delta_color="normal" if total_pnl >= 0 else "inverse")
 
-    # Performance charts would go here
-    st.markdown("### Portfolio Performance")
-    st.info("📈 Interactive performance charts will be displayed here with real trading data.")
+    # Portfolio value chart from real trade history
+    st.markdown("### 📈 Portfolio Value Over Time")
+    pv_history = metrics.get('portfolio_value_history', [])
+    if pv_history and len(pv_history) > 1:
+        trade_times = [t['timestamp'].strftime('%m-%d %H:%M') for t in engine.trade_history]
+        fig_pv = go.Figure()
+        fig_pv.add_trace(go.Scatter(
+            x=trade_times, y=pv_history,
+            mode='lines+markers',
+            line=dict(color='#26a69a', width=2),
+            marker=dict(size=6, color='#26a69a'),
+            fill='tozeroy', fillcolor='rgba(38,166,154,0.08)',
+            name='Portfolio Value',
+        ))
+        # Starting capital reference line
+        fig_pv.add_hline(y=100000, line_dash='dash', line_color='#6B7280',
+                         annotation_text='Starting Capital $100k')
+        fig_pv.update_layout(
+            paper_bgcolor='#0E1117', plot_bgcolor='#0E1117',
+            font=dict(color='#FAFAFA'), height=320,
+            margin=dict(l=0, r=0, t=10, b=0),
+            yaxis_title='Portfolio Value ($)',
+            xaxis_title='Trade',
+            showlegend=False,
+        )
+        fig_pv.update_xaxes(gridcolor='#1E2130', tickangle=-30)
+        fig_pv.update_yaxes(gridcolor='#1E2130', tickformat='$,.0f')
+        st.plotly_chart(fig_pv, use_container_width=True)
+    else:
+        st.info("Execute trades to see portfolio value history here.")
 
     # Trading history
     if engine.trade_history:
