@@ -99,110 +99,45 @@ class AITradingIntelligence:
         """Main render function for AI Trading Intelligence tab."""
         # Apply professional theme
         apply_complete_theme()
-        
-        # Custom CSS to reduce spacing and improve layout
+
+        # Clean tab styling
         st.markdown("""
         <style>
         .main .block-container {
             padding-top: 1rem;
             padding-bottom: 1rem;
         }
-        
+
         .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-            margin-top: 0.5rem;
+            gap: 4px;
+            margin-top: 0.25rem;
             margin-bottom: 1rem;
+            border-bottom: 2px solid #e9ecef;
         }
-        
+
         .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            padding-left: 20px;
-            padding-right: 20px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            border: 1px solid #e9ecef;
+            height: 44px;
+            padding-left: 18px;
+            padding-right: 18px;
+            background-color: transparent;
+            border-radius: 6px 6px 0 0;
+            border: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #555;
         }
-        
+
         .stTabs [data-baseweb="tab"]:hover {
-            background-color: #e9ecef;
+            background-color: #f0f2f6;
+            color: #333;
         }
-        
+
         .stTabs [aria-selected="true"] {
             background-color: #007bff !important;
             color: white !important;
-        }
-        
-        .header-container {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            color: white;
-            text-align: center;
-        }
-        
-        .header-title {
-            font-size: 2.2rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        
-        .header-subtitle {
-            font-size: 1.1rem;
-            opacity: 0.9;
-            margin-bottom: 0;
-        }
-        
-        .quick-stats {
-            display: flex;
-            justify-content: space-around;
-            margin: 1rem 0;
-            padding: 1rem;
-            background: rgba(255,255,255,0.1);
-            border-radius: 8px;
-        }
-        
-        .stat-item {
-            text-align: center;
-        }
-        
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-        }
-        
-        .stat-label {
-            font-size: 0.9rem;
-            opacity: 0.8;
+            border-bottom: 2px solid #007bff !important;
         }
         </style>
-        """, unsafe_allow_html=True)
-        
-        # Compact header with better spacing
-        st.markdown(f"""
-        <div class="header-container">
-            <div class="header-title">🤖 AI Trading Intelligence</div>
-            <div class="header-subtitle">Advanced AI agents and predictive analytics for institutional-grade trading</div>
-            <div class="quick-stats">
-                <div class="stat-item">
-                    <div class="stat-value">⚡</div>
-                    <div class="stat-label">Real-time</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">94.2%</div>
-                    <div class="stat-label">Accuracy</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">🛡️</div>
-                    <div class="stat-label">Risk Managed</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value"><3s</div>
-                    <div class="stat-label">Analysis Time</div>
-                </div>
-            </div>
-        </div>
         """, unsafe_allow_html=True)
         
         # Get symbol and market data
@@ -527,16 +462,8 @@ class AITradingIntelligence:
             st.rerun()
     
     def _render_compact_footer(self):
-        """Render compact footer."""
-        st.markdown("---")
-
-        # Compact platform footer
-        st.markdown("""
-        <div style="text-align: center; color: #666; padding: 15px; margin-top: 20px; background-color: #f8f9fa; border-radius: 8px;">
-            <strong>🚀 AI Trading Intelligence Platform</strong><br>
-            <small>⚡ Sub-3s Analysis • 🎯 94.2% Accuracy • 🛡️ Risk-Managed • 🤖 Advanced AI Agents</small>
-        </div>
-        """, unsafe_allow_html=True)
+        """Render minimal footer."""
+        pass
     
     def _show_earnings_prediction(self):
         """Show earnings prediction modal."""
