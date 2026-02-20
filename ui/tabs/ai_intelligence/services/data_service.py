@@ -247,13 +247,17 @@ class DataService:
         except Exception as e:
             self.logger.warning(f"EODHD fetch failed for {symbol}: {str(e)}")
             return None
-    
+
+    def _yf_symbol(self, symbol: str) -> str:
+        """Strip exchange suffix (e.g. '.US') before passing to Yahoo Finance."""
+        return symbol.split('.')[0]
+
     def _fetch_yahoo_data(self, symbol: str) -> Optional[pd.DataFrame]:
         """Fetch data from Yahoo Finance."""
         try:
             self._rate_limit("yahoo")
-            
-            ticker = yf.Ticker(symbol)
+
+            ticker = yf.Ticker(self._yf_symbol(symbol))
             data = ticker.history(period="1y", interval="1d")
             
             if data.empty:
@@ -355,7 +359,7 @@ class DataService:
         try:
             self._rate_limit("yahoo_realtime")
             
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(self._yf_symbol(symbol))
             info = ticker.info
             hist = ticker.history(period="2d", interval="1d")
             
@@ -406,9 +410,9 @@ class DataService:
         try:
             self._rate_limit("yahoo_fundamentals")
             
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(self._yf_symbol(symbol))
             info = ticker.info
-            
+
             return info
             
         except Exception as e:
@@ -478,7 +482,7 @@ class DataService:
         
         try:
             # Quick validation with Yahoo Finance (most reliable)
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(self._yf_symbol(symbol))
             info = ticker.info
             
             # Check if we got valid data
