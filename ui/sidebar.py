@@ -2146,7 +2146,6 @@ def render_complete_professional_sidebar():
             render_market_status()
             render_asset_selection()
             render_portfolio_overview()
-            render_quick_actions()
             
         elif nav_tab == "🔗 Data Sources":
             render_professional_data_sources()
@@ -2212,21 +2211,7 @@ def render_complete_professional_sidebar():
                 st.slider("Cache Size (MB)", 100, 1000, 500, key="cache_size_setting")
                 st.selectbox("Processing Priority", ["Low", "Normal", "High"], index=1, key="priority_setting")
         
-        # Footer with system info
-        st.markdown("---")
-        st.markdown("""
-        <div style="text-align: center; font-size: 0.75rem; color: var(--text-muted);">
-            <div style="margin-bottom: 0.5rem;">
-                🟢 System: Online | 🔄 Data: Live | ⚡ AI: Active
-            </div>
-            <div style="margin-bottom: 0.5rem;">
-                💾 Cache: 85% | 📊 API: 98% | 🔒 Security: High
-            </div>
-            <div>
-                © 2024 ECI Solutions • Professional Trading Platform v2.1
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Footer removed
 
 # Set the main render function to use the complete professional sidebar
 render_sidebar = render_complete_professional_sidebar
