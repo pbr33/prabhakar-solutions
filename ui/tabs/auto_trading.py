@@ -225,9 +225,10 @@ class AIStrategyEngine:
                     X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
                     y_train, y_val = y_returns.iloc[train_idx], y_returns.iloc[val_idx]
 
-                    # Scale features
-                    X_train_scaled = self.scaler.fit_transform(X_train)
-                    X_val_scaled = self.scaler.transform(X_val)
+                    # Scale features — pass .values so sklearn never stores
+                    # feature_names_in_ and cannot raise a name-mismatch error
+                    X_train_scaled = self.scaler.fit_transform(X_train.values)
+                    X_val_scaled = self.scaler.transform(X_val.values)
 
                     # XGBoost model
                     xgb_model = xgb.XGBRegressor(
@@ -353,18 +354,21 @@ class AIStrategyEngine:
             if features.empty:
                 return self._fallback_signal(symbol, current_data)
 
-            # Get latest features — must match the exact column set the scaler was fit on.
-            # self.feature_columns is stored by train_models() and includes open/high/low/close/volume.
+            # Select columns in the exact order the scaler was fit on,
+            # then convert to numpy so sklearn never raises a feature-name error.
             if self.feature_columns:
                 missing = [c for c in self.feature_columns if c not in features.columns]
                 if missing:
-                    raise ValueError(f"Prediction features missing columns that were present at fit time: {missing}")
+                    raise ValueError(
+                        f"Prediction data is missing columns seen at fit time: {missing}"
+                    )
                 latest_features = features.iloc[-1:][self.feature_columns]
             else:
                 latest_features = features.iloc[-1:]
 
-            # Scale features
-            latest_scaled = self.scaler.transform(latest_features)
+            # Scale features — .values converts DataFrame→numpy, bypassing
+            # sklearn's feature_names_in_ validation entirely
+            latest_scaled = self.scaler.transform(latest_features.values)
 
             # Get ensemble predictions
             predictions = []
