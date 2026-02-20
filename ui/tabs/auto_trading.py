@@ -214,6 +214,9 @@ class AIStrategyEngine:
                 X = features.drop(['future_return_1h', 'future_return_1d', 'volatility_target'], axis=1)
                 y_returns = features['future_return_1h']
 
+                # Store column names so prediction time can use the exact same feature set
+                self.feature_columns = list(X.columns)
+
                 # Time series split for proper validation
                 tscv = TimeSeriesSplit(n_splits=3)
 
@@ -349,8 +352,12 @@ class AIStrategyEngine:
             if features.empty:
                 return self._fallback_signal(symbol, current_data)
 
-            # Get latest features
-            latest_features = features.iloc[-1:].drop(['open', 'high', 'low', 'close', 'volume'], axis=1, errors='ignore')
+            # Get latest features — use the exact same columns seen at fit time
+            if hasattr(self, 'feature_columns') and self.feature_columns:
+                available = [c for c in self.feature_columns if c in features.columns]
+                latest_features = features.iloc[-1:][available]
+            else:
+                latest_features = features.iloc[-1:]
 
             # Scale features
             latest_scaled = self.scaler.transform(latest_features)
