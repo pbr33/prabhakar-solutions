@@ -13,6 +13,9 @@ from ui.tabs.portfolio_overview import render_portfolio_overview_tab
 from ui.tabs.hedge_fund_analytics import render_hedge_fund_analytics_tab
 from ui.tabs.document_intelligence import render_document_intelligence_tab
 from ui.tabs.ai_report_generator import render_ai_report_generator_tab
+from ui.tabs.scenario_simulator import render_scenario_simulator_tab
+from ui.tabs.market_intelligence import render_market_intelligence_tab
+from ui.tabs.benchmarking import render_benchmarking_tab
 
 from config import config
 
@@ -253,38 +256,53 @@ def render():
     # Create sub-tabs for different views
     tab_names = [
         "📊 Portfolio Overview",
-        "🏦 Hedge Fund Analytics", 
+        "🏦 Hedge Fund Analytics",
         "🏢 PE Monitoring",
         "📄 Document Intelligence",
         "🤖 AI Reports",
-        "📋 Compliance & Audit"
+        "📋 Compliance & Audit",
+        "⚡ Scenario Simulator",
+        "🌍 Market Intelligence",
+        "🏆 Benchmarking",
     ]
-    
+
     tabs = st.tabs(tab_names)
-    
+
     # Portfolio Overview Tab
     with tabs[0]:
         render_portfolio_overview_tab(trading_engine, pe_portfolio)
-    
+
     # Hedge Fund Analytics Tab
     with tabs[1]:
         render_hedge_fund_analytics_tab(trading_engine)
-    
+
     # PE Monitoring Tab
     with tabs[2]:
         render_pe_monitoring_tab(pe_portfolio, llm)
-    
+
     # Document Intelligence Tab
     with tabs[3]:
         render_document_intelligence_tab(llm)
-    
+
     # AI Reports Tab
     with tabs[4]:
         render_ai_report_generator_tab(trading_engine, pe_portfolio, llm)
-    
+
     # Compliance & Audit Tab
     with tabs[5]:
         render_compliance_audit_tab()
+
+    # Scenario Simulator Tab
+    with tabs[6]:
+        render_scenario_simulator_tab(trading_engine)
+
+    # Market Intelligence Tab
+    with tabs[7]:
+        render_market_intelligence_tab()
+
+    # Benchmarking Tab
+    with tabs[8]:
+        render_benchmarking_tab()
 
 # For backward compatibility, keep the original render function name
 def render_enhanced_portfolio_tab(trading_engine=None, llm=None):
