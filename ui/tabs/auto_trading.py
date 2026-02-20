@@ -201,8 +201,8 @@ class AIStrategyEngine:
                 features['future_return_1d'] = features['close'].pct_change(24).shift(-24)
                 features['volatility_target'] = features['close'].rolling(24).std()
 
-                # Remove NaN values
-                features = features.dropna()
+                # Remove NaN and infinite values
+                features = features.replace([float('inf'), float('-inf')], float('nan')).dropna()
 
                 if len(features) < 100:  # Need sufficient data
                     continue
@@ -299,7 +299,7 @@ class AIStrategyEngine:
             features['hour'] = pd.to_datetime(data.index).hour
             features['day_of_week'] = pd.to_datetime(data.index).dayofweek
 
-            return features.fillna(0)
+            return features.replace([float('inf'), float('-inf')], float('nan')).fillna(0)
 
         except Exception as e:
             st.error(f"Feature engineering failed for {symbol}: {e}")
