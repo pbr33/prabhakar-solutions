@@ -184,6 +184,7 @@ class AIStrategyEngine:
         self.market_regime_detector = None
         self.scaler = StandardScaler()
         self.is_trained = False
+        self.feature_columns: list = []   # populated by train_models; used by generate_signal
 
     def train_models(self, market_data: pd.DataFrame, symbols: List[str]) -> Dict:
         """Train multiple AI models for different strategies"""
@@ -352,10 +353,13 @@ class AIStrategyEngine:
             if features.empty:
                 return self._fallback_signal(symbol, current_data)
 
-            # Get latest features — use the exact same columns seen at fit time
-            if hasattr(self, 'feature_columns') and self.feature_columns:
-                available = [c for c in self.feature_columns if c in features.columns]
-                latest_features = features.iloc[-1:][available]
+            # Get latest features — must match the exact column set the scaler was fit on.
+            # self.feature_columns is stored by train_models() and includes open/high/low/close/volume.
+            if self.feature_columns:
+                missing = [c for c in self.feature_columns if c not in features.columns]
+                if missing:
+                    raise ValueError(f"Prediction features missing columns that were present at fit time: {missing}")
+                latest_features = features.iloc[-1:][self.feature_columns]
             else:
                 latest_features = features.iloc[-1:]
 
