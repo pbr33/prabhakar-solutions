@@ -212,7 +212,7 @@ class AIStrategyEngine:
 
                 # XGBoost for price prediction
                 X = features.drop(['future_return_1h', 'future_return_1d', 'volatility_target'], axis=1)
-                y_returns = features['future_return_1h']
+                y_returns = features['future_return_1h'].replace([float('inf'), float('-inf')], float('nan')).fillna(0)
 
                 # Time series split for proper validation
                 tscv = TimeSeriesSplit(n_splits=3)
@@ -1043,38 +1043,29 @@ def render_ai_training(engine):
             if not symbols_to_train:
                 st.error("Please select at least one symbol for training!")
             else:
-                with st.spinner("Training AI models... This may take a few minutes."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                status_box = st.empty()
+                progress_bar = st.progress(0)
 
-                    # Simulate training progress
-                    for i in range(101):
-                        progress_bar.progress(i)
-                        if i < 30:
-                            status_text.text(f"Fetching historical data... {i}%")
-                        elif i < 70:
-                            status_text.text(f"Engineering features... {i}%")
-                        elif i < 95:
-                            status_text.text(f"Training models... {i}%")
-                        else:
-                            status_text.text(f"Validating performance... {i}%")
-                        time.sleep(0.05)
-
-                    # Actually train the models
+                try:
+                    status_box.info("📡 Fetching historical data…")
+                    progress_bar.progress(10)
                     training_results = engine.train_ai_models(symbols_to_train)
+                    progress_bar.progress(100)
 
                     if training_results:
-                        st.success("✅ AI models trained successfully!")
-
-                        # Display training results
+                        status_box.success("✅ AI models trained successfully!")
                         st.markdown("#### Training Results")
                         for symbol, result in training_results.items():
                             if result['status'] == 'success':
                                 st.success(f"✅ {symbol}: {result['models_trained']} models trained with {result['features_count']} features")
                             else:
-                                st.error(f"❌ {symbol}: Training failed - {result['error']}")
+                                st.error(f"❌ {symbol}: Training failed — {result['error']}")
                     else:
-                        st.error("❌ Training failed!")
+                        status_box.warning("⚠️ No training results returned. Check API key or symbol selection.")
+                        progress_bar.empty()
+                except Exception as e:
+                    status_box.error(f"❌ Training error: {e}")
+                    progress_bar.empty()
 
     with col2:
         st.markdown("### Training Status")
