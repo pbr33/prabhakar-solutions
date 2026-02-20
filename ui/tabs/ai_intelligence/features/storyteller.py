@@ -8,10 +8,13 @@ import json
 import os
 import time
 import random
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import ta
 from concurrent.futures import ThreadPoolExecutor
+
+_log = logging.getLogger(__name__)
 
 # Import config instead of using st.secrets
 try:
@@ -60,7 +63,7 @@ class RealTimeMarketData:
         self.cache_timeout = 300  # 5 minutes
         
         # Log configuration status
-        print(f"Storyteller Data Service - EODHD: {'✓' if self.eodhd_api_key else '✗'}, Alpha Vantage: {'✓' if self.alpha_vantage_key else '✗'}, Finnhub: {'✓' if self.finnhub_key else '✗'}")
+        _log.info("Storyteller Data Service - EODHD: %s, Alpha Vantage: %s, Finnhub: %s", "✓" if self.eodhd_api_key else "✗", "✓" if self.alpha_vantage_key else "✗", "✓" if self.finnhub_key else "✗")
     
     def get_comprehensive_data(self, symbol: str) -> Dict[str, Any]:
         """Get comprehensive market data for storytelling."""
@@ -91,7 +94,7 @@ class RealTimeMarketData:
             return comprehensive_data
             
         except Exception as e:
-            print(f"Error fetching comprehensive data for {symbol}: {str(e)}")
+            _log.warning("Error fetching comprehensive data for %s: %s", symbol, e)
             return self._generate_demo_data(symbol)
     
     def _fetch_market_data(self, symbol: str) -> Dict[str, Any]:
@@ -111,7 +114,7 @@ class RealTimeMarketData:
             return self._generate_demo_market_data(symbol)
             
         except Exception as e:
-            print(f"Error fetching market data: {e}")
+            _log.warning("Error fetching market data: %s", e)
             return self._generate_demo_market_data(symbol)
     
     def _fetch_eodhd_data(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -200,15 +203,15 @@ class RealTimeMarketData:
                 'source': 'EODHD'
             }
         except Exception as e:
-            print(f"EODHD fetch failed: {e}")
+            _log.warning("EODHD fetch failed: %s", e)
             # Print more details for debugging
-            print(f"EODHD API URL: https://eodhd.com/api/real-time/{symbol}?api_token=***&fmt=json")
+            _log.debug("EODHD API URL tried for %s", symbol)
             return None
     
     def _fetch_yahoo_data(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch data from Yahoo Finance."""
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(symbol.split(".")[0])
             hist = ticker.history(period="30d")
             info = ticker.info
             
@@ -234,7 +237,7 @@ class RealTimeMarketData:
                 'source': 'Yahoo Finance'
             }
         except Exception as e:
-            print(f"Yahoo Finance fetch failed: {e}")
+            _log.warning("Yahoo Finance fetch failed: %s", e)
             return None
     
     def _fetch_news_data(self, symbol: str) -> List[Dict[str, Any]]:
@@ -267,7 +270,7 @@ class RealTimeMarketData:
             return self._generate_sample_news(symbol)
             
         except Exception as e:
-            print(f"Error fetching news: {e}")
+            _log.warning("Error fetching news: %s", e)
             return self._generate_sample_news(symbol)
     
     def _calculate_technical_indicators(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -276,25 +279,25 @@ class RealTimeMarketData:
             df = market_data.get('historical_df', pd.DataFrame())
             
             if df.empty or len(df) < 5:
-                print(f"Insufficient historical data for technical analysis. Rows: {len(df)}")
+                _log.warning("Insufficient historical data for technical analysis. Rows: %d", len(df))
                 return self._generate_demo_technical()
             
-            print(f"Calculating technical indicators with {len(df)} data points")
-            print(f"DataFrame columns: {df.columns.tolist()}")
+            _log.info("Calculating technical indicators with %d data points", len(df))
+            _log.debug("DataFrame columns: %s", df.columns.tolist())
             
             # Ensure we have the required columns
             required_columns = ['Close', 'Volume']
             missing_columns = [col for col in required_columns if col not in df.columns]
             
             if missing_columns:
-                print(f"Missing required columns: {missing_columns}")
+                _log.warning("Missing required columns: %s", missing_columns)
                 return self._generate_demo_technical()
             
             # Remove any remaining NaN values
             df_clean = df.dropna()
             
             if df_clean.empty or len(df_clean) < 5:
-                print("No clean data available after removing NaN values")
+                _log.warning("No clean data available after removing NaN values")
                 return self._generate_demo_technical()
             
             technical = {}
@@ -311,10 +314,10 @@ class RealTimeMarketData:
                 else:
                     technical['sma_50'] = df_clean['Close'].mean()
                 
-                print(f"Moving averages calculated: SMA20={technical['sma_20']:.2f}, SMA50={technical['sma_50']:.2f}")
+                _log.info("Moving averages calculated: SMA20=%.2f, SMA50=%.2f", technical["sma_20"], technical["sma_50"])
                 
             except Exception as e:
-                print(f"Error calculating moving averages: {e}")
+                _log.warning("Error calculating moving averages: %s", e)
                 current_price = market_data.get('current_price', df_clean['Close'].iloc[-1])
                 technical['sma_20'] = current_price
                 technical['sma_50'] = current_price
@@ -338,10 +341,10 @@ class RealTimeMarketData:
                     recent_change = market_data.get('change_percent', 0)
                     technical['rsi'] = max(20, min(80, 50 + recent_change * 2))
                 
-                print(f"RSI calculated: {technical['rsi']:.1f}")
+                _log.info("RSI calculated: %.1f", technical["rsi"])
                 
             except Exception as e:
-                print(f"Error calculating RSI: {e}")
+                _log.warning("Error calculating RSI: %s", e)
                 technical['rsi'] = 50.0
             
             # Volume analysis
@@ -354,10 +357,10 @@ class RealTimeMarketData:
                     technical['avg_volume'] = market_data.get('volume', 1000000)
                     technical['volume_ratio'] = 1.0
                 
-                print(f"Volume analysis: Avg={technical['avg_volume']:.0f}, Ratio={technical['volume_ratio']:.2f}")
+                _log.info("Volume analysis: Avg=%.0f, Ratio=%.2f", technical["avg_volume"], technical["volume_ratio"])
                 
             except Exception as e:
-                print(f"Error calculating volume metrics: {e}")
+                _log.warning("Error calculating volume metrics: %s", e)
                 technical['avg_volume'] = 1000000
                 technical['volume_ratio'] = 1.0
             
@@ -375,10 +378,10 @@ class RealTimeMarketData:
                 else:
                     technical['price_position'] = 50.0
                 
-                print(f"Price position: {technical['price_position']:.1f}%")
+                _log.info("Price position: %.1f%%", technical["price_position"])
                 
             except Exception as e:
-                print(f"Error calculating price position: {e}")
+                _log.warning("Error calculating price position: %s", e)
                 technical['price_position'] = 50.0
             
             # Volatility calculation
@@ -392,16 +395,16 @@ class RealTimeMarketData:
                 else:
                     technical['volatility'] = 25.0
                 
-                print(f"Volatility: {technical['volatility']:.1f}%")
+                _log.info("Volatility: %.1f%%", technical["volatility"])
                 
             except Exception as e:
-                print(f"Error calculating volatility: {e}")
+                _log.warning("Error calculating volatility: %s", e)
                 technical['volatility'] = 25.0
             
             # Validate all values
             for key, value in technical.items():
                 if pd.isna(value) or not np.isfinite(value):
-                    print(f"Invalid value for {key}: {value}, using fallback")
+                    _log.warning("Invalid value for %s: %s, using fallback", key, value)
                     if key == 'rsi':
                         technical[key] = 50.0
                     elif key == 'price_position':
@@ -413,12 +416,12 @@ class RealTimeMarketData:
                     else:
                         technical[key] = market_data.get('current_price', 100.0)
             
-            print(f"Technical analysis completed successfully: {list(technical.keys())}")
+            _log.info("Technical analysis completed: %s", list(technical.keys()))
             return technical
             
         except Exception as e:
-            print(f"Error calculating technical indicators: {e}")
-            print(f"Market data keys: {list(market_data.keys())}")
+            _log.warning("Error calculating technical indicators: %s", e)
+            _log.debug("Market data keys: %s", list(market_data.keys()))
             return self._generate_demo_technical()
     
     def _generate_demo_market_data(self, symbol: str) -> Dict[str, Any]:
@@ -798,7 +801,7 @@ class SymbolConfigManager:
             return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX']
             
         except Exception as e:
-            print(f"Error loading symbols from config: {e}")
+            _log.warning("Error loading symbols from config: %s", e)
             return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
     
     @staticmethod

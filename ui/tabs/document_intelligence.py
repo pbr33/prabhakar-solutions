@@ -720,13 +720,13 @@ def render_data_source_config():
                     'client_secret': client_secret,
                     'site_url': site_url
                 }
-                
-                connector = get_data_source_connector('sharepoint', config)
-                if connector and connector.authenticate():
-                    st.session_state.data_sources['sharepoint'] = connector
-                    st.success("✅ Connected to SharePoint successfully!")
-                else:
-                    st.error("❌ Failed to connect to SharePoint")
+                with st.spinner("Connecting to SharePoint…"):
+                    connector = get_data_source_connector('sharepoint', config)
+                    if connector and connector.authenticate():
+                        st.session_state.data_sources['sharepoint'] = connector
+                        st.success("✅ Connected to SharePoint successfully!")
+                    else:
+                        st.error("❌ Failed to connect to SharePoint")
     
     # Google Drive Configuration
     with source_tabs[1]:
@@ -744,13 +744,13 @@ def render_data_source_config():
                         'service_account_key': service_account_file.getvalue(),
                         'folder_id': folder_id or 'root'
                     }
-                    
-                    connector = get_data_source_connector('googledrive', config)
-                    if connector and connector.authenticate():
-                        st.session_state.data_sources['googledrive'] = connector
-                        st.success("✅ Connected to Google Drive successfully!")
-                    else:
-                        st.error("❌ Failed to connect to Google Drive")
+                    with st.spinner("Connecting to Google Drive…"):
+                        connector = get_data_source_connector('googledrive', config)
+                        if connector and connector.authenticate():
+                            st.session_state.data_sources['googledrive'] = connector
+                            st.success("✅ Connected to Google Drive successfully!")
+                        else:
+                            st.error("❌ Failed to connect to Google Drive")
                 else:
                     st.error("Please upload service account JSON file")
     
@@ -764,12 +764,13 @@ def render_data_source_config():
             if st.button("Connect to Box", key="connect_box"):
                 if box_token:
                     config = {'api_token': box_token}
-                    connector = get_data_source_connector('box', config)
-                    if connector and connector.authenticate():
-                        st.session_state.data_sources['box'] = connector
-                        st.success("✅ Connected to Box successfully!")
-                    else:
-                        st.error("❌ Failed to connect to Box")
+                    with st.spinner("Connecting to Box…"):
+                        connector = get_data_source_connector('box', config)
+                        if connector and connector.authenticate():
+                            st.session_state.data_sources['box'] = connector
+                            st.success("✅ Connected to Box successfully!")
+                        else:
+                            st.error("❌ Failed to connect to Box")
                 else:
                     st.error("Please enter API token")
     
@@ -783,12 +784,13 @@ def render_data_source_config():
             if st.button("Connect to Dropbox", key="connect_dropbox"):
                 if dropbox_token:
                     config = {'access_token': dropbox_token}
-                    connector = get_data_source_connector('dropbox', config)
-                    if connector and connector.authenticate():
-                        st.session_state.data_sources['dropbox'] = connector
-                        st.success("✅ Connected to Dropbox successfully!")
-                    else:
-                        st.error("❌ Failed to connect to Dropbox")
+                    with st.spinner("Connecting to Dropbox…"):
+                        connector = get_data_source_connector('dropbox', config)
+                        if connector and connector.authenticate():
+                            st.session_state.data_sources['dropbox'] = connector
+                            st.success("✅ Connected to Dropbox successfully!")
+                        else:
+                            st.error("❌ Failed to connect to Dropbox")
                 else:
                     st.error("Please enter access token")
     

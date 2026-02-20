@@ -13,6 +13,7 @@ from enum import Enum
 import json
 import hashlib
 import requests
+import yfinance as yf
 from sklearn.ensemble import RandomForestRegressor, IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -196,23 +197,23 @@ class AIStrategyEngine:
                 if features.empty:
                     continue
 
-                # Create target variables for different strategies
-                features['future_return_1h'] = features['close'].pct_change().shift(-1)
-                features['future_return_1d'] = features['close'].pct_change(24).shift(-24)
-                features['volatility_target'] = features['close'].rolling(24).std()
+                # Create target variables (daily data: use 5-day/1-week horizons)
+                features['future_return_1d'] = features['close'].pct_change().shift(-1)
+                features['future_return_1w'] = features['close'].pct_change(5).shift(-5)
+                features['volatility_target'] = features['close'].rolling(10).std()
 
-                # Remove NaN values
-                features = features.dropna()
+                # Remove NaN and infinite values
+                features = features.replace([float('inf'), float('-inf')], float('nan')).dropna()
 
-                if len(features) < 100:  # Need sufficient data
+                if len(features) < 30:  # Minimum viable rows for 3-fold CV
                     continue
 
                 # Train ensemble of models
                 models = {}
 
                 # XGBoost for price prediction
-                X = features.drop(['future_return_1h', 'future_return_1d', 'volatility_target'], axis=1)
-                y_returns = features['future_return_1h']
+                X = features.drop(['future_return_1d', 'future_return_1w', 'volatility_target'], axis=1)
+                y_returns = features['future_return_1d'].replace([float('inf'), float('-inf')], float('nan')).fillna(0)
 
                 # Time series split for proper validation
                 tscv = TimeSeriesSplit(n_splits=3)
@@ -270,8 +271,18 @@ class AIStrategyEngine:
     def _engineer_features(self, data: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """Engineer comprehensive technical and fundamental features"""
         try:
-            # Basic OHLC features
-            features = data[['open', 'high', 'low', 'close', 'volume']].copy()
+            if data.empty:
+                return pd.DataFrame()
+            # Filter to rows for this symbol only
+            if 'symbol' in data.columns:
+                data = data[data['symbol'] == symbol].copy()
+            if data.empty:
+                return pd.DataFrame()
+            required = ['open', 'high', 'low', 'close', 'volume']
+            if not all(c in data.columns for c in required):
+                return pd.DataFrame()
+            # Basic OHLC features (exclude the string 'symbol' column)
+            features = data[required].copy()
 
             # Technical indicators
             features['rsi'] = self._calculate_rsi(features['close'])
@@ -299,7 +310,7 @@ class AIStrategyEngine:
             features['hour'] = pd.to_datetime(data.index).hour
             features['day_of_week'] = pd.to_datetime(data.index).dayofweek
 
-            return features.fillna(0)
+            return features.replace([float('inf'), float('-inf')], float('nan')).fillna(0)
 
         except Exception as e:
             st.error(f"Feature engineering failed for {symbol}: {e}")
@@ -618,28 +629,54 @@ class AutoTradingEngine:
         return self.ai_engine.train_models(training_data, symbols)
 
     def _fetch_real_data(self, symbols: List[str]) -> pd.DataFrame:
-        """Fetch real EODHD end-of-day historical data for training."""
+        """Fetch historical OHLCV data — EODHD first, Yahoo Finance fallback."""
         api_key = config.get_eodhd_api_key()
         all_frames = []
+
         for symbol in symbols:
-            try:
-                df = pro_get_historical_data(symbol, api_key)
-                if df.empty:
-                    continue
-                # Normalise column names to lower-case
-                df.columns = [c.lower() for c in df.columns]
-                # Keep only OHLCV; rename adjusted_close→close if needed
-                if 'adjusted_close' in df.columns and 'close' not in df.columns:
-                    df = df.rename(columns={'adjusted_close': 'close'})
-                df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-                df['symbol'] = symbol
-                # Ensure numeric
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                df.dropna(inplace=True)
-                all_frames.append(df)
-            except Exception:
+            df = pd.DataFrame()
+
+            # --- Primary: EODHD ---
+            if api_key:
+                try:
+                    raw = pro_get_historical_data(symbol, api_key)
+                    if not raw.empty:
+                        raw.columns = [c.lower() for c in raw.columns]
+                        if 'adjusted_close' in raw.columns and 'close' not in raw.columns:
+                            raw = raw.rename(columns={'adjusted_close': 'close'})
+                        needed = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in raw.columns]
+                        if len(needed) == 5:
+                            df = raw[needed].copy()
+                except Exception:
+                    pass
+
+            # --- Fallback: Yahoo Finance (strip exchange suffix) ---
+            if df.empty:
+                try:
+                    yf_sym = symbol.split('.')[0]
+                    raw = yf.download(yf_sym, period='1y', progress=False, auto_adjust=True)
+                    if not raw.empty:
+                        # Handle both flat and MultiIndex columns (yfinance >= 0.2.31)
+                        if isinstance(raw.columns, pd.MultiIndex):
+                            raw.columns = [col[0].lower() for col in raw.columns]
+                        else:
+                            raw.columns = [c.lower() for c in raw.columns]
+                        needed = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in raw.columns]
+                        if len(needed) == 5:
+                            df = raw[needed].copy()
+                except Exception:
+                    pass
+
+            if df.empty:
                 continue
+
+            df['symbol'] = symbol
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(inplace=True)
+            if not df.empty:
+                all_frames.append(df)
+
         if all_frames:
             combined = pd.concat(all_frames)
             combined.index = pd.to_datetime(combined.index)
@@ -1043,38 +1080,29 @@ def render_ai_training(engine):
             if not symbols_to_train:
                 st.error("Please select at least one symbol for training!")
             else:
-                with st.spinner("Training AI models... This may take a few minutes."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+                status_box = st.empty()
+                progress_bar = st.progress(0)
 
-                    # Simulate training progress
-                    for i in range(101):
-                        progress_bar.progress(i)
-                        if i < 30:
-                            status_text.text(f"Fetching historical data... {i}%")
-                        elif i < 70:
-                            status_text.text(f"Engineering features... {i}%")
-                        elif i < 95:
-                            status_text.text(f"Training models... {i}%")
-                        else:
-                            status_text.text(f"Validating performance... {i}%")
-                        time.sleep(0.05)
-
-                    # Actually train the models
+                try:
+                    status_box.info(f"📡 Fetching data for {', '.join(symbols_to_train)}…")
+                    progress_bar.progress(15)
                     training_results = engine.train_ai_models(symbols_to_train)
+                    progress_bar.progress(100)
 
                     if training_results:
-                        st.success("✅ AI models trained successfully!")
-
-                        # Display training results
+                        status_box.success("✅ AI models trained successfully!")
                         st.markdown("#### Training Results")
                         for symbol, result in training_results.items():
                             if result['status'] == 'success':
                                 st.success(f"✅ {symbol}: {result['models_trained']} models trained with {result['features_count']} features")
                             else:
-                                st.error(f"❌ {symbol}: Training failed - {result['error']}")
+                                st.error(f"❌ {symbol}: {result['error']}")
                     else:
-                        st.error("❌ Training failed!")
+                        status_box.error("❌ Could not fetch market data for any symbol. Check your EODHD API key or internet connection.")
+                        progress_bar.empty()
+                except Exception as e:
+                    status_box.error(f"❌ Training error: {e}")
+                    progress_bar.empty()
 
     with col2:
         st.markdown("### Training Status")

@@ -236,7 +236,6 @@ class AITradingIntelligence:
     
     def _render_multi_agent_tab(self, symbol: str, market_data: pd.DataFrame):
         """Render multi-agent analysis tab."""
-        # Check API configuration before rendering
         try:
             if MultiAgentAnalysisTab:
                 tab = MultiAgentAnalysisTab(symbol, market_data, self.ui)
@@ -244,6 +243,17 @@ class AITradingIntelligence:
             else:
                 st.error("❌ Multi-Agent Analysis module not available")
                 self._render_fallback_content("Multi-Agent Analysis", symbol)
+        except OSError as e:
+            # [Errno 5] and similar OS-level I/O errors — usually a broken
+            # stdout pipe in cloud deployments.  These are transient; a retry
+            # always resolves them.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Multi-Agent Analysis OSError (transient): %s", e
+            )
+            st.warning("⚠️ A transient connection issue occurred. Please retry.")
+            if st.button("🔄 Retry", key="retry_multi_agent_oserror"):
+                st.rerun()
         except Exception as e:
             self._render_api_config_error("Multi-Agent Analysis", str(e))
     
@@ -481,22 +491,34 @@ class AITradingIntelligence:
         st.info(prediction)
     
     def _render_api_config_error(self, feature_name: str, error_msg: str):
-        """Render API configuration error with setup instructions."""
-        st.warning(f"⚠️ {feature_name} encountered an issue")
-        
-        with st.expander("🔧 Troubleshooting", expanded=False):
-            st.markdown(f"""
-            **Error Details:** {error_msg}
-            
-            **Quick Fixes:**
-            1. Refresh the page
-            2. Check internet connection
-            3. Try a different symbol
-            4. Clear browser cache
-            """)
-            
-            if st.button("🔄 Retry", key=f"retry_{feature_name.lower().replace(' ', '_')}"):
+        """Render a clean, actionable error card for feature failures."""
+        import logging
+        logging.getLogger(__name__).error("%s error: %s", feature_name, error_msg)
+
+        st.markdown(f"""
+        <div style="
+            border:1px solid rgba(239,68,68,.35);
+            border-radius:12px;
+            padding:1.25rem 1.5rem;
+            background:rgba(239,68,68,.06);
+            margin-bottom:1rem;
+        ">
+            <div style="font-weight:700;color:#ef4444;font-size:1rem;margin-bottom:.4rem;">
+                ⚠️ {feature_name} — temporary issue
+            </div>
+            <div style="color:rgba(255,255,255,.6);font-size:.85rem;margin-bottom:1rem;">
+                The service encountered a problem and will recover automatically.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🔄 Retry", key=f"retry_{feature_name.lower().replace(' ', '_')}",
+                         use_container_width=True):
                 st.rerun()
+        with st.expander("Technical details", expanded=False):
+            st.code(error_msg, language=None)
     
     def _show_ai_configuration(self):
         """Show AI configuration panel."""

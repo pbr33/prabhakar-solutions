@@ -958,6 +958,7 @@ def render_login_page():
                 st.session_state.user_type = "full_access"
                 st.session_state.page = 'dashboard'
                 st.session_state.show_hint = False
+                st.session_state['_dashboard_loading'] = True
                 with st.spinner("Authenticating… loading your dashboard"):
                     time.sleep(1)
                 st.rerun()
@@ -974,6 +975,7 @@ def render_login_page():
             st.session_state.authenticated = True
             st.session_state.user_type = "guest"
             st.session_state.page = 'dashboard'
+            st.session_state['_dashboard_loading'] = True
             with st.spinner("Entering Guest Mode… loading platform"):
                 time.sleep(1)
             st.rerun()
@@ -1135,7 +1137,7 @@ def main():
     # --- Page Configuration ---
     st.set_page_config(
         page_title="Agent RICH - Real-time Investment Capital Hub",
-        page_icon="🤖",
+        page_icon="💹",
         layout="wide",
         initial_sidebar_state="collapsed" if st.session_state.get('page') == 'landing' else "expanded"
     )
@@ -1161,6 +1163,12 @@ def main():
         st.rerun()
     
     # If not landing or login page, continue with your existing app
+
+    # Show full-screen loader on the first render cycle after login
+    if st.session_state.pop('_dashboard_loading', False):
+        from ui.loading_utils import inject_dashboard_loader
+        inject_dashboard_loader()
+
     # Import components locally to avoid circular imports
     try:
         from langchain_openai import AzureChatOpenAI
@@ -1256,34 +1264,7 @@ def main():
     # Apply custom CSS
     apply_custom_css()
 
-    # Add user type indicator and navigation in sidebar
-    st.sidebar.markdown("---")
-    
-    # Display user status
     user_type = st.session_state.get('user_type', 'guest')
-    auth_config = config.get_auth_config()
-    demo_username = auth_config.get('demo_username', 'genaiwithprabhakar')
-    
-    if user_type == 'full_access':
-        st.sidebar.success("✅ Full Access Mode")
-        st.sidebar.markdown(f"**User:** {demo_username}")
-    else:
-        st.sidebar.info("👀 Guest Mode - Limited Features")
-        st.sidebar.markdown("*Use demo credentials for full access*")
-    
-    # Navigation buttons
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("🏠 Landing", use_container_width=True):
-            st.session_state.page = 'landing'
-            st.rerun()
-    
-    with col2:
-        if st.button("🔒 Logout", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.user_type = None
-            st.session_state.page = 'landing'
-            st.rerun()
 
     # Main header with user status and configuration status
     header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
@@ -1310,6 +1291,20 @@ def main():
     except Exception as e:
         st.sidebar.error(f"Sidebar error: {e}")
         st.sidebar.info("Some sidebar features may not be available.")
+
+    # --- Sidebar footer: Landing + Logout at the very bottom ---
+    st.sidebar.markdown("---")
+    _col1, _col2 = st.sidebar.columns(2)
+    with _col1:
+        if st.button("🏠 Landing", key="_footer_landing", use_container_width=True):
+            st.session_state.page = 'landing'
+            st.rerun()
+    with _col2:
+        if st.button("🔒 Logout", key="_footer_logout", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.user_type = None
+            st.session_state.page = 'landing'
+            st.rerun()
 
     # --- LLM Initialization using Config ---
     azure_config = config.get_azure_config()
