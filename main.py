@@ -1264,34 +1264,89 @@ def main():
     # Apply custom CSS
     apply_custom_css()
 
-    # Add user type indicator and navigation in sidebar
-    st.sidebar.markdown("---")
-    
-    # Display user status
+    # Sidebar footer: Landing + Logout pinned to the bottom
     user_type = st.session_state.get('user_type', 'guest')
-    auth_config = config.get_auth_config()
-    demo_username = auth_config.get('demo_username', 'genaiwithprabhakar')
-    
-    if user_type == 'full_access':
-        st.sidebar.success("✅ Full Access Mode")
-        st.sidebar.markdown(f"**User:** {demo_username}")
-    else:
-        st.sidebar.info("👀 Guest Mode - Limited Features")
-        st.sidebar.markdown("*Use demo credentials for full access*")
-    
-    # Navigation buttons
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("🏠 Landing", use_container_width=True):
-            st.session_state.page = 'landing'
-            st.rerun()
-    
-    with col2:
-        if st.button("🔒 Logout", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.user_type = None
-            st.session_state.page = 'landing'
-            st.rerun()
+
+    st.sidebar.markdown("""
+    <style>
+    /* Reserve space at bottom so content doesn't overlap footer */
+    [data-testid="stSidebarContent"] { padding-bottom: 5rem !important; }
+    /* Fixed footer pinned inside the sidebar */
+    .ar-sidebar-footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: var(--sidebar-width, 22rem);
+        display: flex;
+        gap: .5rem;
+        padding: .75rem 1rem;
+        background: rgba(15,17,26,.97);
+        border-top: 1px solid rgba(255,255,255,.08);
+        z-index: 1000;
+    }
+    .ar-sidebar-footer a {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: .4rem;
+        padding: .5rem;
+        border-radius: 8px;
+        font-size: .82rem;
+        font-weight: 600;
+        text-decoration: none !important;
+        cursor: pointer;
+        border: none;
+        transition: background .15s;
+    }
+    .ar-sb-landing {
+        background: rgba(59,130,246,.15);
+        color: #93c5fd !important;
+        border: 1px solid rgba(59,130,246,.3) !important;
+    }
+    .ar-sb-landing:hover { background: rgba(59,130,246,.28) !important; }
+    .ar-sb-logout {
+        background: rgba(239,68,68,.12);
+        color: #fca5a5 !important;
+        border: 1px solid rgba(239,68,68,.3) !important;
+    }
+    .ar-sb-logout:hover { background: rgba(239,68,68,.25) !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Actual functional buttons (hidden visually, triggered by footer links via key)
+    _go_landing = st.sidebar.button("🏠 Landing", key="_footer_landing", use_container_width=True)
+    _go_logout  = st.sidebar.button("🔒 Logout",  key="_footer_logout",  use_container_width=True)
+
+    # Overlay the styled footer on top
+    st.sidebar.markdown("""
+    <style>
+    /* Hide the real Streamlit buttons — footer links handle the visual */
+    [data-testid="stSidebar"] button[kind="secondary"]:has(+ *) { display:none; }
+    div[data-testid="stSidebar"] div:has(> button#_footer_landing),
+    div[data-testid="stSidebar"] div:has(> button#_footer_logout) { display:none; }
+    </style>
+    <div class="ar-sidebar-footer">
+        <span class="ar-sb-landing" onclick="
+            var btns=window.parent.document.querySelectorAll('[data-testid=stSidebar] button');
+            for(var b of btns){if(b.innerText.includes('Landing')){b.click();break;}}
+        ">🏠 Landing</span>
+        <span class="ar-sb-logout" onclick="
+            var btns=window.parent.document.querySelectorAll('[data-testid=stSidebar] button');
+            for(var b of btns){if(b.innerText.includes('Logout')){b.click();break;}}
+        ">🔒 Logout</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if _go_landing:
+        st.session_state.page = 'landing'
+        st.rerun()
+
+    if _go_logout:
+        st.session_state.authenticated = False
+        st.session_state.user_type = None
+        st.session_state.page = 'landing'
+        st.rerun()
 
     # Main header with user status and configuration status
     header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
