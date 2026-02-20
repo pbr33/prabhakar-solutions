@@ -1,8 +1,11 @@
 # ui/tabs/ai_intelligence/features/multi_agent_analysis.py
 import time
+import logging
 import streamlit as st
 import pandas as pd
 import numpy as np
+
+_log = logging.getLogger(__name__)
 import yfinance as yf
 import requests
 import json
@@ -54,7 +57,9 @@ class RealTimeMarketData:
         self.cache_timeout = 300  # 5 minutes
         
         # Log configuration status
-        print(f"Market Data Service - EODHD: {'✓' if self.eodhd_api_key else '✗'}, Alpha Vantage: {'✓' if self.alpha_vantage_key else '✗'}")
+        _log.info("Market Data Service - EODHD: %s, Alpha Vantage: %s",
+                  '✓' if self.eodhd_api_key else '✗',
+                  '✓' if self.alpha_vantage_key else '✗')
     
     def get_market_data(self, symbol: str) -> Dict[str, Any]:
         """Get comprehensive market data with multiple fallbacks."""
@@ -81,7 +86,7 @@ class RealTimeMarketData:
             return self._generate_demo_data(symbol)
             
         except Exception as e:
-            print(f"Error fetching data for {symbol}: {str(e)}")
+            _log.warning("Error fetching data for %s: %s", symbol, e)
             return self._generate_demo_data(symbol)
     
     def _fetch_eodhd_data(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -119,7 +124,7 @@ class RealTimeMarketData:
                 'source': 'EODHD'
             }
         except Exception as e:
-            print(f"EODHD fetch failed: {e}")
+            _log.warning("EODHD fetch failed: %s", e)
             return None
     
     def _fetch_yahoo_data(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -146,7 +151,7 @@ class RealTimeMarketData:
                 'source': 'Yahoo Finance'
             }
         except Exception as e:
-            print(f"Yahoo Finance fetch failed: {e}")
+            _log.warning("Yahoo Finance fetch failed: %s", e)
             return None
     
     def _generate_demo_data(self, symbol: str) -> Dict[str, Any]:

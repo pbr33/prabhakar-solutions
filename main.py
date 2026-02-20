@@ -1137,7 +1137,7 @@ def main():
     # --- Page Configuration ---
     st.set_page_config(
         page_title="Agent RICH - Real-time Investment Capital Hub",
-        page_icon="🤖",
+        page_icon="💹",
         layout="wide",
         initial_sidebar_state="collapsed" if st.session_state.get('page') == 'landing' else "expanded"
     )
