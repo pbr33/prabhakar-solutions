@@ -13,6 +13,7 @@ from enum import Enum
 import json
 import hashlib
 import requests
+import yfinance as yf
 from sklearn.ensemble import RandomForestRegressor, IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -270,8 +271,13 @@ class AIStrategyEngine:
     def _engineer_features(self, data: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """Engineer comprehensive technical and fundamental features"""
         try:
+            if data.empty:
+                return pd.DataFrame()
+            required = ['open', 'high', 'low', 'close', 'volume']
+            if not all(c in data.columns for c in required):
+                return pd.DataFrame()
             # Basic OHLC features
-            features = data[['open', 'high', 'low', 'close', 'volume']].copy()
+            features = data[required].copy()
 
             # Technical indicators
             features['rsi'] = self._calculate_rsi(features['close'])
@@ -618,28 +624,50 @@ class AutoTradingEngine:
         return self.ai_engine.train_models(training_data, symbols)
 
     def _fetch_real_data(self, symbols: List[str]) -> pd.DataFrame:
-        """Fetch real EODHD end-of-day historical data for training."""
+        """Fetch historical OHLCV data — EODHD first, Yahoo Finance fallback."""
         api_key = config.get_eodhd_api_key()
         all_frames = []
+
         for symbol in symbols:
-            try:
-                df = pro_get_historical_data(symbol, api_key)
-                if df.empty:
-                    continue
-                # Normalise column names to lower-case
-                df.columns = [c.lower() for c in df.columns]
-                # Keep only OHLCV; rename adjusted_close→close if needed
-                if 'adjusted_close' in df.columns and 'close' not in df.columns:
-                    df = df.rename(columns={'adjusted_close': 'close'})
-                df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-                df['symbol'] = symbol
-                # Ensure numeric
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                df.dropna(inplace=True)
-                all_frames.append(df)
-            except Exception:
+            df = pd.DataFrame()
+
+            # --- Primary: EODHD ---
+            if api_key:
+                try:
+                    raw = pro_get_historical_data(symbol, api_key)
+                    if not raw.empty:
+                        raw.columns = [c.lower() for c in raw.columns]
+                        if 'adjusted_close' in raw.columns and 'close' not in raw.columns:
+                            raw = raw.rename(columns={'adjusted_close': 'close'})
+                        needed = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in raw.columns]
+                        if len(needed) == 5:
+                            df = raw[needed].copy()
+                except Exception:
+                    pass
+
+            # --- Fallback: Yahoo Finance (strip exchange suffix) ---
+            if df.empty:
+                try:
+                    yf_sym = symbol.split('.')[0]
+                    raw = yf.download(yf_sym, period='6mo', progress=False, auto_adjust=True)
+                    if not raw.empty:
+                        raw.columns = [c.lower() for c in raw.columns]
+                        needed = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in raw.columns]
+                        if len(needed) == 5:
+                            df = raw[needed].copy()
+                except Exception:
+                    pass
+
+            if df.empty:
                 continue
+
+            df['symbol'] = symbol
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(inplace=True)
+            if not df.empty:
+                all_frames.append(df)
+
         if all_frames:
             combined = pd.concat(all_frames)
             combined.index = pd.to_datetime(combined.index)
@@ -1047,8 +1075,8 @@ def render_ai_training(engine):
                 progress_bar = st.progress(0)
 
                 try:
-                    status_box.info("📡 Fetching historical data…")
-                    progress_bar.progress(10)
+                    status_box.info(f"📡 Fetching data for {', '.join(symbols_to_train)}…")
+                    progress_bar.progress(15)
                     training_results = engine.train_ai_models(symbols_to_train)
                     progress_bar.progress(100)
 
@@ -1059,9 +1087,9 @@ def render_ai_training(engine):
                             if result['status'] == 'success':
                                 st.success(f"✅ {symbol}: {result['models_trained']} models trained with {result['features_count']} features")
                             else:
-                                st.error(f"❌ {symbol}: Training failed — {result['error']}")
+                                st.error(f"❌ {symbol}: {result['error']}")
                     else:
-                        status_box.warning("⚠️ No training results returned. Check API key or symbol selection.")
+                        status_box.error("❌ Could not fetch market data for any symbol. Check your EODHD API key or internet connection.")
                         progress_bar.empty()
                 except Exception as e:
                     status_box.error(f"❌ Training error: {e}")
