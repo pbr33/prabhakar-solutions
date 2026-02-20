@@ -197,23 +197,23 @@ class AIStrategyEngine:
                 if features.empty:
                     continue
 
-                # Create target variables for different strategies
-                features['future_return_1h'] = features['close'].pct_change().shift(-1)
-                features['future_return_1d'] = features['close'].pct_change(24).shift(-24)
-                features['volatility_target'] = features['close'].rolling(24).std()
+                # Create target variables (daily data: use 5-day/1-week horizons)
+                features['future_return_1d'] = features['close'].pct_change().shift(-1)
+                features['future_return_1w'] = features['close'].pct_change(5).shift(-5)
+                features['volatility_target'] = features['close'].rolling(10).std()
 
                 # Remove NaN and infinite values
                 features = features.replace([float('inf'), float('-inf')], float('nan')).dropna()
 
-                if len(features) < 100:  # Need sufficient data
+                if len(features) < 30:  # Minimum viable rows for 3-fold CV
                     continue
 
                 # Train ensemble of models
                 models = {}
 
                 # XGBoost for price prediction
-                X = features.drop(['future_return_1h', 'future_return_1d', 'volatility_target'], axis=1)
-                y_returns = features['future_return_1h'].replace([float('inf'), float('-inf')], float('nan')).fillna(0)
+                X = features.drop(['future_return_1d', 'future_return_1w', 'volatility_target'], axis=1)
+                y_returns = features['future_return_1d'].replace([float('inf'), float('-inf')], float('nan')).fillna(0)
 
                 # Time series split for proper validation
                 tscv = TimeSeriesSplit(n_splits=3)
@@ -273,10 +273,15 @@ class AIStrategyEngine:
         try:
             if data.empty:
                 return pd.DataFrame()
+            # Filter to rows for this symbol only
+            if 'symbol' in data.columns:
+                data = data[data['symbol'] == symbol].copy()
+            if data.empty:
+                return pd.DataFrame()
             required = ['open', 'high', 'low', 'close', 'volume']
             if not all(c in data.columns for c in required):
                 return pd.DataFrame()
-            # Basic OHLC features
+            # Basic OHLC features (exclude the string 'symbol' column)
             features = data[required].copy()
 
             # Technical indicators
@@ -649,9 +654,13 @@ class AutoTradingEngine:
             if df.empty:
                 try:
                     yf_sym = symbol.split('.')[0]
-                    raw = yf.download(yf_sym, period='6mo', progress=False, auto_adjust=True)
+                    raw = yf.download(yf_sym, period='1y', progress=False, auto_adjust=True)
                     if not raw.empty:
-                        raw.columns = [c.lower() for c in raw.columns]
+                        # Handle both flat and MultiIndex columns (yfinance >= 0.2.31)
+                        if isinstance(raw.columns, pd.MultiIndex):
+                            raw.columns = [col[0].lower() for col in raw.columns]
+                        else:
+                            raw.columns = [c.lower() for c in raw.columns]
                         needed = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in raw.columns]
                         if len(needed) == 5:
                             df = raw[needed].copy()
