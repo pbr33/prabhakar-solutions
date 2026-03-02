@@ -2134,6 +2134,95 @@ class DocProcessor:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  ANTHROPIC / CLAUDE CLIENT
+# ═══════════════════════════════════════════════════════════════════════
+
+class AnthropicAI:
+    """Lightweight Anthropic Messages API client (no SDK required)."""
+    _BASE = "https://api.anthropic.com/v1/messages"
+    MODELS = [
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "claude-haiku-4-5-20251001",
+    ]
+
+    def __init__(self, key: str, model: str = "claude-sonnet-4-6"):
+        self.key   = key.strip()
+        self.model = model or "claude-sonnet-4-6"
+
+    @classmethod
+    def from_session(cls):
+        return cls(
+            st.session_state.get("anthropic_api_key", ""),
+            st.session_state.get("claude_model", "claude-sonnet-4-6"),
+        )
+
+    @property
+    def is_live(self):
+        return bool(self.key)
+
+    def test(self):
+        if not self.key:
+            return False, "Not configured. Enter Anthropic API Key."
+        result = self._call("Reply with exactly one word: OK", "ping", max_tokens=10)
+        if result is not None:
+            return True, f"Connected to {self.model}"
+        return False, "Connection failed — check your Anthropic API key."
+
+    def _call(self, system: str, user: str, max_tokens: int = 4096):
+        """Call Anthropic Messages API; return parsed JSON dict or None."""
+        if not self.key:
+            return None
+        import urllib.request, urllib.error
+        payload = json.dumps({
+            "model":      self.model,
+            "max_tokens": max_tokens,
+            "system":     system,
+            "messages":   [{"role": "user", "content": user}],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            self._BASE, data=payload,
+            headers={
+                "x-api-key":         self.key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type":      "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                txt = (data.get("content") or [{}])[0].get("text", "")
+                # Try strict JSON parse
+                try:
+                    return json.loads(txt)
+                except json.JSONDecodeError:
+                    pass
+                # Try to extract JSON from ```json ... ``` block
+                m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", txt)
+                if m:
+                    try:
+                        return json.loads(m.group(1))
+                    except Exception:
+                        pass
+                # Last resort: find first {...} blob
+                m2 = re.search(r"\{[\s\S]*\}", txt)
+                if m2:
+                    try:
+                        return json.loads(m2.group(0))
+                    except Exception:
+                        pass
+                return txt  # return raw text if no JSON found
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            st.warning(f"Anthropic error {e.code}: {body}")
+            return None
+        except Exception as e:
+            st.warning(f"Anthropic request failed: {str(e)[:200]}")
+            return None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  AZURE OPENAI CLIENT — PRODUCTION
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2830,7 +2919,28 @@ class ArchitectNarrator:
 
     @property
     def hg_ready(self):
-        return bool(self.hg_key and self.avatar_id)
+        # Only the API key is needed; avatar is chosen inside the UI.
+        return bool(self.hg_key)
+
+    def check_credits(self) -> tuple:
+        """Return (remaining_quota, plan_credit, error_str) from HeyGen v2 API."""
+        import urllib.request, urllib.error
+        req = urllib.request.Request(
+            "https://api.heygen.com/v2/user/remaining_quota",
+            headers={"X-Api-Key": self.hg_key, "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                d = data.get("data") or {}
+                remaining = d.get("remaining_quota", -1)
+                plan_total = (d.get("details") or {}).get("plan_credit", 0)
+                return remaining, plan_total, None
+        except urllib.error.HTTPError as e:
+            return -1, 0, f"HTTP {e.code}"
+        except Exception as e:
+            return -1, 0, str(e)[:100]
 
     # ------------------------------------------------------------------ #
     #  Step 1 — Script generation                                         #
@@ -2864,21 +2974,33 @@ class ArchitectNarrator:
             f"Number of architecture components designed: {num_comps}\n"
         )
 
-        # Try live LLM first
+        _sys_prompt = (
+            "You are the lead architect at ECI (Enterprise Cloud & Integration). "
+            "Write a warm, confident, first-person video script (≈200 words, ≈90 seconds when spoken). "
+            "The script will be read by an AI avatar of the architect. "
+            "Tone: professional yet personable, like a senior expert briefing a client. "
+            "Structure: greet warmly → summarise the solution in 2–3 sentences → highlight the key cost/timeline → "
+            "mention risk posture → invite the client to the Live War Room to refine details → close confidently. "
+            "Do NOT use bullet points or markdown — plain prose only. "
+            "Return JSON: {\"script\": \"<the full script text>\"}"
+        )
+        _user_prompt = "Proposal context:\n" + context
+
+        # Try Anthropic/Claude first (preferred), then Azure OpenAI
+        claude = AnthropicAI.from_session()
+        if claude.is_live:
+            try:
+                resp = claude._call(_sys_prompt, _user_prompt)
+                if resp and isinstance(resp, dict) and resp.get("script"):
+                    return safe_str(resp["script"])
+            except Exception:
+                pass
+
+        # Try Azure OpenAI
         ai = AzureAI.from_session()
         if ai.is_live:
             try:
-                resp = ai._call(
-                    "You are the lead architect at ECI (Enterprise Cloud & Integration). "
-                    "Write a warm, confident, first-person video script (≈200 words, ≈90 seconds when spoken). "
-                    "The script will be read by an AI avatar of the architect. "
-                    "Tone: professional yet personable, like a senior expert briefing a client. "
-                    "Structure: greet warmly → summarise the solution in 2–3 sentences → highlight the key cost/timeline → "
-                    "mention risk posture → invite the client to the Live War Room to refine details → close confidently. "
-                    "Do NOT use bullet points or markdown — plain prose only. "
-                    "Return JSON: {\"script\": \"<the full script text>\"}",
-                    "Proposal context:\n" + context,
-                )
+                resp = ai._call(_sys_prompt, _user_prompt)
                 if resp and isinstance(resp, dict) and resp.get("script"):
                     return safe_str(resp["script"])
             except Exception:
@@ -3029,10 +3151,22 @@ class ArchitectNarrator:
                 vid_id = (data.get("data") or {}).get("video_id")
                 if vid_id:
                     return vid_id, None
-                return None, "HeyGen returned no video_id: " + json.dumps(data)[:200]
+                return None, "HeyGen returned no video_id: " + json.dumps(data)[:300]
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="ignore")[:300]
-            return None, f"HeyGen error {e.code}: {body}"
+            body = e.read().decode("utf-8", errors="ignore")[:500]
+            try:
+                err_data = json.loads(body)
+                code = (err_data.get("data") or err_data.get("error") or {})
+                if isinstance(code, dict):
+                    code = code.get("code", "")
+                if "INSUFFICIENT_CREDIT" in str(code) or "credit" in body.lower():
+                    return None, (
+                        "INSUFFICIENT_CREDIT — Your HeyGen account has 0 remaining credits. "
+                        "Add credits at heygen.com/pricing or wait for your monthly quota reset."
+                    )
+            except Exception:
+                pass
+            return None, f"HeyGen error {e.code}: {body[:300]}"
         except Exception as e:
             return None, f"HeyGen request failed: {str(e)[:200]}"
 
@@ -3040,11 +3174,14 @@ class ArchitectNarrator:
     #  Utility — list free public stock avatars from HeyGen               #
     # ------------------------------------------------------------------ #
     def list_free_avatars(self) -> tuple:
-        """Call GET /v2/avatars and return only free public stock avatars.
+        """Call GET /v2/avatars and return deduplicated accessible avatars.
 
         Returns (list_of_dicts, error_str).
-        Each dict has keys: avatar_id, avatar_name, preview_image_url.
-        Free avatars have avatar_type == "public".
+        Each dict has keys: avatar_id, avatar_name, preview_image_url, gender.
+
+        Note: The HeyGen v2 API returns a 'premium' boolean (False = accessible
+        on the current plan) and a 'type' field (None for most avatars).  We
+        deduplicate by avatar_id and include all non-premium entries.
         """
         import urllib.request, urllib.error
         req = urllib.request.Request(
@@ -3056,19 +3193,33 @@ class ArchitectNarrator:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 all_avs = (data.get("data") or {}).get("avatars", [])
-                free = [
+
+                # Deduplicate by avatar_id; keep first occurrence.
+                seen = set()
+                unique = []
+                for a in all_avs:
+                    aid = a.get("avatar_id", "")
+                    if aid and aid not in seen:
+                        seen.add(aid)
+                        unique.append(a)
+
+                # Keep only avatars accessible on this plan (premium == False).
+                # If the API never sets premium=True, all are shown (expected).
+                accessible = [
                     {
                         "avatar_id":         a.get("avatar_id", ""),
-                        "avatar_name":       a.get("avatar_name", a.get("avatar_id", "")),
+                        "avatar_name":       a.get("avatar_name") or a.get("avatar_id", ""),
                         "preview_image_url": a.get("preview_image_url", ""),
+                        "preview_video_url": a.get("preview_video_url", ""),
                         "gender":            a.get("gender", ""),
+                        "default_voice_id":  a.get("default_voice_id", ""),
                     }
-                    for a in all_avs
-                    if a.get("avatar_type", "") == "public"
+                    for a in unique
+                    if not a.get("premium", False)
                 ]
-                if not free:
-                    return [], "No public stock avatars found. Your HeyGen plan may not include them."
-                return free, None
+                if not accessible:
+                    return [], "No accessible avatars found for this HeyGen account."
+                return accessible, None
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")[:300]
             return [], f"HeyGen avatars list error {e.code}: {body}"
@@ -5126,17 +5277,26 @@ def generate_proposal_pptx(results):
 # ═══════════════════════════════════════════════════════════════════════
 
 _defaults = {
-    "azure_api_key": "", "azure_endpoint": "", "azure_api_version": "2024-06-01", "azure_deployment": "gpt-4",
+    # Read secrets from environment variables so Streamlit Cloud / Docker
+    # deployments don't require manual sidebar entry every session.
+    "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+    "claude_model":      os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+    "azure_api_key":     os.environ.get("AZURE_API_KEY", ""),
+    "azure_endpoint":    os.environ.get("AZURE_ENDPOINT", ""),
+    "azure_api_version": "2024-06-01",
+    "azure_deployment":  os.environ.get("AZURE_DEPLOYMENT", "gpt-4"),
     "sp_url": "", "sp_cid": "", "sp_cs": "", "sp_tid": "",
     "email_smtp": "", "email_sender": "",
-    "elevenlabs_api_key": "", "heygen_api_key": "",
-    "heygen_avatar_id": "", "heygen_voice_id": "",
+    "elevenlabs_api_key": os.environ.get("ELEVENLABS_API_KEY", ""),
+    "heygen_api_key":     os.environ.get("HEYGEN_API_KEY", ""),
+    "heygen_avatar_id":   os.environ.get("HEYGEN_AVATAR_ID", ""),
+    "heygen_voice_id":    os.environ.get("HEYGEN_VOICE_ID", ""),
     "narrator_result": None,
     "narrator_mode": "custom",
     "narrator_free_avatars": [],
     "narrator_photo_id": "",
     "narrator_selected_avatar": "",
-    "narrator_custom_avatar_id": "",
+    "narrator_custom_avatar_id": os.environ.get("HEYGEN_AVATAR_ID", ""),
     "narrator_test_mode": True,
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
@@ -5168,12 +5328,30 @@ with hc3:
 
 with st.sidebar:
     st.markdown('<div class="stitle">Configuration</div>', unsafe_allow_html=True)
-    st.markdown('<div class="csec">Azure OpenAI</div>', unsafe_allow_html=True)
+
+    # ── Anthropic / Claude (primary LLM) ──
+    st.markdown('<div class="csec">Anthropic / Claude AI</div>', unsafe_allow_html=True)
+    st.session_state.anthropic_api_key = st.text_input(
+        "Anthropic API Key", value=st.session_state.anthropic_api_key,
+        type="password", placeholder="sk-ant-...", key="k_ant")
+    st.session_state.claude_model = st.selectbox(
+        "Claude Model",
+        AnthropicAI.MODELS,
+        index=AnthropicAI.MODELS.index(st.session_state.claude_model)
+              if st.session_state.claude_model in AnthropicAI.MODELS else 0,
+        key="k_claude_model",
+    )
+    if st.button("Test Claude", use_container_width=True, key="tb_ant"):
+        ok, msg = AnthropicAI.from_session().test()
+        st.success(msg) if ok else st.error(msg)
+    st.divider()
+
+    st.markdown('<div class="csec">Azure OpenAI (optional fallback)</div>', unsafe_allow_html=True)
     st.session_state.azure_api_key = st.text_input("API Key", value=st.session_state.azure_api_key, type="password", key="k1")
     st.session_state.azure_endpoint = st.text_input("Endpoint", value=st.session_state.azure_endpoint, placeholder="https://your-resource.openai.azure.com/", key="k2")
     st.session_state.azure_api_version = st.selectbox("Version", ["2024-06-01", "2024-02-01", "2023-12-01-preview"], key="k3")
     st.session_state.azure_deployment = st.text_input("Deployment", value=st.session_state.azure_deployment, placeholder="gpt-4", key="k4")
-    if st.button("Test Connection", use_container_width=True, key="tb1"):
+    if st.button("Test Azure", use_container_width=True, key="tb1"):
         ok, msg = AzureAI.from_session().test()
         if ok:
             st.success(msg)
@@ -5211,17 +5389,20 @@ with st.sidebar:
         "ElevenLabs Voice ID", value=st.session_state.heygen_voice_id,
         placeholder="Voice clone ID or leave blank for default", key="k_vi")
     st.divider()
-    a_ok = bool(st.session_state.azure_api_key and st.session_state.azure_endpoint)
-    s_ok = bool(st.session_state.sp_url and st.session_state.sp_cid)
-    e_ok = bool(st.session_state.email_smtp)
-    n_ok = bool(st.session_state.heygen_api_key and st.session_state.heygen_avatar_id)
-    mode_label = "LIVE AI" if a_ok else "DEMO MODE"
+    ant_ok = bool(st.session_state.anthropic_api_key)
+    a_ok   = bool(st.session_state.azure_api_key and st.session_state.azure_endpoint)
+    s_ok   = bool(st.session_state.sp_url and st.session_state.sp_cid)
+    e_ok   = bool(st.session_state.email_smtp)
+    n_ok   = bool(st.session_state.heygen_api_key)
+    ai_ok  = ant_ok or a_ok
+    mode_label = "LIVE AI" if ai_ok else "DEMO MODE"
     st.markdown('<div class="cstat">'
                 + '<div class="srow"><strong>' + mode_label + '</strong></div>'
+                + '<div class="srow"><span class="sdot ' + ('on' if ant_ok else 'off') + '"></span> Anthropic Claude</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if a_ok else 'off') + '"></span> Azure OpenAI</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if s_ok else 'off') + '"></span> SharePoint</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if e_ok else 'off') + '"></span> Email</div>'
-                + '<div class="srow"><span class="sdot ' + ('on' if n_ok else 'off') + '"></span> Architect Narrator</div>'
+                + '<div class="srow"><span class="sdot ' + ('on' if n_ok else 'off') + '"></span> HeyGen Narrator</div>'
                 + '</div>', unsafe_allow_html=True)
 
 
@@ -6177,6 +6358,19 @@ def show_results():
         if not narrator.hg_ready:
             st.info("Add your HeyGen API Key in the sidebar to enable video generation.")
         else:
+            # ── HeyGen credit balance ──
+            rem, plan_cr, cr_err = narrator.check_credits()
+            if cr_err:
+                st.caption(f"Credit check failed: {cr_err}")
+            elif rem == 0:
+                st.warning(
+                    f"⚠️ HeyGen account has **0 remaining credits** (plan: {plan_cr} credits/month). "
+                    "Video generation will fail until credits are added. "
+                    "Top up at [heygen.com/pricing](https://www.heygen.com/pricing) or wait for monthly reset."
+                )
+            else:
+                st.success(f"HeyGen credits: **{rem}** remaining (plan: {plan_cr}/month)")
+
             # ── Mode selector (3 options) ──
             mode_labels = [
                 "🎨 Custom Avatar ID",
@@ -6402,7 +6596,16 @@ def show_results():
                                     video_url = (data.get("data") or {}).get("video_url", "")
                                     break
                                 if status in ("failed", "error"):
-                                    poll_err = "HeyGen: " + safe_str((data.get("data") or {}).get("error", "generation failed"))
+                                    err_obj = (data.get("data") or {}).get("error") or {}
+                                    err_code = err_obj.get("code", "") if isinstance(err_obj, dict) else str(err_obj)
+                                    err_msg  = err_obj.get("message", "generation failed") if isinstance(err_obj, dict) else str(err_obj)
+                                    if "INSUFFICIENT_CREDIT" in err_code or "credit" in err_msg.lower():
+                                        poll_err = (
+                                            "INSUFFICIENT_CREDIT — HeyGen account has 0 remaining credits. "
+                                            "Purchase more at heygen.com/pricing or wait for monthly quota reset."
+                                        )
+                                    else:
+                                        poll_err = f"HeyGen [{err_code}]: {err_msg}"
                                     break
                         except Exception as pe:
                             poll_err = str(pe)[:200]
