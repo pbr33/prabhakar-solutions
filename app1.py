@@ -2898,11 +2898,13 @@ class ArchitectNarrator:
     # ------------------------------------------------------------------ #
     #  Construction                                                        #
     # ------------------------------------------------------------------ #
-    def __init__(self, el_key: str, hg_key: str, avatar_id: str, voice_id: str):
+    def __init__(self, el_key: str, hg_key: str, avatar_id: str, voice_id: str,
+                 did_key: str = ""):
         self.el_key    = el_key.strip()
         self.hg_key    = hg_key.strip()
         self.avatar_id = avatar_id.strip()
         self.voice_id  = voice_id.strip()
+        self.did_key   = did_key.strip()
 
     @classmethod
     def from_session(cls):
@@ -2911,7 +2913,12 @@ class ArchitectNarrator:
             st.session_state.get("heygen_api_key", ""),
             st.session_state.get("heygen_avatar_id", ""),
             st.session_state.get("heygen_voice_id", ""),
+            st.session_state.get("did_api_key", ""),
         )
+
+    @property
+    def did_ready(self):
+        return bool(self.did_key)
 
     @property
     def el_ready(self):
@@ -2941,6 +2948,205 @@ class ArchitectNarrator:
             return -1, 0, f"HTTP {e.code}"
         except Exception as e:
             return -1, 0, str(e)[:100]
+
+    # ------------------------------------------------------------------ #
+    #  D-ID  — Free talking-head video (free trial available at d-id.com) #
+    # ------------------------------------------------------------------ #
+
+    def did_upload_image(self, image_bytes: bytes, content_type: str = "image/jpeg") -> tuple:
+        """Upload an image to D-ID and return (image_url, error_str).
+
+        D-ID requires a public URL for the source image.  Their asset upload
+        endpoint accepts multipart/form-data and returns a CDN URL.
+        """
+        if not self.did_key:
+            return None, "D-ID API key not configured."
+        import urllib.request, urllib.error
+
+        # Build a minimal multipart/form-data body
+        boundary = "ECI_BOUNDARY_X1Y2Z3"
+        filename = "avatar.jpg" if "jpeg" in content_type else "avatar.png"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        auth_b64 = base64.b64encode(f"{self.did_key}:".encode()).decode()
+        req = urllib.request.Request(
+            "https://api.d-id.com/images",
+            data=body,
+            headers={
+                "Authorization": f"Basic {auth_b64}",
+                "Content-Type":  f"multipart/form-data; boundary={boundary}",
+                "Accept":        "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                url = data.get("url", "")
+                if url:
+                    return url, None
+                return None, "D-ID image upload: no URL returned — " + json.dumps(data)[:200]
+        except urllib.error.HTTPError as e:
+            body_txt = e.read().decode("utf-8", errors="ignore")[:400]
+            return None, f"D-ID image upload error {e.code}: {body_txt}"
+        except Exception as e:
+            return None, f"D-ID image upload failed: {str(e)[:200]}"
+
+    def generate_did_video(self, script: str, mp3_bytes: bytes | None,
+                           source_image_url: str) -> tuple:
+        """Submit a D-ID /talks job and return (talk_id, error_str).
+
+        D-ID Talks API: https://docs.d-id.com/reference/talks
+        • Free trial: sign up at d-id.com → ~5 free videos/month.
+        • Auth: Basic base64(api_key:)   ← note the trailing colon
+        • source_image_url: public HTTPS image URL (JPG/PNG)
+        • Voice: ElevenLabs provider when el_key set, else Microsoft Neural TTS
+        """
+        if not self.did_key:
+            return None, "D-ID API key not configured."
+        if not source_image_url:
+            return None, "No source image URL — please upload a photo first."
+
+        import urllib.request, urllib.error
+
+        # ── Script / voice block ──
+        if mp3_bytes:
+            # Upload the audio to D-ID's audio asset endpoint first
+            audio_b64 = base64.b64encode(mp3_bytes).decode("utf-8")
+            script_block = {
+                "type":  "audio",
+                "audio_base64": "data:audio/mpeg;base64," + audio_b64,
+            }
+        elif self.el_key:
+            # Use ElevenLabs as voice provider within D-ID
+            script_block = {
+                "type":     "text",
+                "subtitles": False,
+                "provider": {
+                    "type":     "elevenlabs",
+                    "voice_id": self.voice_id or "pNInz6obpgDQGcFmaJgB",  # Adam
+                    "api_key":  self.el_key,
+                },
+                "input": script,
+            }
+        else:
+            # Default: Microsoft Neural TTS (no extra key needed)
+            script_block = {
+                "type":     "text",
+                "subtitles": False,
+                "provider": {
+                    "type":     "microsoft",
+                    "voice_id": "en-US-GuyNeural",
+                },
+                "input": script,
+            }
+
+        payload = json.dumps({
+            "source_url": source_image_url,
+            "script":     script_block,
+            "config": {
+                "fluent":    True,
+                "pad_audio": 0.0,
+                "stitch":    True,
+            },
+        }).encode("utf-8")
+
+        auth_b64 = base64.b64encode(f"{self.did_key}:".encode()).decode()
+        req = urllib.request.Request(
+            "https://api.d-id.com/talks",
+            data=payload,
+            headers={
+                "Authorization": f"Basic {auth_b64}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                talk_id = data.get("id", "")
+                if talk_id:
+                    return talk_id, None
+                return None, "D-ID returned no talk id: " + json.dumps(data)[:300]
+        except urllib.error.HTTPError as e:
+            body_txt = e.read().decode("utf-8", errors="ignore")[:500]
+            try:
+                err = json.loads(body_txt)
+                msg = err.get("message") or err.get("description") or body_txt[:200]
+                if "trial" in msg.lower() or "credit" in msg.lower() or "quota" in msg.lower():
+                    return None, (
+                        "D-ID free trial exhausted. "
+                        "Sign up or top-up credits at https://studio.d-id.com/account/billing."
+                    )
+                return None, f"D-ID error {e.code}: {msg}"
+            except Exception:
+                return None, f"D-ID error {e.code}: {body_txt[:300]}"
+        except Exception as e:
+            return None, f"D-ID request failed: {str(e)[:200]}"
+
+    def poll_did_video(self, talk_id: str) -> tuple:
+        """Return (video_url, status, error_str) for a D-ID talk."""
+        if not self.did_key:
+            return None, "error", "D-ID API key not configured."
+        import urllib.request, urllib.error
+        auth_b64 = base64.b64encode(f"{self.did_key}:".encode()).decode()
+        req = urllib.request.Request(
+            f"https://api.d-id.com/talks/{talk_id}",
+            headers={"Authorization": f"Basic {auth_b64}", "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                status = data.get("status", "")        # created / started / done / error
+                url    = data.get("result_url", "")
+                err    = data.get("error", {}) or {}
+                err_msg = err.get("message") or err.get("description") or safe_str(err)[:200]
+                return url, status, err_msg if status == "error" else None
+        except urllib.error.HTTPError as e:
+            return None, "error", f"D-ID poll error {e.code}"
+        except Exception as e:
+            return None, "error", str(e)[:200]
+
+    def did_list_presenters(self) -> tuple:
+        """Return (list_of_presenters, error_str) — D-ID built-in presenter avatars.
+
+        D-ID provides a set of stock presenters that can be used without
+        uploading a custom photo, ideal for getting started with zero setup.
+        """
+        if not self.did_key:
+            return [], "D-ID API key not configured."
+        import urllib.request, urllib.error
+        auth_b64 = base64.b64encode(f"{self.did_key}:".encode()).decode()
+        req = urllib.request.Request(
+            "https://api.d-id.com/presenters",
+            headers={"Authorization": f"Basic {auth_b64}", "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                presenters = data.get("presenters") or data.get("data") or []
+                result = [
+                    {
+                        "id":          p.get("presenter_id") or p.get("id", ""),
+                        "name":        p.get("name", ""),
+                        "image_url":   p.get("thumbnail_url") or p.get("preview_url", ""),
+                        "gender":      p.get("gender", ""),
+                    }
+                    for p in presenters
+                ]
+                return result, None
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return [], f"D-ID presenters error {e.code}: {body}"
+        except Exception as e:
+            return [], f"D-ID presenters request failed: {str(e)[:200]}"
 
     # ------------------------------------------------------------------ #
     #  Step 1 — Script generation                                         #
@@ -5291,6 +5497,7 @@ _defaults = {
     "heygen_api_key":     os.environ.get("HEYGEN_API_KEY", ""),
     "heygen_avatar_id":   os.environ.get("HEYGEN_AVATAR_ID", ""),
     "heygen_voice_id":    os.environ.get("HEYGEN_VOICE_ID", ""),
+    "did_api_key":        os.environ.get("DID_API_KEY", ""),
     "narrator_result": None,
     "narrator_mode": "custom",
     "narrator_free_avatars": [],
@@ -5298,6 +5505,8 @@ _defaults = {
     "narrator_selected_avatar": "",
     "narrator_custom_avatar_id": os.environ.get("HEYGEN_AVATAR_ID", ""),
     "narrator_test_mode": True,
+    "narrator_did_image_url": "",
+    "narrator_did_presenters": [],
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
@@ -5375,25 +5584,34 @@ with st.sidebar:
     st.session_state.email_sender = st.text_input("Sender Email", value=st.session_state.email_sender, key="k10")
     st.text_input("Password", type="password", key="cfg_email_pass")
     st.divider()
-    st.markdown('<div class="csec">Architect Narrator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="csec">Architect Narrator — Voice</div>', unsafe_allow_html=True)
     st.session_state.elevenlabs_api_key = st.text_input(
         "ElevenLabs API Key", value=st.session_state.elevenlabs_api_key,
         type="password", placeholder="sk_...", key="k_el")
+    st.session_state.heygen_voice_id = st.text_input(
+        "ElevenLabs Voice ID (optional)", value=st.session_state.heygen_voice_id,
+        placeholder="Voice clone ID or leave blank for default", key="k_vi")
+
+    st.markdown('<div class="csec">HeyGen Avatar (Premium — uses credits)</div>', unsafe_allow_html=True)
     st.session_state.heygen_api_key = st.text_input(
         "HeyGen API Key", value=st.session_state.heygen_api_key,
-        type="password", placeholder="HeyGen API key", key="k_hg")
+        type="password", placeholder="sk_V2_...", key="k_hg")
     st.session_state.heygen_avatar_id = st.text_input(
-        "HeyGen Avatar ID", value=st.session_state.heygen_avatar_id,
-        placeholder="Angad_sitting_sofa_front", key="k_av")
-    st.session_state.heygen_voice_id = st.text_input(
-        "ElevenLabs Voice ID", value=st.session_state.heygen_voice_id,
-        placeholder="Voice clone ID or leave blank for default", key="k_vi")
+        "Default Avatar ID (optional)", value=st.session_state.heygen_avatar_id,
+        placeholder="e.g. 6a15f2e40c234b1e81f51f096924305f", key="k_av")
+
+    st.markdown('<div class="csec">D-ID Avatar (Free Trial Available ✨)</div>', unsafe_allow_html=True)
+    st.caption("Get a free API key at [d-id.com](https://www.d-id.com) — ~5 free videos/month.")
+    st.session_state.did_api_key = st.text_input(
+        "D-ID API Key", value=st.session_state.did_api_key,
+        type="password", placeholder="D-ID API key", key="k_did")
     st.divider()
     ant_ok = bool(st.session_state.anthropic_api_key)
     a_ok   = bool(st.session_state.azure_api_key and st.session_state.azure_endpoint)
     s_ok   = bool(st.session_state.sp_url and st.session_state.sp_cid)
     e_ok   = bool(st.session_state.email_smtp)
-    n_ok   = bool(st.session_state.heygen_api_key)
+    n_ok   = bool(st.session_state.heygen_api_key or st.session_state.did_api_key)
+    did_ok = bool(st.session_state.did_api_key)
     ai_ok  = ant_ok or a_ok
     mode_label = "LIVE AI" if ai_ok else "DEMO MODE"
     st.markdown('<div class="cstat">'
@@ -5403,6 +5621,7 @@ with st.sidebar:
                 + '<div class="srow"><span class="sdot ' + ('on' if s_ok else 'off') + '"></span> SharePoint</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if e_ok else 'off') + '"></span> Email</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if n_ok else 'off') + '"></span> HeyGen Narrator</div>'
+                + '<div class="srow"><span class="sdot ' + ('on' if did_ok else 'off') + '"></span> D-ID (Free)</div>'
                 + '</div>', unsafe_allow_html=True)
 
 
@@ -6355,273 +6574,373 @@ def show_results():
         # ── Video generation — Step 3 ──
         st.markdown("**Step 3 — Avatar Video Generation (HeyGen)**")
 
-        if not narrator.hg_ready:
-            st.info("Add your HeyGen API Key in the sidebar to enable video generation.")
+        # ──────────────────────────────────────────────────────────────
+        # D-ID block — shown when D-ID key is configured (FREE tier)
+        # ──────────────────────────────────────────────────────────────
+        if narrator.did_ready:
+            st.info(
+                "✨ **D-ID Free Tier detected** — generate talking-head videos for FREE "
+                "(free trial: ~5 videos, then affordable pay-as-you-go). "
+                "No HeyGen credits consumed."
+            )
+            did_mode_label = "🆓 D-ID (Free)"
         else:
-            # ── HeyGen credit balance ──
-            rem, plan_cr, cr_err = narrator.check_credits()
-            if cr_err:
-                st.caption(f"Credit check failed: {cr_err}")
-            elif rem == 0:
-                st.warning(
-                    f"⚠️ HeyGen account has **0 remaining credits** (plan: {plan_cr} credits/month). "
-                    "Video generation will fail until credits are added. "
-                    "Top up at [heygen.com/pricing](https://www.heygen.com/pricing) or wait for monthly reset."
-                )
-            else:
-                st.success(f"HeyGen credits: **{rem}** remaining (plan: {plan_cr}/month)")
+            did_mode_label = None
 
-            # ── Mode selector (3 options) ──
-            mode_labels = [
-                "🎨 Custom Avatar ID",
-                "🎭 Free Stock Avatar",
-                "📸 Talking Photo (upload a photo)",
-            ]
-            mode_map = {
-                "🎨 Custom Avatar ID":                "custom",
-                "🎭 Free Stock Avatar":               "stock",
-                "📸 Talking Photo (upload a photo)":  "talking_photo",
-            }
-            current_mode_label = next(
-                (lbl for lbl, v in mode_map.items() if v == st.session_state.narrator_mode),
-                mode_labels[0],
+        # ── Platform selector ──
+        platform_options = ["HeyGen (Premium)"]
+        if did_mode_label:
+            platform_options.insert(0, did_mode_label)
+        narrator_platform = st.radio(
+            "Video platform",
+            platform_options,
+            horizontal=True,
+            key="narrator_platform_radio",
+        )
+        use_did = (narrator_platform == did_mode_label)
+
+        st.markdown("---")
+
+        # ══════════════════════════════════════════════════════════════
+        # D-ID FLOW
+        # ══════════════════════════════════════════════════════════════
+        if use_did:
+            st.markdown("**D-ID — Free Talking Avatar Video**")
+            st.caption(
+                "D-ID animates any portrait photo to match the voice. "
+                "Upload a headshot **or** paste a public image URL as the avatar source. "
+                "ElevenLabs voice (if configured in sidebar) is used automatically."
             )
-            chosen_label = st.radio(
-                "Avatar mode",
-                mode_labels,
-                index=mode_labels.index(current_mode_label),
-                horizontal=True,
-                key="narrator_mode_radio",
-            )
-            st.session_state.narrator_mode = mode_map[chosen_label]
 
-            talking_photo_id_to_use = ""
-
-            # ── Custom Avatar ID branch ──
-            if st.session_state.narrator_mode == "custom":
-                st.caption(
-                    "Paste the Avatar ID of the custom avatar you already created in your HeyGen account. "
-                    "Enable **Avatar 3 Test Mode** below to generate the video for free (watermarked). "
-                    "Disable it only when you want a final credit-consuming render."
+            # ── Source image ──
+            did_img_cols = st.columns([3, 1])
+            with did_img_cols[0]:
+                did_photo = st.file_uploader(
+                    "Upload avatar photo (JPG/PNG)", type=["jpg", "jpeg", "png"],
+                    key="did_photo_upload"
                 )
-                custom_id_input = st.text_input(
-                    "Your HeyGen Custom Avatar ID",
-                    value=st.session_state.narrator_custom_avatar_id,
-                    placeholder="e.g. Angad_sitting_sofa_front  or  a1b2c3d4e5f6…",
-                    key="narrator_custom_id_field",
+                did_url_input = st.text_input(
+                    "Or paste a public photo URL",
+                    value=st.session_state.narrator_did_image_url,
+                    placeholder="https://example.com/headshot.jpg",
+                    key="did_url_input",
                 )
-                st.session_state.narrator_custom_avatar_id = custom_id_input.strip()
-                if not st.session_state.narrator_custom_avatar_id and narrator.avatar_id:
-                    st.session_state.narrator_custom_avatar_id = narrator.avatar_id
-                    st.caption(f"Pre-filled from sidebar: `{narrator.avatar_id}`")
+                if did_url_input.strip():
+                    st.session_state.narrator_did_image_url = did_url_input.strip()
 
-            # ── Free Stock Avatar branch ──
-            elif st.session_state.narrator_mode == "stock":
-                st.caption(
-                    "Browse and pick from HeyGen's built-in **public stock avatars** — "
-                    "zero avatar-creation credits. Enable Avatar 3 Test Mode for free watermarked renders."
+            with did_img_cols[1]:
+                upload_did_btn = st.button(
+                    "⬆️ Upload to D-ID",
+                    use_container_width=True,
+                    key="btn_did_upload",
+                    disabled=did_photo is None,
                 )
-                av_cols = st.columns([2, 1, 1])
-                with av_cols[1]:
-                    fetch_avs = st.button("🔍 Fetch Free Avatars", use_container_width=True, key="btn_fetch_avs")
-                if fetch_avs:
-                    with st.spinner("Fetching HeyGen public stock avatars…"):
-                        avs, av_err = narrator.list_free_avatars()
-                    if av_err:
-                        st.error(av_err)
-                    else:
-                        st.session_state.narrator_free_avatars = avs
-                        st.success(f"Found {len(avs)} free stock avatar(s).")
 
-                if st.session_state.narrator_free_avatars:
-                    av_options = {
-                        (a["avatar_name"] or a["avatar_id"]) + (f"  [{a['gender']}]" if a.get("gender") else ""): a["avatar_id"]
-                        for a in st.session_state.narrator_free_avatars
-                    }
-                    chosen_name = st.selectbox("Select avatar", list(av_options.keys()), key="narrator_av_select")
-                    st.session_state.narrator_selected_avatar = av_options[chosen_name]
-                    st.caption(f"Avatar ID: `{st.session_state.narrator_selected_avatar}`")
-                    chosen_av = next(
-                        (a for a in st.session_state.narrator_free_avatars
-                         if a["avatar_id"] == st.session_state.narrator_selected_avatar), None
-                    )
-                    if chosen_av and chosen_av.get("preview_image_url"):
-                        st.image(chosen_av["preview_image_url"], width=120)
+            if upload_did_btn and did_photo is not None:
+                img_bytes = did_photo.read()
+                ctype = "image/png" if did_photo.name.lower().endswith(".png") else "image/jpeg"
+                with st.spinner("Uploading photo to D-ID…"):
+                    img_url, img_err = narrator.did_upload_image(img_bytes, ctype)
+                if img_err:
+                    st.error("D-ID upload failed: " + img_err)
                 else:
-                    st.info("Click **Fetch Free Avatars** to browse HeyGen's public stock avatars.")
+                    st.session_state.narrator_did_image_url = img_url
+                    st.success(f"Photo uploaded to D-ID! URL: `{img_url[:60]}…`")
 
-            # ── Talking Photo branch ──
-            else:
-                st.caption(
-                    "Upload the architect's headshot (JPG/PNG). "
-                    "HeyGen animates it — **no avatar-creation credit cost**. "
-                    "The Talking Photo ID persists; paste it to skip re-uploading next time."
-                )
-                tp_cols = st.columns([3, 1])
-                with tp_cols[0]:
-                    uploaded_photo = st.file_uploader(
-                        "Upload architect photo (JPG/PNG, max 5 MB)",
-                        type=["jpg", "jpeg", "png"],
-                        key="narrator_photo_upload",
-                    )
-                with tp_cols[1]:
-                    upload_btn = st.button(
-                        "⬆️ Upload Photo",
-                        use_container_width=True,
-                        key="btn_upload_photo",
-                        disabled=uploaded_photo is None,
-                    )
-                if upload_btn and uploaded_photo is not None:
-                    img_bytes = uploaded_photo.read()
-                    ctype = "image/png" if uploaded_photo.name.lower().endswith(".png") else "image/jpeg"
-                    with st.spinner("Uploading photo to HeyGen…"):
-                        tp_id, tp_err = narrator.upload_talking_photo(img_bytes, ctype)
-                    if tp_err:
-                        st.error("Photo upload failed: " + tp_err)
-                    else:
-                        st.session_state.narrator_photo_id = tp_id
-                        st.success(f"Talking Photo ready. ID: `{tp_id}` — save this to reuse in future sessions.")
+            effective_did_image = st.session_state.narrator_did_image_url
+            if effective_did_image:
+                st.caption(f"Avatar image: `{effective_did_image[:70]}…`")
 
-                manual_tp_id = st.text_input(
-                    "Or paste an existing Talking Photo ID",
-                    value=st.session_state.narrator_photo_id,
-                    placeholder="e.g. f5e3d2a1b4c6…",
-                    key="narrator_tp_id_input",
-                )
-                if manual_tp_id.strip():
-                    st.session_state.narrator_photo_id = manual_tp_id.strip()
-
-                talking_photo_id_to_use = st.session_state.narrator_photo_id
-                if talking_photo_id_to_use:
-                    st.caption(f"Talking Photo ID in use: `{talking_photo_id_to_use}`")
-                else:
-                    st.warning("Upload a photo or paste an existing Talking Photo ID to continue.")
-
-            st.markdown("")
-
-            # ── Avatar 3 Test Mode toggle ──────────────────────────────────────
-            # HeyGen's "test": true in the v2 payload renders the video using
-            # Avatar 3 quality for FREE — the only difference is a small
-            # HeyGen watermark in the corner.  Perfect for client previews.
-            test_cols = st.columns([1, 3])
-            with test_cols[0]:
-                test_mode_on = st.toggle(
-                    "Avatar 3 Test Mode (FREE)",
-                    value=st.session_state.narrator_test_mode,
-                    key="narrator_test_toggle",
-                    help=(
-                        "When ON: HeyGen renders for FREE using Avatar 3 quality. "
-                        "A small watermark is added — ideal for review and client preview. "
-                        "Turn OFF only for the final production render (costs 1 credit/min)."
-                    ),
-                )
-                st.session_state.narrator_test_mode = test_mode_on
-            with test_cols[1]:
-                if test_mode_on:
-                    st.success("Free render — Avatar 3 quality, watermarked. No credits consumed.")
-                else:
-                    st.warning("Production render — Avatar 3 quality, no watermark. Consumes credits.")
-
-            # ── Voice note ──
             mp3_ready = bool(st.session_state.get("narrator_mp3"))
             if mp3_ready:
-                st.caption("Voice audio ready — the avatar will lip-sync to the ElevenLabs voice.")
+                st.caption("ElevenLabs audio ready — D-ID will lip-sync to your voice clone.")
+            elif narrator.el_ready:
+                st.caption("ElevenLabs key set — D-ID will use it as the TTS provider.")
             else:
-                st.caption("No ElevenLabs audio — HeyGen will use built-in TTS. Run Step 2 for best results.")
+                st.caption("No voice configured — D-ID will use Microsoft Neural TTS (en-US-GuyNeural).")
 
-            # ── Resolve effective character ID ──
-            if st.session_state.narrator_mode == "custom":
-                effective_avatar_id  = st.session_state.narrator_custom_avatar_id
-                effective_tp_id      = ""
-            elif st.session_state.narrator_mode == "stock":
-                effective_avatar_id  = st.session_state.narrator_selected_avatar
-                effective_tp_id      = ""
-            else:
-                effective_avatar_id  = ""
-                effective_tp_id      = talking_photo_id_to_use
-
-            can_generate = script_text.strip() and (effective_avatar_id or effective_tp_id)
-
-            gen_video_btn = st.button(
-                "🎥 Generate Video (Free)" if test_mode_on else "🎥 Generate Video",
-                use_container_width=False,
-                key="btn_video",
-                disabled=not can_generate,
+            can_did = bool(script_text.strip() and effective_did_image)
+            did_btn = st.button(
+                "🆓 Generate Free Video (D-ID)",
+                disabled=not can_did,
                 type="primary",
+                key="btn_did_generate",
             )
 
-            if gen_video_btn and can_generate:
-                mp3_bytes_for_hg = st.session_state.get("narrator_mp3")
-
-                _orig_av = narrator.avatar_id
-                narrator.avatar_id = effective_avatar_id or narrator.avatar_id
-
-                mode_label = "test (free)" if test_mode_on else "production"
-                with st.spinner(f"Submitting {mode_label} render to HeyGen — may take 2–4 minutes…"):
-                    video_id, err = narrator.generate_video(
-                        script_text, mp3_bytes_for_hg,
-                        talking_photo_id=effective_tp_id,
-                        test_mode=test_mode_on,
+            if did_btn and can_did:
+                mp3_bytes_for_did = st.session_state.get("narrator_mp3")
+                with st.spinner("Submitting to D-ID — usually completes in 30–90 seconds…"):
+                    talk_id, did_err = narrator.generate_did_video(
+                        script_text, mp3_bytes_for_did, effective_did_image
                     )
-                narrator.avatar_id = _orig_av
-
-                if err:
-                    st.error("Video generation failed: " + err)
+                if did_err:
+                    st.error("D-ID submission failed: " + did_err)
                 else:
-                    st.info(f"HeyGen job submitted (video_id: `{video_id}`). Polling for completion…")
-                    progress_bar = st.progress(0)
-                    status_ph = st.empty()
-                    waited = 0
-                    max_wait = 300
-                    interval = 10
-                    video_url = None
-                    poll_err = None
-                    import urllib.request
+                    st.info(f"D-ID job submitted (talk_id: `{talk_id}`). Polling…")
+                    pb = st.progress(0)
+                    stat_ph = st.empty()
+                    waited, max_wait, interval = 0, 240, 8
+                    did_video_url = None
+                    did_poll_err  = None
                     while waited < max_wait:
-                        progress_bar.progress(min(int(waited / max_wait * 100), 95))
-                        status_ph.caption(f"Waiting for HeyGen… {waited}s / {max_wait}s")
+                        pb.progress(min(int(waited / max_wait * 100), 95))
                         time.sleep(interval)
                         waited += interval
-                        try:
-                            req = urllib.request.Request(
-                                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                                headers={"X-Api-Key": narrator.hg_key, "Accept": "application/json"},
-                                method="GET",
-                            )
-                            with urllib.request.urlopen(req, timeout=15) as resp:
-                                data = json.loads(resp.read().decode("utf-8"))
-                                status = (data.get("data") or {}).get("status", "")
-                                status_ph.caption(f"HeyGen status: **{status}** ({waited}s elapsed)")
-                                if status == "completed":
-                                    video_url = (data.get("data") or {}).get("video_url", "")
-                                    break
-                                if status in ("failed", "error"):
-                                    err_obj = (data.get("data") or {}).get("error") or {}
-                                    err_code = err_obj.get("code", "") if isinstance(err_obj, dict) else str(err_obj)
-                                    err_msg  = err_obj.get("message", "generation failed") if isinstance(err_obj, dict) else str(err_obj)
-                                    if "INSUFFICIENT_CREDIT" in err_code or "credit" in err_msg.lower():
-                                        poll_err = (
-                                            "INSUFFICIENT_CREDIT — HeyGen account has 0 remaining credits. "
-                                            "Purchase more at heygen.com/pricing or wait for monthly quota reset."
-                                        )
-                                    else:
-                                        poll_err = f"HeyGen [{err_code}]: {err_msg}"
-                                    break
-                        except Exception as pe:
-                            poll_err = str(pe)[:200]
+                        url, status, perr = narrator.poll_did_video(talk_id)
+                        stat_ph.caption(f"D-ID status: **{status}** ({waited}s elapsed)")
+                        if status == "done" and url:
+                            did_video_url = url
                             break
-                    progress_bar.progress(100)
-                    if poll_err:
-                        st.error(poll_err)
-                    elif video_url:
+                        if status == "error":
+                            did_poll_err = perr or "D-ID generation failed"
+                            break
+                    pb.progress(100)
+                    if did_poll_err:
+                        st.error(did_poll_err)
+                    elif did_video_url:
                         st.session_state["narrator_result"] = {
-                            "video_url": video_url, "video_id": video_id,
-                            "script": script_text, "test_mode": test_mode_on,
+                            "video_url": did_video_url, "video_id": talk_id,
+                            "script": script_text, "platform": "D-ID (Free)",
                         }
-                        st.success("Video ready!" + (" (watermarked test render)" if test_mode_on else ""))
+                        st.success("D-ID video ready!")
                     else:
-                        st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
-                        st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text, "test_mode": test_mode_on}
+                        st.warning(
+                            f"D-ID did not complete within {max_wait}s. "
+                            f"Check your D-ID dashboard for talk_id `{talk_id}`."
+                        )
+
+        # ══════════════════════════════════════════════════════════════
+        # HEYGEN FLOW
+        # ══════════════════════════════════════════════════════════════
+        else:
+            if not narrator.hg_ready:
+                st.info("Add your HeyGen API Key in the sidebar to enable video generation.")
+            else:
+                # ── HeyGen credit balance ──
+                rem, plan_cr, cr_err = narrator.check_credits()
+                if cr_err:
+                    st.caption(f"Credit check failed: {cr_err}")
+                elif rem == 0:
+                    st.warning(
+                        f"⚠️ HeyGen account has **0 remaining credits** (plan: {plan_cr}/month). "
+                        "Add D-ID key (sidebar) for free video generation, or top up at "
+                        "[heygen.com/pricing](https://www.heygen.com/pricing)."
+                    )
+                else:
+                    st.success(f"HeyGen credits: **{rem}** remaining (plan: {plan_cr}/month)")
+
+                # ── Mode selector (3 options) ──
+                mode_labels = [
+                    "🎨 Custom Avatar ID",
+                    "🎭 Free Stock Avatar",
+                    "📸 Talking Photo (upload a photo)",
+                ]
+                mode_map = {
+                    "🎨 Custom Avatar ID":               "custom",
+                    "🎭 Free Stock Avatar":              "stock",
+                    "📸 Talking Photo (upload a photo)": "talking_photo",
+                }
+                current_mode_label = next(
+                    (lbl for lbl, v in mode_map.items() if v == st.session_state.narrator_mode),
+                    mode_labels[0],
+                )
+                chosen_label = st.radio(
+                    "Avatar mode",
+                    mode_labels,
+                    index=mode_labels.index(current_mode_label),
+                    horizontal=True,
+                    key="narrator_mode_radio",
+                )
+                st.session_state.narrator_mode = mode_map[chosen_label]
+
+                talking_photo_id_to_use = ""
+
+                # ── Custom Avatar ID branch ──
+                if st.session_state.narrator_mode == "custom":
+                    st.caption("Paste the Avatar ID of the custom avatar you created in your HeyGen account.")
+                    custom_id_input = st.text_input(
+                        "Your HeyGen Custom Avatar ID",
+                        value=st.session_state.narrator_custom_avatar_id,
+                        placeholder="e.g. 6a15f2e40c234b1e81f51f096924305f",
+                        key="narrator_custom_id_field",
+                    )
+                    st.session_state.narrator_custom_avatar_id = custom_id_input.strip()
+                    if not st.session_state.narrator_custom_avatar_id and narrator.avatar_id:
+                        st.session_state.narrator_custom_avatar_id = narrator.avatar_id
+                        st.caption(f"Pre-filled from sidebar: `{narrator.avatar_id}`")
+
+                # ── Free Stock Avatar branch ──
+                elif st.session_state.narrator_mode == "stock":
+                    av_cols = st.columns([2, 1, 1])
+                    with av_cols[1]:
+                        fetch_avs = st.button("🔍 Fetch Avatars", use_container_width=True, key="btn_fetch_avs")
+                    if fetch_avs:
+                        with st.spinner("Fetching HeyGen avatars…"):
+                            avs, av_err = narrator.list_free_avatars()
+                        if av_err:
+                            st.error(av_err)
+                        else:
+                            st.session_state.narrator_free_avatars = avs
+                            st.success(f"Found {len(avs)} avatar(s).")
+                    if st.session_state.narrator_free_avatars:
+                        av_options = {
+                            (a["avatar_name"] or a["avatar_id"]) + (f"  [{a['gender']}]" if a.get("gender") else ""): a["avatar_id"]
+                            for a in st.session_state.narrator_free_avatars
+                        }
+                        chosen_name = st.selectbox("Select avatar", list(av_options.keys()), key="narrator_av_select")
+                        st.session_state.narrator_selected_avatar = av_options[chosen_name]
+                        st.caption(f"Avatar ID: `{st.session_state.narrator_selected_avatar}`")
+                        chosen_av = next(
+                            (a for a in st.session_state.narrator_free_avatars
+                             if a["avatar_id"] == st.session_state.narrator_selected_avatar), None
+                        )
+                        if chosen_av and chosen_av.get("preview_image_url"):
+                            st.image(chosen_av["preview_image_url"], width=120)
+                    else:
+                        st.info("Click **Fetch Avatars** to browse available avatars.")
+
+                # ── Talking Photo branch ──
+                else:
+                    tp_cols = st.columns([3, 1])
+                    with tp_cols[0]:
+                        uploaded_photo = st.file_uploader(
+                            "Upload architect photo (JPG/PNG, max 5 MB)",
+                            type=["jpg", "jpeg", "png"],
+                            key="narrator_photo_upload",
+                        )
+                    with tp_cols[1]:
+                        upload_btn = st.button(
+                            "⬆️ Upload Photo",
+                            use_container_width=True,
+                            key="btn_upload_photo",
+                            disabled=uploaded_photo is None,
+                        )
+                    if upload_btn and uploaded_photo is not None:
+                        img_bytes = uploaded_photo.read()
+                        ctype = "image/png" if uploaded_photo.name.lower().endswith(".png") else "image/jpeg"
+                        with st.spinner("Uploading photo to HeyGen…"):
+                            tp_id, tp_err = narrator.upload_talking_photo(img_bytes, ctype)
+                        if tp_err:
+                            st.error("Photo upload failed: " + tp_err)
+                        else:
+                            st.session_state.narrator_photo_id = tp_id
+                            st.success(f"Talking Photo ready. ID: `{tp_id}`")
+
+                    manual_tp_id = st.text_input(
+                        "Or paste an existing Talking Photo ID",
+                        value=st.session_state.narrator_photo_id,
+                        placeholder="e.g. f5e3d2a1b4c6…",
+                        key="narrator_tp_id_input",
+                    )
+                    if manual_tp_id.strip():
+                        st.session_state.narrator_photo_id = manual_tp_id.strip()
+
+                    talking_photo_id_to_use = st.session_state.narrator_photo_id
+                    if talking_photo_id_to_use:
+                        st.caption(f"Talking Photo ID in use: `{talking_photo_id_to_use}`")
+                    else:
+                        st.warning("Upload a photo or paste an existing Talking Photo ID to continue.")
+
+                st.markdown("")
+
+                # ── Voice note ──
+                mp3_ready = bool(st.session_state.get("narrator_mp3"))
+                if mp3_ready:
+                    st.caption("Voice audio ready — the avatar will lip-sync to the ElevenLabs voice.")
+                else:
+                    st.caption("No ElevenLabs audio — HeyGen TTS will be used. Run Step 2 for best results.")
+
+                # ── Resolve effective character ID ──
+                if st.session_state.narrator_mode == "custom":
+                    effective_avatar_id = st.session_state.narrator_custom_avatar_id
+                    effective_tp_id     = ""
+                elif st.session_state.narrator_mode == "stock":
+                    effective_avatar_id = st.session_state.narrator_selected_avatar
+                    effective_tp_id     = ""
+                else:
+                    effective_avatar_id = ""
+                    effective_tp_id     = talking_photo_id_to_use
+
+                can_generate = script_text.strip() and (effective_avatar_id or effective_tp_id)
+
+                gen_video_btn = st.button(
+                    "🎥 Generate Video",
+                    use_container_width=False,
+                    key="btn_video",
+                    disabled=not can_generate,
+                    type="primary",
+                )
+
+                if gen_video_btn and can_generate:
+                    mp3_bytes_for_hg = st.session_state.get("narrator_mp3")
+                    _orig_av = narrator.avatar_id
+                    narrator.avatar_id = effective_avatar_id or narrator.avatar_id
+                    with st.spinner("Submitting to HeyGen — may take 2–4 minutes…"):
+                        video_id, err = narrator.generate_video(
+                            script_text, mp3_bytes_for_hg,
+                            talking_photo_id=effective_tp_id,
+                            test_mode=False,
+                        )
+                    narrator.avatar_id = _orig_av
+
+                    if err:
+                        st.error("Video generation failed: " + err)
+                    else:
+                        st.info(f"HeyGen job submitted (video_id: `{video_id}`). Polling for completion…")
+                        progress_bar = st.progress(0)
+                        status_ph = st.empty()
+                        waited, max_wait, interval = 0, 300, 10
+                        video_url = None
+                        poll_err  = None
+                        import urllib.request
+                        while waited < max_wait:
+                            progress_bar.progress(min(int(waited / max_wait * 100), 95))
+                            status_ph.caption(f"Waiting for HeyGen… {waited}s / {max_wait}s")
+                            time.sleep(interval)
+                            waited += interval
+                            try:
+                                req = urllib.request.Request(
+                                    f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                                    headers={"X-Api-Key": narrator.hg_key, "Accept": "application/json"},
+                                    method="GET",
+                                )
+                                with urllib.request.urlopen(req, timeout=15) as resp:
+                                    data = json.loads(resp.read().decode("utf-8"))
+                                    status = (data.get("data") or {}).get("status", "")
+                                    status_ph.caption(f"HeyGen status: **{status}** ({waited}s elapsed)")
+                                    if status == "completed":
+                                        video_url = (data.get("data") or {}).get("video_url", "")
+                                        break
+                                    if status in ("failed", "error"):
+                                        err_obj  = (data.get("data") or {}).get("error") or {}
+                                        err_code = err_obj.get("code", "") if isinstance(err_obj, dict) else str(err_obj)
+                                        err_msg  = err_obj.get("message", "generation failed") if isinstance(err_obj, dict) else str(err_obj)
+                                        if "INSUFFICIENT_CREDIT" in err_code or "credit" in err_msg.lower():
+                                            poll_err = (
+                                                "INSUFFICIENT_CREDIT — HeyGen account has 0 remaining credits. "
+                                                "Add your D-ID API key (sidebar) for free video generation, "
+                                                "or top up at heygen.com/pricing."
+                                            )
+                                        else:
+                                            poll_err = f"HeyGen [{err_code}]: {err_msg}"
+                                        break
+                            except Exception as pe:
+                                poll_err = str(pe)[:200]
+                                break
+                        progress_bar.progress(100)
+                        if poll_err:
+                            st.error(poll_err)
+                        elif video_url:
+                            st.session_state["narrator_result"] = {
+                                "video_url": video_url, "video_id": video_id,
+                                "script": script_text, "platform": "HeyGen",
+                            }
+                            st.success("Video ready!")
+                        else:
+                            st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
+                            st.session_state["narrator_result"] = {
+                                "video_id": video_id, "script": script_text, "platform": "HeyGen"
+                            }
 
         # ── Result display ──
         nr = st.session_state.get("narrator_result")
@@ -6635,8 +6954,9 @@ def show_results():
                 with r_cols[1]:
                     st.markdown("**Video Details**")
                     st.markdown(f"- Video ID: `{nr.get('video_id', 'N/A')}`")
-                    test_badge = "🟢 Free test render (watermarked)" if nr.get("test_mode") else "🔵 Production render"
-                    st.markdown(f"- Render: {test_badge}")
+                    platform_badge = nr.get("platform", "HeyGen")
+                    badge_icon = "🆓" if "D-ID" in platform_badge else "🎬"
+                    st.markdown(f"- Platform: {badge_icon} {platform_badge}")
                     st.markdown(f"- Words: {len(safe_str(nr.get('script','')).split())}")
                     st.markdown("")
                     st.markdown(f"[Open in browser]({nr['video_url']})", unsafe_allow_html=False)
