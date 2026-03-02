@@ -1,4 +1,4 @@
-import sys, os, base64, zipfile
+import sys, os, base64, zipfile, sqlite3
 import streamlit as st
 
 st.set_page_config(page_title="ECI Presale", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
@@ -58,6 +58,160 @@ try:
     import requests as _requests
 except ImportError:
     _requests = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PERSISTENT RUN DATABASE  (SQLite — survives page refreshes)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Store the DB next to this file so it persists between Streamlit restarts.
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eci_runs.db")
+
+# Category keyword mapping — used to auto-tag every run
+_CATEGORY_KEYWORDS = {
+    "AI":    ["ai", "openai", "gpt", "claude", "gemini", "llm", "machine learning",
+               "nlp", "copilot", "foundry", "azure ai", "cognitive", "neural",
+               "vector", "embedding", "rag", "chatbot", "generative"],
+    "Data":  ["data", "analytics", "bi", "power bi", "data lake", "databricks",
+               "synapse", "warehouse", "etl", "pipeline", "reporting", "dashboard",
+               "sql", "cosmos", "tableau", "fabric", "dbt", "ingestion"],
+    "Cloud": ["cloud", "azure", "aws", "gcp", "kubernetes", "docker", "devops",
+               "ci/cd", "microservice", "serverless", "migration", "infrastructure",
+               "terraform", "container", "app service", "functions"],
+}
+
+def _detect_category(project_type: str, tech_stack: list) -> str:
+    """Return the best-fit category: AI | Data | Cloud | General."""
+    combined = (project_type + " " + " ".join(tech_stack or [])).lower()
+    scores   = {cat: sum(1 for kw in kws if kw in combined)
+                for cat, kws in _CATEGORY_KEYWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "General"
+
+
+def _db_init():
+    """Create the proposals table if it doesn't exist."""
+    con = sqlite3.connect(_DB_PATH)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS proposals (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts            TEXT    NOT NULL,
+            category      TEXT    NOT NULL DEFAULT 'General',
+            project_type  TEXT,
+            total_hours   INTEGER DEFAULT 0,
+            duration_weeks TEXT,
+            monthly_cost  INTEGER DEFAULT 0,
+            annual_cost   INTEGER DEFAULT 0,
+            risk_level    TEXT,
+            risk_score    INTEGER DEFAULT 0,
+            req_count     INTEGER DEFAULT 0,
+            tech_stack    TEXT    DEFAULT '[]',
+            model_used    TEXT,
+            three_point   TEXT    DEFAULT '{}',
+            results_json  TEXT    DEFAULT '{}'
+        )
+    """)
+    con.commit()
+    con.close()
+
+_db_init()   # run once at import time
+
+
+def _db_save_run(snapshot: dict, full_results: dict) -> int:
+    """Insert a run into the DB and return its new row id."""
+    tech = snapshot.get("tech_stack", [])
+    cat  = _detect_category(snapshot.get("project_type", ""), tech)
+    con  = sqlite3.connect(_DB_PATH)
+    cur  = con.execute("""
+        INSERT INTO proposals
+            (ts, category, project_type, total_hours, duration_weeks,
+             monthly_cost, annual_cost, risk_level, risk_score,
+             req_count, tech_stack, model_used, three_point, results_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        snapshot.get("ts",             datetime.now().strftime("%Y-%m-%d %H:%M")),
+        cat,
+        snapshot.get("project_type",   ""),
+        snapshot.get("total_hours",    0),
+        snapshot.get("duration_weeks", ""),
+        snapshot.get("monthly_cost",   0),
+        snapshot.get("annual_cost",    0),
+        snapshot.get("risk_level",     ""),
+        snapshot.get("risk_score",     0),
+        snapshot.get("req_count",      0),
+        json.dumps(tech),
+        snapshot.get("model_used",     ""),
+        json.dumps(snapshot.get("three_point", {})),
+        json.dumps(full_results, default=str),
+    ))
+    row_id = cur.lastrowid
+    con.commit()
+    con.close()
+    return row_id
+
+
+def _db_load_runs(category: str = "All") -> list:
+    """Return list of run dicts (no results_json) newest-first."""
+    con = sqlite3.connect(_DB_PATH)
+    con.row_factory = sqlite3.Row
+    if category and category != "All":
+        rows = con.execute(
+            "SELECT * FROM proposals WHERE category=? ORDER BY id DESC", (category,)
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM proposals ORDER BY id DESC"
+        ).fetchall()
+    con.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["tech_stack"]  = json.loads(d.get("tech_stack",  "[]"))
+        except Exception:
+            d["tech_stack"]  = []
+        try:
+            d["three_point"] = json.loads(d.get("three_point", "{}"))
+        except Exception:
+            d["three_point"] = {}
+        d.pop("results_json", None)   # omit blob from list query
+        result.append(d)
+    return result
+
+
+def _db_load_results(run_id: int) -> dict:
+    """Return the full results_json for a single run (parsed)."""
+    con = sqlite3.connect(_DB_PATH)
+    row = con.execute(
+        "SELECT results_json FROM proposals WHERE id=?", (run_id,)
+    ).fetchone()
+    con.close()
+    if row:
+        try:
+            return json.loads(row[0])
+        except Exception:
+            pass
+    return {}
+
+
+def _db_delete_run(run_id: int):
+    con = sqlite3.connect(_DB_PATH)
+    con.execute("DELETE FROM proposals WHERE id=?", (run_id,))
+    con.commit()
+    con.close()
+
+
+def _db_category_counts() -> dict:
+    """Return {category: count, 'All': total} for the badge pills."""
+    con = sqlite3.connect(_DB_PATH)
+    rows = con.execute(
+        "SELECT category, COUNT(*) as n FROM proposals GROUP BY category"
+    ).fetchall()
+    total = con.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
+    con.close()
+    counts = {r[0]: r[1] for r in rows}
+    counts["All"] = total
+    return counts
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6236,25 +6390,31 @@ def run_pipeline(files):
     }
     st.session_state.model_metrics["proposals_processed"] += 1
 
-    # ── Save version snapshot ──
+    # ── Save to persistent SQLite DB + in-memory versions ──
     snapshot = {
-        "ts":           datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "project_type": safe_str(semantic.get("project_type", "")),
-        "total_hours":  safe_int(time_est.get("total_hours", 0)),
+        "ts":             datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "project_type":   safe_str(semantic.get("project_type", "")),
+        "total_hours":    safe_int(time_est.get("total_hours", 0)),
         "duration_weeks": safe_str(time_est.get("duration_weeks", "")),
-        "monthly_cost": safe_int(cost_est.get("total_monthly_cost", 0)),
-        "annual_cost":  safe_int(cost_est.get("total_annual_cost", 0)),
-        "risk_level":   safe_str(risk.get("overall_level", "")),
-        "risk_score":   safe_int(risk.get("overall_score", 0)),
-        "req_count":    len(safe_list(semantic.get("requirements", []))),
-        "tech_stack":   safe_list(semantic.get("technology_stack", []))[:10],
-        "model_used":   model_name,
-        "three_point":  time_est.get("three_point", {}),
+        "monthly_cost":   safe_int(cost_est.get("total_monthly_cost", 0)),
+        "annual_cost":    safe_int(cost_est.get("total_annual_cost", 0)),
+        "risk_level":     safe_str(risk.get("overall_level", "")),
+        "risk_score":     safe_int(risk.get("overall_score", 0)),
+        "req_count":      len(safe_list(semantic.get("requirements", []))),
+        "tech_stack":     safe_list(semantic.get("technology_stack", []))[:10],
+        "model_used":     model_name,
+        "three_point":    time_est.get("three_point", {}),
     }
+    # Persist to disk
+    try:
+        run_id = _db_save_run(snapshot, st.session_state.processing_results)
+        st.session_state["_last_run_id"] = run_id
+    except Exception as _db_err:
+        st.warning(f"DB save warning: {_db_err}")
+    # Keep last 20 in-memory for History tab comparison
     if "proposal_versions" not in st.session_state:
         st.session_state.proposal_versions = []
     st.session_state.proposal_versions.append(snapshot)
-    # Keep last 20 versions
     st.session_state.proposal_versions = st.session_state.proposal_versions[-20:]
     # Reset chat context for new proposal
     st.session_state.chat_messages = []
@@ -7725,11 +7885,241 @@ def tab_admin():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  TAB 3: RUN LIBRARY  (persistent across refreshes — SQLite backed)
+# ═══════════════════════════════════════════════════════════════════════
+
+_CAT_ICONS = {"AI": "🤖", "Data": "📊", "Cloud": "☁️", "General": "📁", "All": "🗂️"}
+_CAT_COLORS = {
+    "AI":      "#7b61ff",
+    "Data":    "#00d4aa",
+    "Cloud":   "#00b4d8",
+    "General": "#94a3b8",
+}
+
+
+def _cat_badge(cat: str) -> str:
+    icon  = _CAT_ICONS.get(cat, "📁")
+    color = _CAT_COLORS.get(cat, "#94a3b8")
+    return (
+        f'<span style="background:{color}22;color:{color};border:1px solid {color}55;'
+        f'border-radius:6px;padding:2px 9px;font-size:.72rem;font-weight:700">'
+        f'{icon} {cat}</span>'
+    )
+
+
+def _risk_badge(level: str) -> str:
+    color = {"Low": "#06d6a0", "Medium": "#ffd166", "High": "#ff6b6b"}.get(level, "#94a3b8")
+    return (
+        f'<span style="color:{color};font-weight:700;font-size:.8rem">'
+        f'{"🟢" if level=="Low" else "🟡" if level=="Medium" else "🔴" if level=="High" else "⚪"} {level}</span>'
+    )
+
+
+def tab_run_library():
+    import pandas as pd
+
+    st.markdown('<div class="shdr"><span class="shdr-i">🗂️</span> Run Library — All Proposals</div>', unsafe_allow_html=True)
+    st.markdown(
+        "Every pipeline run is **automatically saved here** and survives page refreshes, "
+        "browser closes, and Streamlit restarts. Filter by category, restore any run, "
+        "or drill into the full proposal data."
+    )
+    st.markdown("---")
+
+    # ── Category filter pills ──────────────────────────────────────────
+    counts = _db_category_counts()
+    cats   = ["All", "AI", "Data", "Cloud", "General"]
+    pill_html = ""
+    for cat in cats:
+        n     = counts.get(cat, 0)
+        icon  = _CAT_ICONS.get(cat, "📁")
+        color = _CAT_COLORS.get(cat, "#94a3b8") if cat != "All" else "#e2e8f0"
+        pill_html += (
+            f'<span style="background:{color}22;color:{color if cat!="All" else "#e2e8f0"};'
+            f'border:1px solid {color}55;border-radius:20px;padding:4px 14px;'
+            f'font-size:.78rem;font-weight:700;margin-right:6px">'
+            f'{icon} {cat} ({n})</span>'
+        )
+    st.markdown(pill_html, unsafe_allow_html=True)
+    st.markdown("")
+
+    filter_cols = st.columns([2, 2, 4])
+    with filter_cols[0]:
+        selected_cat = st.selectbox(
+            "Category", cats,
+            format_func=lambda c: f"{_CAT_ICONS.get(c,'📁')} {c} ({counts.get(c,0)})",
+            key="lib_cat_filter"
+        )
+    with filter_cols[1]:
+        sort_by = st.selectbox("Sort by", ["Newest", "Oldest", "Highest Cost", "Most Hours", "Highest Risk"], key="lib_sort")
+    with filter_cols[2]:
+        search_q = st.text_input("Search project type / tech stack", placeholder="e.g. migration, GPT, retail…", key="lib_search")
+
+    # ── Load + filter ──────────────────────────────────────────────────
+    runs = _db_load_runs(selected_cat)
+    if search_q.strip():
+        q = search_q.strip().lower()
+        runs = [
+            r for r in runs
+            if q in (r.get("project_type") or "").lower()
+            or any(q in t.lower() for t in (r.get("tech_stack") or []))
+        ]
+
+    sort_key_map = {
+        "Newest":       lambda r: -r["id"],
+        "Oldest":       lambda r:  r["id"],
+        "Highest Cost": lambda r: -(r.get("monthly_cost") or 0),
+        "Most Hours":   lambda r: -(r.get("total_hours") or 0),
+        "Highest Risk": lambda r: -(r.get("risk_score") or 0),
+    }
+    runs.sort(key=sort_key_map.get(sort_by, lambda r: -r["id"]))
+
+    if not runs:
+        st.info(
+            "No runs saved yet. Upload a scope document in **⚡ Business Estimation** "
+            "and click **Analyse** — the result will appear here automatically."
+        )
+        return
+
+    st.markdown(f"**{len(runs)} proposal{'s' if len(runs)!=1 else ''}** found")
+    st.markdown("---")
+
+    # ── Summary table ──────────────────────────────────────────────────
+    with st.expander("📋 Table View", expanded=False):
+        tbl_rows = []
+        for r in runs:
+            tbl_rows.append({
+                "ID":       r["id"],
+                "Time":     r.get("ts", ""),
+                "Category": _CAT_ICONS.get(r.get("category",""), "📁") + " " + r.get("category",""),
+                "Project":  r.get("project_type", ""),
+                "Hours":    r.get("total_hours", 0),
+                "Weeks":    r.get("duration_weeks", ""),
+                "$/mo":     f"${r.get('monthly_cost',0):,}",
+                "Risk":     r.get("risk_level", ""),
+                "Reqs":     r.get("req_count", 0),
+                "Model":    r.get("model_used", ""),
+            })
+        st.dataframe(pd.DataFrame(tbl_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("")
+
+    # ── Card grid ──────────────────────────────────────────────────────
+    COLS = 2
+    grid_cols = st.columns(COLS)
+    for idx, run in enumerate(runs):
+        col = grid_cols[idx % COLS]
+        cat   = run.get("category", "General")
+        c_col = _CAT_COLORS.get(cat, "#94a3b8")
+        hours = run.get("total_hours", 0)
+        cost  = run.get("monthly_cost", 0)
+        risk  = run.get("risk_level", "")
+        three = run.get("three_point", {}) or {}
+        tech  = (run.get("tech_stack") or [])[:5]
+        tech_pills = " ".join(
+            f'<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;'
+            f'padding:1px 6px;font-size:.68rem;color:#94a3b8">{t}</span>'
+            for t in tech
+        )
+        with col:
+            st.markdown(
+                f'<div style="background:#111827;border:1px solid {c_col}44;border-radius:12px;'
+                f'padding:18px 20px;margin-bottom:14px;border-left:3px solid {c_col}">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'
+                f'  <div>{_cat_badge(cat)}</div>'
+                f'  <div style="font-size:.7rem;color:#64748b">#{run["id"]} · {run.get("ts","")}</div>'
+                f'</div>'
+                f'<div style="font-size:1rem;font-weight:700;color:#e2e8f0;margin-bottom:6px">'
+                f'  {run.get("project_type","Untitled Proposal")}'
+                f'</div>'
+                f'<div style="display:flex;gap:20px;margin-bottom:10px">'
+                f'  <div style="text-align:center">'
+                f'    <div style="font-size:1.1rem;font-weight:700;color:#00d4aa">{hours:,}h</div>'
+                f'    <div style="font-size:.65rem;color:#64748b">HOURS</div>'
+                f'  </div>'
+                f'  <div style="text-align:center">'
+                f'    <div style="font-size:1.1rem;font-weight:700;color:#00b4d8">${cost:,}/mo</div>'
+                f'    <div style="font-size:.65rem;color:#64748b">INFRA</div>'
+                f'  </div>'
+                f'  <div style="text-align:center">'
+                f'    <div style="font-size:.9rem">{_risk_badge(risk)}</div>'
+                f'    <div style="font-size:.65rem;color:#64748b">RISK</div>'
+                f'  </div>'
+                f'  <div style="text-align:center">'
+                f'    <div style="font-size:.75rem;color:#94a3b8">'
+                f'      {three.get("optimistic","?")}–{three.get("pessimistic","?")} h</div>'
+                f'    <div style="font-size:.65rem;color:#64748b">3-PT RANGE</div>'
+                f'  </div>'
+                f'</div>'
+                f'<div style="margin-bottom:10px">{tech_pills}</div>'
+                f'<div style="font-size:.68rem;color:#475569">Model: {run.get("model_used","")}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            act_cols = st.columns(3)
+            with act_cols[0]:
+                if st.button("📂 Restore", key=f"lib_restore_{run['id']}", use_container_width=True):
+                    with st.spinner("Loading run from database…"):
+                        full = _db_load_results(run["id"])
+                    if full:
+                        st.session_state.processing_results = full
+                        st.session_state["_last_run_id"]    = run["id"]
+                        st.session_state.chat_messages      = []
+                        st.success(f"Run #{run['id']} restored — switch to ⚡ Business Estimation to view.")
+                        st.rerun()
+                    else:
+                        st.error("Could not load results for this run.")
+            with act_cols[1]:
+                dl_data = _db_load_results(run["id"])
+                st.download_button(
+                    "📥 JSON",
+                    data=json.dumps(dl_data, indent=2, default=str),
+                    file_name=f"ECI_Run_{run['id']}_{run.get('ts','').replace(':','-').replace(' ','_')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key=f"lib_dl_{run['id']}",
+                )
+            with act_cols[2]:
+                if st.button("🗑️ Delete", key=f"lib_del_{run['id']}", use_container_width=True):
+                    _db_delete_run(run["id"])
+                    st.rerun()
+
+    st.markdown("---")
+    # ── Bulk actions ──────────────────────────────────────────────────
+    bulk_cols = st.columns([2, 2, 4])
+    with bulk_cols[0]:
+        if st.button("🗑️ Delete All Runs", use_container_width=True, type="secondary"):
+            con = sqlite3.connect(_DB_PATH)
+            con.execute("DELETE FROM proposals")
+            con.commit()
+            con.close()
+            st.success("All runs deleted.")
+            st.rerun()
+    with bulk_cols[1]:
+        all_runs_full = _db_load_runs("All")
+        if all_runs_full:
+            st.download_button(
+                "📦 Export All (JSON)",
+                data=json.dumps(all_runs_full, indent=2, default=str),
+                file_name=f"ECI_All_Runs_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json",
+                use_container_width=True,
+                key="lib_export_all",
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════
 
-main_t1, main_t2 = st.tabs(["⚡Business Estimation", "⚙️ Admin & Training"])
+main_t1, main_t2, main_t3 = st.tabs([
+    "⚡ Business Estimation",
+    "🗂️ Run Library",
+    "⚙️ Admin & Training",
+])
 with main_t1:
     tab_presale()
 with main_t2:
+    tab_run_library()
+with main_t3:
     tab_admin()
