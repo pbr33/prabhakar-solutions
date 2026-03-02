@@ -2955,18 +2955,22 @@ class ArchitectNarrator:
     #  Step 3 — Video generation (HeyGen)                                 #
     # ------------------------------------------------------------------ #
     def generate_video(self, script: str, mp3_bytes: bytes | None,
-                       talking_photo_id: str = "") -> tuple:
+                       talking_photo_id: str = "",
+                       test_mode: bool = False) -> tuple:
         """Submit a HeyGen v2 video generation job and return (video_id, error).
 
-        Modes
-        -----
-        talking_photo_id set → uses HeyGen "talking_photo" character (free to
-            create in HeyGen dashboard; no custom-avatar credit consumed).
-        talking_photo_id empty → uses "avatar" character with self.avatar_id.
+        Character modes
+        ---------------
+        talking_photo_id set → type="talking_photo" (free to create)
+        talking_photo_id empty → type="avatar" with self.avatar_id
+            (works for both free stock avatars and custom Avatar 3 IDs)
 
-        Voice source: if mp3_bytes is supplied the audio is sent as base64 so
-        the character lip-syncs to the ElevenLabs voice clone.  Otherwise
-        HeyGen's built-in TTS is used.
+        test_mode=True → adds "test": true to the HeyGen payload.
+            HeyGen renders the video for FREE using Avatar 3 quality but
+            adds a small watermark.  Perfect for review/approval before
+            spending production credits.
+
+        Voice: base64 ElevenLabs MP3 for lip-sync, or HeyGen built-in TTS.
         """
         if not self.hg_ready:
             return None, "HeyGen API key or Avatar ID not configured."
@@ -2998,6 +3002,8 @@ class ArchitectNarrator:
             }
 
         payload = json.dumps({
+            "test": test_mode,          # True = free render (Avatar 3, watermarked)
+            "caption": False,
             "video_inputs": [{
                 "character": char_block,
                 "voice": voice_block,
@@ -5126,10 +5132,12 @@ _defaults = {
     "elevenlabs_api_key": "", "heygen_api_key": "",
     "heygen_avatar_id": "", "heygen_voice_id": "",
     "narrator_result": None,
-    "narrator_mode": "stock",
+    "narrator_mode": "custom",
     "narrator_free_avatars": [],
     "narrator_photo_id": "",
     "narrator_selected_avatar": "",
+    "narrator_custom_avatar_id": "",
+    "narrator_test_mode": True,
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
@@ -6165,18 +6173,21 @@ def show_results():
 
         # ── Video generation — Step 3 ──
         st.markdown("**Step 3 — Avatar Video Generation (HeyGen)**")
-        st.caption(
-            "Choose **Free Stock Avatar** to pick from HeyGen's built-in public avatars "
-            "(zero avatar-creation credits). Choose **Talking Photo** to animate any still "
-            "photo — upload the architect's headshot once and reuse it forever, also free to create."
-        )
 
         if not narrator.hg_ready:
-            st.info("Add HeyGen API Key in the sidebar. Avatar ID is only needed for stock-avatar mode.")
+            st.info("Add your HeyGen API Key in the sidebar to enable video generation.")
         else:
-            # ── Mode selector ──
-            mode_labels = ["🎭 Free Stock Avatar", "📸 Talking Photo (upload a photo)"]
-            mode_map    = {"🎭 Free Stock Avatar": "stock", "📸 Talking Photo (upload a photo)": "talking_photo"}
+            # ── Mode selector (3 options) ──
+            mode_labels = [
+                "🎨 Custom Avatar ID",
+                "🎭 Free Stock Avatar",
+                "📸 Talking Photo (upload a photo)",
+            ]
+            mode_map = {
+                "🎨 Custom Avatar ID":                "custom",
+                "🎭 Free Stock Avatar":               "stock",
+                "📸 Talking Photo (upload a photo)":  "talking_photo",
+            }
             current_mode_label = next(
                 (lbl for lbl, v in mode_map.items() if v == st.session_state.narrator_mode),
                 mode_labels[0],
@@ -6192,8 +6203,30 @@ def show_results():
 
             talking_photo_id_to_use = ""
 
+            # ── Custom Avatar ID branch ──
+            if st.session_state.narrator_mode == "custom":
+                st.caption(
+                    "Paste the Avatar ID of the custom avatar you already created in your HeyGen account. "
+                    "Enable **Avatar 3 Test Mode** below to generate the video for free (watermarked). "
+                    "Disable it only when you want a final credit-consuming render."
+                )
+                custom_id_input = st.text_input(
+                    "Your HeyGen Custom Avatar ID",
+                    value=st.session_state.narrator_custom_avatar_id,
+                    placeholder="e.g. Angad_sitting_sofa_front  or  a1b2c3d4e5f6…",
+                    key="narrator_custom_id_field",
+                )
+                st.session_state.narrator_custom_avatar_id = custom_id_input.strip()
+                if not st.session_state.narrator_custom_avatar_id and narrator.avatar_id:
+                    st.session_state.narrator_custom_avatar_id = narrator.avatar_id
+                    st.caption(f"Pre-filled from sidebar: `{narrator.avatar_id}`")
+
             # ── Free Stock Avatar branch ──
-            if st.session_state.narrator_mode == "stock":
+            elif st.session_state.narrator_mode == "stock":
+                st.caption(
+                    "Browse and pick from HeyGen's built-in **public stock avatars** — "
+                    "zero avatar-creation credits. Enable Avatar 3 Test Mode for free watermarked renders."
+                )
                 av_cols = st.columns([2, 1, 1])
                 with av_cols[1]:
                     fetch_avs = st.button("🔍 Fetch Free Avatars", use_container_width=True, key="btn_fetch_avs")
@@ -6211,15 +6244,9 @@ def show_results():
                         (a["avatar_name"] or a["avatar_id"]) + (f"  [{a['gender']}]" if a.get("gender") else ""): a["avatar_id"]
                         for a in st.session_state.narrator_free_avatars
                     }
-                    chosen_name = st.selectbox(
-                        "Select free avatar",
-                        list(av_options.keys()),
-                        key="narrator_av_select",
-                    )
+                    chosen_name = st.selectbox("Select avatar", list(av_options.keys()), key="narrator_av_select")
                     st.session_state.narrator_selected_avatar = av_options[chosen_name]
                     st.caption(f"Avatar ID: `{st.session_state.narrator_selected_avatar}`")
-
-                    # Show preview image if available
                     chosen_av = next(
                         (a for a in st.session_state.narrator_free_avatars
                          if a["avatar_id"] == st.session_state.narrator_selected_avatar), None
@@ -6228,16 +6255,13 @@ def show_results():
                         st.image(chosen_av["preview_image_url"], width=120)
                 else:
                     st.info("Click **Fetch Free Avatars** to browse HeyGen's public stock avatars.")
-                    # Fall back to manually entered avatar ID from sidebar
-                    if narrator.avatar_id:
-                        st.session_state.narrator_selected_avatar = narrator.avatar_id
-                        st.caption(f"Using sidebar Avatar ID: `{narrator.avatar_id}`")
 
             # ── Talking Photo branch ──
             else:
-                st.markdown(
-                    "Upload the architect's headshot (JPG/PNG). HeyGen will animate it to match "
-                    "the voice — no credit cost for creation, only standard video-generation credits."
+                st.caption(
+                    "Upload the architect's headshot (JPG/PNG). "
+                    "HeyGen animates it — **no avatar-creation credit cost**. "
+                    "The Talking Photo ID persists; paste it to skip re-uploading next time."
                 )
                 tp_cols = st.columns([3, 1])
                 with tp_cols[0]:
@@ -6253,7 +6277,6 @@ def show_results():
                         key="btn_upload_photo",
                         disabled=uploaded_photo is None,
                     )
-
                 if upload_btn and uploaded_photo is not None:
                     img_bytes = uploaded_photo.read()
                     ctype = "image/png" if uploaded_photo.name.lower().endswith(".png") else "image/jpeg"
@@ -6263,9 +6286,8 @@ def show_results():
                         st.error("Photo upload failed: " + tp_err)
                     else:
                         st.session_state.narrator_photo_id = tp_id
-                        st.success(f"Talking Photo ready (ID: `{tp_id}`). You can reuse this ID in future sessions.")
+                        st.success(f"Talking Photo ready. ID: `{tp_id}` — save this to reuse in future sessions.")
 
-                # Also allow pasting a previously created Talking Photo ID
                 manual_tp_id = st.text_input(
                     "Or paste an existing Talking Photo ID",
                     value=st.session_state.narrator_photo_id,
@@ -6283,28 +6305,51 @@ def show_results():
 
             st.markdown("")
 
+            # ── Avatar 3 Test Mode toggle ──────────────────────────────────────
+            # HeyGen's "test": true in the v2 payload renders the video using
+            # Avatar 3 quality for FREE — the only difference is a small
+            # HeyGen watermark in the corner.  Perfect for client previews.
+            test_cols = st.columns([1, 3])
+            with test_cols[0]:
+                test_mode_on = st.toggle(
+                    "Avatar 3 Test Mode (FREE)",
+                    value=st.session_state.narrator_test_mode,
+                    key="narrator_test_toggle",
+                    help=(
+                        "When ON: HeyGen renders for FREE using Avatar 3 quality. "
+                        "A small watermark is added — ideal for review and client preview. "
+                        "Turn OFF only for the final production render (costs 1 credit/min)."
+                    ),
+                )
+                st.session_state.narrator_test_mode = test_mode_on
+            with test_cols[1]:
+                if test_mode_on:
+                    st.success("Free render — Avatar 3 quality, watermarked. No credits consumed.")
+                else:
+                    st.warning("Production render — Avatar 3 quality, no watermark. Consumes credits.")
+
             # ── Voice note ──
             mp3_ready = bool(st.session_state.get("narrator_mp3"))
             if mp3_ready:
                 st.caption("Voice audio ready — the avatar will lip-sync to the ElevenLabs voice.")
             else:
-                st.caption("No ElevenLabs audio — HeyGen will use built-in TTS. Generate voice (Step 2) for best results.")
+                st.caption("No ElevenLabs audio — HeyGen will use built-in TTS. Run Step 2 for best results.")
 
-            # ── Determine effective avatar / talking_photo for the button ──
-            effective_avatar_id = (
-                st.session_state.narrator_selected_avatar
-                if st.session_state.narrator_mode == "stock"
-                else ""
-            )
-            effective_tp_id = (
-                talking_photo_id_to_use
-                if st.session_state.narrator_mode == "talking_photo"
-                else ""
-            )
+            # ── Resolve effective character ID ──
+            if st.session_state.narrator_mode == "custom":
+                effective_avatar_id  = st.session_state.narrator_custom_avatar_id
+                effective_tp_id      = ""
+            elif st.session_state.narrator_mode == "stock":
+                effective_avatar_id  = st.session_state.narrator_selected_avatar
+                effective_tp_id      = ""
+            else:
+                effective_avatar_id  = ""
+                effective_tp_id      = talking_photo_id_to_use
+
             can_generate = script_text.strip() and (effective_avatar_id or effective_tp_id)
 
             gen_video_btn = st.button(
-                "🎥 Generate Video",
+                "🎥 Generate Video (Free)" if test_mode_on else "🎥 Generate Video",
                 use_container_width=False,
                 key="btn_video",
                 disabled=not can_generate,
@@ -6314,14 +6359,15 @@ def show_results():
             if gen_video_btn and can_generate:
                 mp3_bytes_for_hg = st.session_state.get("narrator_mp3")
 
-                # Temporarily swap avatar_id so the method works
                 _orig_av = narrator.avatar_id
                 narrator.avatar_id = effective_avatar_id or narrator.avatar_id
 
-                with st.spinner("Submitting to HeyGen — this may take 2–4 minutes…"):
+                mode_label = "test (free)" if test_mode_on else "production"
+                with st.spinner(f"Submitting {mode_label} render to HeyGen — may take 2–4 minutes…"):
                     video_id, err = narrator.generate_video(
                         script_text, mp3_bytes_for_hg,
                         talking_photo_id=effective_tp_id,
+                        test_mode=test_mode_on,
                     )
                 narrator.avatar_id = _orig_av
 
@@ -6365,11 +6411,14 @@ def show_results():
                     if poll_err:
                         st.error(poll_err)
                     elif video_url:
-                        st.session_state["narrator_result"] = {"video_url": video_url, "video_id": video_id, "script": script_text}
-                        st.success("Video ready!")
+                        st.session_state["narrator_result"] = {
+                            "video_url": video_url, "video_id": video_id,
+                            "script": script_text, "test_mode": test_mode_on,
+                        }
+                        st.success("Video ready!" + (" (watermarked test render)" if test_mode_on else ""))
                     else:
                         st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
-                        st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text}
+                        st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text, "test_mode": test_mode_on}
 
         # ── Result display ──
         nr = st.session_state.get("narrator_result")
@@ -6383,6 +6432,8 @@ def show_results():
                 with r_cols[1]:
                     st.markdown("**Video Details**")
                     st.markdown(f"- Video ID: `{nr.get('video_id', 'N/A')}`")
+                    test_badge = "🟢 Free test render (watermarked)" if nr.get("test_mode") else "🔵 Production render"
+                    st.markdown(f"- Render: {test_badge}")
                     st.markdown(f"- Words: {len(safe_str(nr.get('script','')).split())}")
                     st.markdown("")
                     st.markdown(f"[Open in browser]({nr['video_url']})", unsafe_allow_html=False)
