@@ -2954,60 +2954,55 @@ class ArchitectNarrator:
     # ------------------------------------------------------------------ #
     #  Step 3 — Video generation (HeyGen)                                 #
     # ------------------------------------------------------------------ #
-    def generate_video(self, script: str, mp3_bytes: bytes | None) -> tuple:
+    def generate_video(self, script: str, mp3_bytes: bytes | None,
+                       talking_photo_id: str = "") -> tuple:
         """Submit a HeyGen v2 video generation job and return (video_id, error).
 
-        If mp3_bytes is supplied the audio is uploaded as a base64 audio asset
-        so the avatar lip-syncs to the architect's cloned voice.
-        When mp3_bytes is None, HeyGen will use its built-in TTS with the
-        configured voice ID (or its default voice).
+        Modes
+        -----
+        talking_photo_id set → uses HeyGen "talking_photo" character (free to
+            create in HeyGen dashboard; no custom-avatar credit consumed).
+        talking_photo_id empty → uses "avatar" character with self.avatar_id.
+
+        Voice source: if mp3_bytes is supplied the audio is sent as base64 so
+        the character lip-syncs to the ElevenLabs voice clone.  Otherwise
+        HeyGen's built-in TTS is used.
         """
         if not self.hg_ready:
             return None, "HeyGen API key or Avatar ID not configured."
 
         import urllib.request, urllib.error
 
-        # ---- Build the input block ----
+        # ---- Voice block ----
         if mp3_bytes:
             audio_b64 = base64.b64encode(mp3_bytes).decode("utf-8")
-            input_block = {
-                "character": {
-                    "type": "avatar",
-                    "avatar_id": self.avatar_id,
-                    "avatar_style": "normal",
-                },
-                "voice": {
-                    "type": "audio",
-                    "audio_url": "",          # unused when audio_base64 is set
-                    "audio_base64": audio_b64,
-                },
+            voice_block = {"type": "audio", "audio_base64": audio_b64}
+        else:
+            voice_block = {
+                "type": "text", "input_text": script,
+                "voice_id": self.voice_id or "2d5b0e6cf36f460aa7fc47e3eee4ba54",
+            }
+
+        # ---- Character block ----
+        if talking_photo_id.strip():
+            char_block = {
+                "type": "talking_photo",
+                "talking_photo_id": talking_photo_id.strip(),
+                "talking_photo_style": "square",
             }
         else:
-            # Fall back to HeyGen built-in TTS
-            voice_cfg = {"type": "text", "input_text": script}
-            if self.voice_id:
-                voice_cfg["voice_id"] = self.voice_id
-            else:
-                voice_cfg["voice_id"] = "2d5b0e6cf36f460aa7fc47e3eee4ba54"  # default HeyGen voice
-            input_block = {
-                "character": {
-                    "type": "avatar",
-                    "avatar_id": self.avatar_id,
-                    "avatar_style": "normal",
-                },
-                "voice": voice_cfg,
+            char_block = {
+                "type": "avatar",
+                "avatar_id": self.avatar_id,
+                "avatar_style": "normal",
             }
 
         payload = json.dumps({
-            "video_inputs": [
-                {
-                    **input_block,
-                    "background": {
-                        "type": "color",
-                        "value": "#0a0e1a",
-                    },
-                }
-            ],
+            "video_inputs": [{
+                "character": char_block,
+                "voice": voice_block,
+                "background": {"type": "color", "value": "#0a0e1a"},
+            }],
             "dimension": {"width": 1280, "height": 720},
             "aspect_ratio": "16:9",
         }).encode("utf-8")
@@ -3034,6 +3029,104 @@ class ArchitectNarrator:
             return None, f"HeyGen error {e.code}: {body}"
         except Exception as e:
             return None, f"HeyGen request failed: {str(e)[:200]}"
+
+    # ------------------------------------------------------------------ #
+    #  Utility — list free public stock avatars from HeyGen               #
+    # ------------------------------------------------------------------ #
+    def list_free_avatars(self) -> tuple:
+        """Call GET /v2/avatars and return only free public stock avatars.
+
+        Returns (list_of_dicts, error_str).
+        Each dict has keys: avatar_id, avatar_name, preview_image_url.
+        Free avatars have avatar_type == "public".
+        """
+        import urllib.request, urllib.error
+        req = urllib.request.Request(
+            "https://api.heygen.com/v2/avatars",
+            headers={"X-Api-Key": self.hg_key, "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                all_avs = (data.get("data") or {}).get("avatars", [])
+                free = [
+                    {
+                        "avatar_id":         a.get("avatar_id", ""),
+                        "avatar_name":       a.get("avatar_name", a.get("avatar_id", "")),
+                        "preview_image_url": a.get("preview_image_url", ""),
+                        "gender":            a.get("gender", ""),
+                    }
+                    for a in all_avs
+                    if a.get("avatar_type", "") == "public"
+                ]
+                if not free:
+                    return [], "No public stock avatars found. Your HeyGen plan may not include them."
+                return free, None
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return [], f"HeyGen avatars list error {e.code}: {body}"
+        except Exception as e:
+            return [], f"HeyGen avatars list failed: {str(e)[:200]}"
+
+    # ------------------------------------------------------------------ #
+    #  Utility — upload a photo to HeyGen asset store (for Talking Photo) #
+    # ------------------------------------------------------------------ #
+    def upload_talking_photo(self, image_bytes: bytes, content_type: str = "image/jpeg") -> tuple:
+        """Upload an image to HeyGen's asset endpoint and register it as a
+        Talking Photo so HeyGen can animate it for free (no custom-avatar
+        credit consumed).
+
+        Returns (talking_photo_id, error_str).
+        """
+        import urllib.request, urllib.error
+
+        # Step 1: upload the raw image bytes to get an asset URL
+        upload_req = urllib.request.Request(
+            "https://upload.heygen.com/v1/asset",
+            data=image_bytes,
+            headers={
+                "X-Api-Key": self.hg_key,
+                "Content-Type": content_type,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(upload_req, timeout=30) as resp:
+                up_data = json.loads(resp.read().decode("utf-8"))
+                asset_url = (up_data.get("data") or {}).get("url", "")
+                if not asset_url:
+                    return None, "Asset upload returned no URL: " + json.dumps(up_data)[:200]
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return None, f"Photo upload error {e.code}: {body}"
+        except Exception as e:
+            return None, f"Photo upload failed: {str(e)[:200]}"
+
+        # Step 2: register the uploaded asset as a Talking Photo avatar
+        reg_payload = json.dumps({"image_url": asset_url}).encode("utf-8")
+        reg_req = urllib.request.Request(
+            "https://api.heygen.com/v1/talking_photo",
+            data=reg_payload,
+            headers={
+                "X-Api-Key": self.hg_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(reg_req, timeout=20) as resp:
+                reg_data = json.loads(resp.read().decode("utf-8"))
+                tp_id = (reg_data.get("data") or {}).get("talking_photo_id", "")
+                if tp_id:
+                    return tp_id, None
+                return None, "Talking Photo register returned no ID: " + json.dumps(reg_data)[:200]
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            return None, f"Talking Photo register error {e.code}: {body}"
+        except Exception as e:
+            return None, f"Talking Photo register failed: {str(e)[:200]}"
 
     # ------------------------------------------------------------------ #
     #  Step 4 — Poll video status                                         #
@@ -5033,6 +5126,10 @@ _defaults = {
     "elevenlabs_api_key": "", "heygen_api_key": "",
     "heygen_avatar_id": "", "heygen_voice_id": "",
     "narrator_result": None,
+    "narrator_mode": "stock",
+    "narrator_free_avatars": [],
+    "narrator_photo_id": "",
+    "narrator_selected_avatar": "",
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
@@ -6066,77 +6163,213 @@ def show_results():
 
         st.markdown("---")
 
-        # ── Video generation ──
+        # ── Video generation — Step 3 ──
         st.markdown("**Step 3 — Avatar Video Generation (HeyGen)**")
+        st.caption(
+            "Choose **Free Stock Avatar** to pick from HeyGen's built-in public avatars "
+            "(zero avatar-creation credits). Choose **Talking Photo** to animate any still "
+            "photo — upload the architect's headshot once and reuse it forever, also free to create."
+        )
 
-        hg_cols = st.columns([3, 1])
-        with hg_cols[1]:
+        if not narrator.hg_ready:
+            st.info("Add HeyGen API Key in the sidebar. Avatar ID is only needed for stock-avatar mode.")
+        else:
+            # ── Mode selector ──
+            mode_labels = ["🎭 Free Stock Avatar", "📸 Talking Photo (upload a photo)"]
+            mode_map    = {"🎭 Free Stock Avatar": "stock", "📸 Talking Photo (upload a photo)": "talking_photo"}
+            current_mode_label = next(
+                (lbl for lbl, v in mode_map.items() if v == st.session_state.narrator_mode),
+                mode_labels[0],
+            )
+            chosen_label = st.radio(
+                "Avatar mode",
+                mode_labels,
+                index=mode_labels.index(current_mode_label),
+                horizontal=True,
+                key="narrator_mode_radio",
+            )
+            st.session_state.narrator_mode = mode_map[chosen_label]
+
+            talking_photo_id_to_use = ""
+
+            # ── Free Stock Avatar branch ──
+            if st.session_state.narrator_mode == "stock":
+                av_cols = st.columns([2, 1, 1])
+                with av_cols[1]:
+                    fetch_avs = st.button("🔍 Fetch Free Avatars", use_container_width=True, key="btn_fetch_avs")
+                if fetch_avs:
+                    with st.spinner("Fetching HeyGen public stock avatars…"):
+                        avs, av_err = narrator.list_free_avatars()
+                    if av_err:
+                        st.error(av_err)
+                    else:
+                        st.session_state.narrator_free_avatars = avs
+                        st.success(f"Found {len(avs)} free stock avatar(s).")
+
+                if st.session_state.narrator_free_avatars:
+                    av_options = {
+                        (a["avatar_name"] or a["avatar_id"]) + (f"  [{a['gender']}]" if a.get("gender") else ""): a["avatar_id"]
+                        for a in st.session_state.narrator_free_avatars
+                    }
+                    chosen_name = st.selectbox(
+                        "Select free avatar",
+                        list(av_options.keys()),
+                        key="narrator_av_select",
+                    )
+                    st.session_state.narrator_selected_avatar = av_options[chosen_name]
+                    st.caption(f"Avatar ID: `{st.session_state.narrator_selected_avatar}`")
+
+                    # Show preview image if available
+                    chosen_av = next(
+                        (a for a in st.session_state.narrator_free_avatars
+                         if a["avatar_id"] == st.session_state.narrator_selected_avatar), None
+                    )
+                    if chosen_av and chosen_av.get("preview_image_url"):
+                        st.image(chosen_av["preview_image_url"], width=120)
+                else:
+                    st.info("Click **Fetch Free Avatars** to browse HeyGen's public stock avatars.")
+                    # Fall back to manually entered avatar ID from sidebar
+                    if narrator.avatar_id:
+                        st.session_state.narrator_selected_avatar = narrator.avatar_id
+                        st.caption(f"Using sidebar Avatar ID: `{narrator.avatar_id}`")
+
+            # ── Talking Photo branch ──
+            else:
+                st.markdown(
+                    "Upload the architect's headshot (JPG/PNG). HeyGen will animate it to match "
+                    "the voice — no credit cost for creation, only standard video-generation credits."
+                )
+                tp_cols = st.columns([3, 1])
+                with tp_cols[0]:
+                    uploaded_photo = st.file_uploader(
+                        "Upload architect photo (JPG/PNG, max 5 MB)",
+                        type=["jpg", "jpeg", "png"],
+                        key="narrator_photo_upload",
+                    )
+                with tp_cols[1]:
+                    upload_btn = st.button(
+                        "⬆️ Upload Photo",
+                        use_container_width=True,
+                        key="btn_upload_photo",
+                        disabled=uploaded_photo is None,
+                    )
+
+                if upload_btn and uploaded_photo is not None:
+                    img_bytes = uploaded_photo.read()
+                    ctype = "image/png" if uploaded_photo.name.lower().endswith(".png") else "image/jpeg"
+                    with st.spinner("Uploading photo to HeyGen…"):
+                        tp_id, tp_err = narrator.upload_talking_photo(img_bytes, ctype)
+                    if tp_err:
+                        st.error("Photo upload failed: " + tp_err)
+                    else:
+                        st.session_state.narrator_photo_id = tp_id
+                        st.success(f"Talking Photo ready (ID: `{tp_id}`). You can reuse this ID in future sessions.")
+
+                # Also allow pasting a previously created Talking Photo ID
+                manual_tp_id = st.text_input(
+                    "Or paste an existing Talking Photo ID",
+                    value=st.session_state.narrator_photo_id,
+                    placeholder="e.g. f5e3d2a1b4c6…",
+                    key="narrator_tp_id_input",
+                )
+                if manual_tp_id.strip():
+                    st.session_state.narrator_photo_id = manual_tp_id.strip()
+
+                talking_photo_id_to_use = st.session_state.narrator_photo_id
+                if talking_photo_id_to_use:
+                    st.caption(f"Talking Photo ID in use: `{talking_photo_id_to_use}`")
+                else:
+                    st.warning("Upload a photo or paste an existing Talking Photo ID to continue.")
+
+            st.markdown("")
+
+            # ── Voice note ──
+            mp3_ready = bool(st.session_state.get("narrator_mp3"))
+            if mp3_ready:
+                st.caption("Voice audio ready — the avatar will lip-sync to the ElevenLabs voice.")
+            else:
+                st.caption("No ElevenLabs audio — HeyGen will use built-in TTS. Generate voice (Step 2) for best results.")
+
+            # ── Determine effective avatar / talking_photo for the button ──
+            effective_avatar_id = (
+                st.session_state.narrator_selected_avatar
+                if st.session_state.narrator_mode == "stock"
+                else ""
+            )
+            effective_tp_id = (
+                talking_photo_id_to_use
+                if st.session_state.narrator_mode == "talking_photo"
+                else ""
+            )
+            can_generate = script_text.strip() and (effective_avatar_id or effective_tp_id)
+
             gen_video_btn = st.button(
                 "🎥 Generate Video",
-                use_container_width=True,
+                use_container_width=False,
                 key="btn_video",
-                disabled=not (script_text.strip() and narrator.hg_ready),
+                disabled=not can_generate,
+                type="primary",
             )
-        with hg_cols[0]:
-            if not narrator.hg_ready:
-                st.info("Add HeyGen API Key and Avatar ID in the sidebar to generate the video.")
-            else:
-                mp3_ready = bool(st.session_state.get("narrator_mp3"))
-                if mp3_ready:
-                    st.caption("Avatar will lip-sync to the synthesised voice audio.")
-                else:
-                    st.caption("No voice audio — HeyGen will use built-in TTS. Generate voice first for best results.")
 
-        if gen_video_btn and script_text.strip():
-            mp3_bytes = st.session_state.get("narrator_mp3")
-            with st.spinner("Submitting to HeyGen — this may take 2–4 minutes…"):
-                video_id, err = narrator.generate_video(script_text, mp3_bytes)
-            if err:
-                st.error("Video generation failed: " + err)
-            else:
-                st.info(f"HeyGen job submitted (video_id: `{video_id}`). Polling for completion…")
-                progress_bar = st.progress(0)
-                status_ph = st.empty()
-                waited = 0
-                max_wait = 300
-                interval = 10
-                video_url = None
-                poll_err = None
-                import urllib.request
-                while waited < max_wait:
-                    progress_bar.progress(min(int(waited / max_wait * 100), 95))
-                    status_ph.caption(f"Waiting for HeyGen… {waited}s / {max_wait}s")
-                    time.sleep(interval)
-                    waited += interval
-                    # Poll status
-                    try:
-                        req = urllib.request.Request(
-                            f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                            headers={"X-Api-Key": narrator.hg_key, "Accept": "application/json"},
-                            method="GET",
-                        )
-                        with urllib.request.urlopen(req, timeout=15) as resp:
-                            data = json.loads(resp.read().decode("utf-8"))
-                            status = (data.get("data") or {}).get("status", "")
-                            status_ph.caption(f"HeyGen status: **{status}** ({waited}s elapsed)")
-                            if status == "completed":
-                                video_url = (data.get("data") or {}).get("video_url", "")
-                                break
-                            if status in ("failed", "error"):
-                                poll_err = "HeyGen: " + safe_str((data.get("data") or {}).get("error", "generation failed"))
-                                break
-                    except Exception as pe:
-                        poll_err = str(pe)[:200]
-                        break
-                progress_bar.progress(100)
-                if poll_err:
-                    st.error(poll_err)
-                elif video_url:
-                    st.session_state["narrator_result"] = {"video_url": video_url, "video_id": video_id, "script": script_text}
-                    st.success("Video ready!")
+            if gen_video_btn and can_generate:
+                mp3_bytes_for_hg = st.session_state.get("narrator_mp3")
+
+                # Temporarily swap avatar_id so the method works
+                _orig_av = narrator.avatar_id
+                narrator.avatar_id = effective_avatar_id or narrator.avatar_id
+
+                with st.spinner("Submitting to HeyGen — this may take 2–4 minutes…"):
+                    video_id, err = narrator.generate_video(
+                        script_text, mp3_bytes_for_hg,
+                        talking_photo_id=effective_tp_id,
+                    )
+                narrator.avatar_id = _orig_av
+
+                if err:
+                    st.error("Video generation failed: " + err)
                 else:
-                    st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
-                    st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text}
+                    st.info(f"HeyGen job submitted (video_id: `{video_id}`). Polling for completion…")
+                    progress_bar = st.progress(0)
+                    status_ph = st.empty()
+                    waited = 0
+                    max_wait = 300
+                    interval = 10
+                    video_url = None
+                    poll_err = None
+                    import urllib.request
+                    while waited < max_wait:
+                        progress_bar.progress(min(int(waited / max_wait * 100), 95))
+                        status_ph.caption(f"Waiting for HeyGen… {waited}s / {max_wait}s")
+                        time.sleep(interval)
+                        waited += interval
+                        try:
+                            req = urllib.request.Request(
+                                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                                headers={"X-Api-Key": narrator.hg_key, "Accept": "application/json"},
+                                method="GET",
+                            )
+                            with urllib.request.urlopen(req, timeout=15) as resp:
+                                data = json.loads(resp.read().decode("utf-8"))
+                                status = (data.get("data") or {}).get("status", "")
+                                status_ph.caption(f"HeyGen status: **{status}** ({waited}s elapsed)")
+                                if status == "completed":
+                                    video_url = (data.get("data") or {}).get("video_url", "")
+                                    break
+                                if status in ("failed", "error"):
+                                    poll_err = "HeyGen: " + safe_str((data.get("data") or {}).get("error", "generation failed"))
+                                    break
+                        except Exception as pe:
+                            poll_err = str(pe)[:200]
+                            break
+                    progress_bar.progress(100)
+                    if poll_err:
+                        st.error(poll_err)
+                    elif video_url:
+                        st.session_state["narrator_result"] = {"video_url": video_url, "video_id": video_id, "script": script_text}
+                        st.success("Video ready!")
+                    else:
+                        st.warning(f"HeyGen did not complete within {max_wait}s. Check your HeyGen dashboard for video_id `{video_id}`.")
+                        st.session_state["narrator_result"] = {"video_id": video_id, "script": script_text}
 
         # ── Result display ──
         nr = st.session_state.get("narrator_result")
