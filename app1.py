@@ -1145,6 +1145,74 @@ _INFRA_COST_CATALOG = {
 }
 
 
+def _fetch_live_azure_pricing() -> dict:
+    """Fetch live monthly cost estimates (USD) from the Azure Retail Prices API.
+
+    Azure Retail Prices API is public and requires no authentication.
+    Returns a dict mapping catalog service names to live monthly cost ints.
+    Falls back to empty dict on network error.
+    """
+    import urllib.request, urllib.error, urllib.parse
+
+    # Map catalog names → Azure product search terms
+    _SEARCH_TERMS = {
+        "Azure App Service":    "App Service Premium",
+        "Azure Functions":      "Azure Functions",
+        "Azure SQL Database":   "SQL Database General Purpose",
+        "Cosmos DB":            "Azure Cosmos DB",
+        "Azure Blob Storage":   "General Block Blob",
+        "Azure Key Vault":      "Key Vault",
+        "Azure AI Search":      "Azure AI Search",
+        "Azure Monitor":        "Log Analytics",
+        "Azure Redis Cache":    "Azure Cache for Redis",
+        "Azure Service Bus":    "Service Bus",
+        "API Management":       "API Management",
+        "Azure Container Apps": "Azure Container Apps",
+        "Azure DevOps":         "Azure DevOps",
+        "SignalR":              "SignalR Service",
+        "Azure Event Grid":     "Event Grid",
+    }
+
+    live_prices = {}
+    for svc, search in _SEARCH_TERMS.items():
+        try:
+            qs = urllib.parse.urlencode({
+                "api-version": "2023-01-01",
+                "$filter":     (
+                    f"contains(productName, '{search}') "
+                    "and currencyCode eq 'USD' "
+                    "and priceType eq 'Consumption'"
+                ),
+                "$top": "10",
+            })
+            url = "https://prices.azure.com/api/retail/prices?" + qs
+            req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data  = json.loads(resp.read().decode("utf-8"))
+                items = data.get("Items") or []
+                if not items:
+                    continue
+                # Prefer hourly → monthly conversion, else direct monthly
+                hourly = [
+                    it["retailPrice"]
+                    for it in items
+                    if it.get("unitOfMeasure", "").endswith("Hour") and it.get("retailPrice", 0) > 0
+                ]
+                monthly = [
+                    it["retailPrice"]
+                    for it in items
+                    if "month" in it.get("unitOfMeasure", "").lower() and it.get("retailPrice", 0) > 0
+                ]
+                if hourly:
+                    live_prices[svc] = int(min(hourly[:3]) * 730)   # lowest tier × 730 h/mo
+                elif monthly:
+                    live_prices[svc] = int(min(monthly[:3]))
+        except Exception:
+            continue   # skip on timeout or error
+
+    return live_prices
+
+
 def _analyze_text_dynamic(text):
     """Analyze raw document text and extract requirements, tech stack, etc. without AI."""
     text_lower = text.lower() if text else ""
@@ -2771,6 +2839,134 @@ class AzureAI:
             "sentiment": "Positive — stakeholders are motivated and have executive buy-in for modernization",
             "key_themes": ["Automation", "Real-time Analytics", "System Integration", "Security", "Cloud Migration", "Mobile Access"],
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  GOOGLE GEMINI CLIENT — DROP-IN AI ALTERNATIVE (free tier available)
+# ═══════════════════════════════════════════════════════════════════════
+
+class GeminiAI(AzureAI):
+    """Google Gemini drop-in LLM.
+
+    Inherits every ECI analysis method (analyze_requirements, estimate_time,
+    estimate_cost, analyze_risk, …) from AzureAI and simply replaces the
+    underlying HTTP transport with the Gemini generateContent API.
+    No SDK required — pure urllib.
+
+    Free tier: gemini-2.0-flash has a generous free quota (1,500 req/day).
+    Get an API key at https://aistudio.google.com/app/apikey
+    """
+
+    MODELS = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+    ]
+    _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, key: str, model: str = "gemini-2.0-flash"):
+        self.key        = key.strip()
+        self.model      = model or "gemini-2.0-flash"
+        self.deployment = self.model   # AzureAI attribute compat
+        self._client    = None         # AzureAI attribute compat (unused)
+
+    @classmethod
+    def from_session(cls):
+        return cls(
+            st.session_state.get("gemini_api_key", ""),
+            st.session_state.get("gemini_model",  "gemini-2.0-flash"),
+        )
+
+    @property
+    def is_live(self):
+        return bool(self.key)
+
+    def test(self):
+        if not self.key:
+            return False, "Not configured. Enter Gemini API Key."
+        result = self._call(
+            "You are a test assistant. Always reply with valid JSON.",
+            'Reply with: {"status": "ok"}',
+        )
+        if result is not None:
+            return True, f"Connected to {self.model}"
+        return False, "Connection failed — check your Gemini API key."
+
+    def _call(self, system: str, user: str) -> "dict | str | None":
+        """Call Gemini generateContent API; return parsed JSON dict or raw text."""
+        if not self.key:
+            return None
+        import urllib.request, urllib.error
+
+        url = f"{self._BASE}/{self.model}:generateContent?key={self.key}"
+        combined = system + "\n\n" + user
+        payload  = json.dumps({
+            "contents": [{"role": "user", "parts": [{"text": combined}]}],
+            "generationConfig": {
+                "maxOutputTokens":  4096,
+                "temperature":      0.2,
+                "responseMimeType": "application/json",
+            },
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                txt  = ""
+                try:
+                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    return None
+                try:
+                    return json.loads(txt)
+                except json.JSONDecodeError:
+                    pass
+                m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", txt)
+                if m:
+                    try:
+                        return json.loads(m.group(1))
+                    except Exception:
+                        pass
+                m2 = re.search(r"\{[\s\S]*\}", txt)
+                if m2:
+                    try:
+                        return json.loads(m2.group(0))
+                    except Exception:
+                        pass
+                return txt
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            st.warning(f"Gemini error {e.code}: {body[:200]}")
+            return None
+        except Exception as e:
+            st.warning(f"Gemini request failed: {str(e)[:200]}")
+            return None
+
+    def _call_text(self, system: str, user: str, max_tokens: int = 1024) -> "str | None":
+        """Call Gemini without JSON mode — returns plain text for chat."""
+        if not self.key:
+            return None
+        import urllib.request, urllib.error
+
+        url     = f"{self._BASE}/{self.model}:generateContent?key={self.key}"
+        payload = json.dumps({
+            "contents": [{"role": "user", "parts": [{"text": system + "\n\n" + user}]}],
+            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.4},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5491,6 +5687,12 @@ _defaults = {
     "azure_endpoint":    os.environ.get("AZURE_ENDPOINT", ""),
     "azure_api_version": "2024-06-01",
     "azure_deployment":  os.environ.get("AZURE_DEPLOYMENT", "gpt-4"),
+    "gemini_api_key":    os.environ.get("GEMINI_API_KEY", ""),
+    "gemini_model":      os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+    "preferred_llm":     os.environ.get("PREFERRED_LLM", "azure"),
+    "chat_messages":     [],
+    "proposal_versions": [],
+    "live_pricing_cache": {},
     "sp_url": "", "sp_cid": "", "sp_cs": "", "sp_tid": "",
     "email_smtp": "", "email_sender": "",
     "elevenlabs_api_key": os.environ.get("ELEVENLABS_API_KEY", ""),
@@ -5538,8 +5740,25 @@ with hc3:
 with st.sidebar:
     st.markdown('<div class="stitle">Configuration</div>', unsafe_allow_html=True)
 
-    # ── Anthropic / Claude (primary LLM) ──
-    st.markdown('<div class="csec">Anthropic / Claude AI</div>', unsafe_allow_html=True)
+    # ── Primary AI model selector ──
+    st.markdown('<div class="csec">Primary AI Model</div>', unsafe_allow_html=True)
+    _llm_opts  = ["azure", "gemini"]
+    _llm_names = {"azure": "Azure OpenAI (GPT-4)", "gemini": "Google Gemini (Free tier ✨)"}
+    pref_idx = _llm_opts.index(st.session_state.preferred_llm) if st.session_state.preferred_llm in _llm_opts else 0
+    chosen_llm = st.radio(
+        "Which model powers the pipeline?",
+        _llm_opts,
+        index=pref_idx,
+        format_func=lambda x: _llm_names[x],
+        horizontal=True,
+        key="k_pref_llm",
+    )
+    st.session_state.preferred_llm = chosen_llm
+    st.caption("Anthropic Claude is always available for Proposal Chat regardless of this setting.")
+    st.divider()
+
+    # ── Anthropic / Claude (chat model) ──
+    st.markdown('<div class="csec">Anthropic / Claude — Chat & Narrator</div>', unsafe_allow_html=True)
     st.session_state.anthropic_api_key = st.text_input(
         "Anthropic API Key", value=st.session_state.anthropic_api_key,
         type="password", placeholder="sk-ant-...", key="k_ant")
@@ -5555,7 +5774,24 @@ with st.sidebar:
         st.success(msg) if ok else st.error(msg)
     st.divider()
 
-    st.markdown('<div class="csec">Azure OpenAI (optional fallback)</div>', unsafe_allow_html=True)
+    # ── Google Gemini ──
+    st.markdown('<div class="csec">Google Gemini AI ✨ Free Tier</div>', unsafe_allow_html=True)
+    st.caption("Free API key at [aistudio.google.com](https://aistudio.google.com/app/apikey) — 1,500 req/day free.")
+    st.session_state.gemini_api_key = st.text_input(
+        "Gemini API Key", value=st.session_state.gemini_api_key,
+        type="password", placeholder="AIza...", key="k_gem")
+    st.session_state.gemini_model = st.selectbox(
+        "Gemini Model", GeminiAI.MODELS,
+        index=GeminiAI.MODELS.index(st.session_state.gemini_model)
+              if st.session_state.gemini_model in GeminiAI.MODELS else 0,
+        key="k_gem_model",
+    )
+    if st.button("Test Gemini", use_container_width=True, key="tb_gem"):
+        ok, msg = GeminiAI.from_session().test()
+        st.success(msg) if ok else st.error(msg)
+    st.divider()
+
+    st.markdown('<div class="csec">Azure OpenAI</div>', unsafe_allow_html=True)
     st.session_state.azure_api_key = st.text_input("API Key", value=st.session_state.azure_api_key, type="password", key="k1")
     st.session_state.azure_endpoint = st.text_input("Endpoint", value=st.session_state.azure_endpoint, placeholder="https://your-resource.openai.azure.com/", key="k2")
     st.session_state.azure_api_version = st.selectbox("Version", ["2024-06-01", "2024-02-01", "2023-12-01-preview"], key="k3")
@@ -5608,15 +5844,20 @@ with st.sidebar:
     st.divider()
     ant_ok = bool(st.session_state.anthropic_api_key)
     a_ok   = bool(st.session_state.azure_api_key and st.session_state.azure_endpoint)
+    gem_ok = bool(st.session_state.gemini_api_key)
     s_ok   = bool(st.session_state.sp_url and st.session_state.sp_cid)
     e_ok   = bool(st.session_state.email_smtp)
     n_ok   = bool(st.session_state.heygen_api_key or st.session_state.did_api_key)
     did_ok = bool(st.session_state.did_api_key)
-    ai_ok  = ant_ok or a_ok
+    ai_ok  = ant_ok or a_ok or gem_ok
     mode_label = "LIVE AI" if ai_ok else "DEMO MODE"
+    pref_badge = {"azure": "⚡ Azure", "gemini": "✨ Gemini"}.get(st.session_state.get("preferred_llm", "azure"), "")
     st.markdown('<div class="cstat">'
-                + '<div class="srow"><strong>' + mode_label + '</strong></div>'
+                + '<div class="srow"><strong>' + mode_label + '</strong>'
+                + (f' <span style="opacity:.7;font-size:10px">{pref_badge}</span>' if ai_ok else '')
+                + '</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if ant_ok else 'off') + '"></span> Anthropic Claude</div>'
+                + '<div class="srow"><span class="sdot ' + ('on' if gem_ok else 'off') + '"></span> Google Gemini</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if a_ok else 'off') + '"></span> Azure OpenAI</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if s_ok else 'off') + '"></span> SharePoint</div>'
                 + '<div class="srow"><span class="sdot ' + ('on' if e_ok else 'off') + '"></span> Email</div>'
@@ -5835,14 +6076,82 @@ def tab_presale():
         show_results()
 
 
+def _pick_ai():
+    """Return the highest-priority configured AI client (Azure, Gemini, or fallback)."""
+    pref = st.session_state.get("preferred_llm", "azure")
+    clients = {
+        "azure":  AzureAI.from_session(),
+        "gemini": GeminiAI.from_session(),
+    }
+    primary = clients.get(pref)
+    if primary and primary.is_live:
+        return primary
+    for client in clients.values():
+        if client and client.is_live:
+            return client
+    return AzureAI.from_session()
+
+
+def _ai_chat(system: str, messages: list) -> str:
+    """Run a free-form conversational AI call; returns plain text.
+
+    Tries in priority order: Anthropic → Gemini → Azure (plain text mode).
+    messages: list of {"role": "user"|"assistant", "content": str}
+    """
+    history = "\n".join(
+        ("User" if m["role"] == "user" else "Assistant") + ": " + m["content"]
+        for m in messages[:-1]
+    )
+    last_msg = messages[-1]["content"] if messages else ""
+    full_user = ((f"Conversation history:\n{history}\n\n") if history else "") + f"User: {last_msg}"
+
+    # 1. Anthropic (best for chat)
+    ant = AnthropicAI.from_session()
+    if ant.is_live:
+        result = ant._call(system, full_user, max_tokens=1024)
+        if result is not None:
+            return result if isinstance(result, str) else json.dumps(result, indent=2)
+
+    # 2. Gemini (non-JSON mode)
+    gm = GeminiAI.from_session()
+    if gm.is_live:
+        txt = gm._call_text(system, full_user, max_tokens=1024)
+        if txt:
+            return txt
+
+    # 3. Azure (no json_object format for chat)
+    az = AzureAI.from_session()
+    if az.is_live and az._client:
+        try:
+            resp = az._client.chat.completions.create(
+                model=az.deployment,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": full_user}],
+                max_tokens=1024,
+                temperature=0.4,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            return f"AI error: {str(e)[:200]}"
+
+    return (
+        "No AI model is configured. Add an Anthropic, Gemini, or Azure OpenAI key "
+        "in the sidebar to enable the Proposal Chat."
+    )
+
+
 def run_pipeline(files):
     st.session_state.agent_logs = []
-    ai = AzureAI.from_session()
+    ai   = _pick_ai()
     live = ai.is_live
+    pref = st.session_state.get("preferred_llm", "azure")
+    model_name = {
+        "azure":  "Azure OpenAI",
+        "gemini": "Google Gemini",
+    }.get(pref, "AI")
     if live:
-        st.markdown('<div class="phdr">LIVE AI Processing via Azure OpenAI</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="phdr">LIVE AI Processing via {model_name}</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="phdr">Demo Mode — Configure Azure OpenAI for live AI</div>', unsafe_allow_html=True)
+        st.markdown('<div class="phdr">Demo Mode — Configure an AI model in the sidebar for live processing</div>', unsafe_allow_html=True)
     pb = st.progress(0)
     status = st.empty()
 
@@ -5927,6 +6236,29 @@ def run_pipeline(files):
     }
     st.session_state.model_metrics["proposals_processed"] += 1
 
+    # ── Save version snapshot ──
+    snapshot = {
+        "ts":           datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "project_type": safe_str(semantic.get("project_type", "")),
+        "total_hours":  safe_int(time_est.get("total_hours", 0)),
+        "duration_weeks": safe_str(time_est.get("duration_weeks", "")),
+        "monthly_cost": safe_int(cost_est.get("total_monthly_cost", 0)),
+        "annual_cost":  safe_int(cost_est.get("total_annual_cost", 0)),
+        "risk_level":   safe_str(risk.get("overall_level", "")),
+        "risk_score":   safe_int(risk.get("overall_score", 0)),
+        "req_count":    len(safe_list(semantic.get("requirements", []))),
+        "tech_stack":   safe_list(semantic.get("technology_stack", []))[:10],
+        "model_used":   model_name,
+        "three_point":  time_est.get("three_point", {}),
+    }
+    if "proposal_versions" not in st.session_state:
+        st.session_state.proposal_versions = []
+    st.session_state.proposal_versions.append(snapshot)
+    # Keep last 20 versions
+    st.session_state.proposal_versions = st.session_state.proposal_versions[-20:]
+    # Reset chat context for new proposal
+    st.session_state.chat_messages = []
+
 
 def show_results():
     r = st.session_state.processing_results
@@ -5955,7 +6287,7 @@ def show_results():
         with cols[i]:
             st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -6123,6 +6455,55 @@ def show_results():
         notes = safe_str(ce.get("notes"))
         if notes:
             st.info(notes)
+
+        # ── Live Azure Pricing ──
+        st.markdown("---")
+        st.markdown("**🔄 Live Azure Pricing**")
+        st.caption(
+            "Fetch real prices from the Azure Retail Prices API (public, no auth required). "
+            "Overwrites the AI-estimated costs for matched services."
+        )
+        lp_cols = st.columns([2, 2, 3])
+        with lp_cols[0]:
+            refresh_prices_btn = st.button(
+                "🔄 Refresh Live Azure Prices",
+                use_container_width=True,
+                key="btn_live_prices",
+            )
+        with lp_cols[1]:
+            if st.session_state.live_pricing_cache:
+                st.caption(f"Cache: {len(st.session_state.live_pricing_cache)} services fetched.")
+        if refresh_prices_btn:
+            with st.spinner("Fetching live prices from prices.azure.com…"):
+                live_p = _fetch_live_azure_pricing()
+            if live_p:
+                st.session_state.live_pricing_cache = live_p
+                # Patch the displayed cost data
+                patched = 0
+                for svc_row in azure_costs:
+                    svc_row = safe_dict(svc_row)
+                    svc_name = safe_str(svc_row.get("service", ""))
+                    if svc_name in live_p:
+                        svc_row["monthly_cost"] = live_p[svc_name]
+                        svc_row["tier"] = svc_row.get("tier", "") + " (live)"
+                        patched += 1
+                st.success(f"Live prices fetched for {len(live_p)} services, {patched} matched in your estimate.")
+                st.rerun()
+            else:
+                st.warning("Could not fetch live prices — check your internet connection. Showing AI estimates.")
+
+        if st.session_state.live_pricing_cache:
+            with st.expander("View Live Price Comparison"):
+                live_rows = []
+                for svc, lp in st.session_state.live_pricing_cache.items():
+                    cat_price = _INFRA_COST_CATALOG.get(svc, (None, 0, None))[1]
+                    diff      = lp - cat_price if cat_price else 0
+                    diff_str  = (f"+${diff}" if diff >= 0 else f"-${abs(diff)}") if cat_price else "N/A"
+                    live_rows.append({"Service": svc, "Live $/mo": lp, "AI Estimate $/mo": cat_price, "Δ": diff_str})
+                if live_rows:
+                    import pandas as pd
+                    st.dataframe(pd.DataFrame(live_rows), use_container_width=True, hide_index=True)
+
         # Cost Excel download
         st.markdown("---")
         cost_xl_data = generate_cost_excel(ce, te, se)
@@ -6985,6 +7366,147 @@ def show_results():
             '</div>',
             unsafe_allow_html=True,
         )
+
+    # ── Chat ──
+    with tab_list[11]:
+        st.markdown("### 💬 Proposal Chat")
+        st.markdown(
+            "Ask any question about this proposal — costs, timelines, risks, architecture — "
+            "and your AI analyst will answer using the full proposal data as context."
+        )
+
+        # Display conversation history
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat input
+        if user_input := st.chat_input("Ask about this proposal… e.g. 'Why is Phase 3 the longest?'"):
+            st.session_state.chat_messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            # Build context from full proposal data
+            ctx_summary = json.dumps({
+                "project_type":     se.get("project_type", ""),
+                "complexity_score": se.get("complexity_score", ""),
+                "technology_stack": safe_list(se.get("technology_stack"))[:15],
+                "total_hours":      te.get("total_hours", ""),
+                "duration_weeks":   te.get("duration_weeks", ""),
+                "three_point":      te.get("three_point", {}),
+                "phases_summary":   [
+                    {"name": p.get("name",""), "hours": p.get("hours",0)}
+                    for p in safe_list(te.get("phases"))[:8]
+                ],
+                "total_monthly_cost":  ce.get("total_monthly_cost", ""),
+                "total_annual_cost":   ce.get("total_annual_cost", ""),
+                "top_services":    [s.get("service","") for s in safe_list(ce.get("azure_costs"))[:6]],
+                "overall_risk":    ri.get("overall_level", ""),
+                "risk_score":      ri.get("overall_score", ""),
+                "top_risks":       [
+                    {"title": r.get("title",""), "severity": r.get("severity","")}
+                    for r in safe_list(ri.get("risks"))[:5]
+                ],
+                "requirements_count": len(safe_list(se.get("requirements"))),
+                "business_objectives": safe_list(se.get("business_objectives"))[:5],
+            }, indent=2)
+
+            system_prompt = (
+                "You are an expert ECI presales consultant with deep knowledge of Azure, "
+                "cloud architecture, and IT project estimation. You are answering questions "
+                "about a specific client proposal. Be concise, professional, and specific — "
+                "reference actual numbers from the proposal data. Do NOT return JSON. "
+                "Reply in plain conversational English.\n\n"
+                "PROPOSAL DATA:\n" + ctx_summary
+            )
+
+            with st.chat_message("assistant"):
+                with st.spinner("Analysing…"):
+                    answer = _ai_chat(system_prompt, st.session_state.chat_messages)
+                st.markdown(answer)
+
+            st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+
+        if st.session_state.chat_messages:
+            if st.button("🗑️ Clear conversation", key="btn_clear_chat"):
+                st.session_state.chat_messages = []
+                st.rerun()
+        else:
+            st.info(
+                "💡 Try asking:\n"
+                "- _\"Why does Phase 2 take so long?\"_\n"
+                "- _\"What is the biggest risk in this project?\"_\n"
+                "- _\"How can we reduce the infrastructure cost by 20%?\"_\n"
+                "- _\"Explain the technology choices\"_"
+            )
+
+    # ── History ──
+    with tab_list[12]:
+        st.markdown("### 📚 Proposal Version History")
+        st.markdown(
+            "Every time you run the pipeline, a snapshot is saved here. "
+            "Compare versions to see how estimates evolved as the scope changed."
+        )
+        versions = st.session_state.get("proposal_versions", [])
+        if not versions:
+            st.info("No versions saved yet. Run the pipeline on a document to create the first version.")
+        else:
+            # Summary table
+            import pandas as pd
+            ver_rows = []
+            for i, v in enumerate(reversed(versions)):
+                ver_rows.append({
+                    "#":        len(versions) - i,
+                    "Time":     v.get("ts", ""),
+                    "Project":  v.get("project_type", ""),
+                    "Hours":    v.get("total_hours", ""),
+                    "Weeks":    v.get("duration_weeks", ""),
+                    "$/mo":     f"${v.get('monthly_cost', 0):,}",
+                    "Risk":     v.get("risk_level", ""),
+                    "Reqs":     v.get("req_count", ""),
+                    "Model":    v.get("model_used", ""),
+                })
+            st.dataframe(pd.DataFrame(ver_rows), use_container_width=True, hide_index=True)
+
+            # Diff view
+            if len(versions) >= 2:
+                st.markdown("#### Delta — Latest vs Previous")
+                latest = versions[-1]
+                prev   = versions[-2]
+                delta_rows = []
+                for field, label, fmt in [
+                    ("total_hours",   "Total Hours",    lambda v: f"{v:,} h"),
+                    ("monthly_cost",  "Monthly $/mo",   lambda v: f"${v:,}"),
+                    ("req_count",     "Requirements",   lambda v: str(v)),
+                    ("risk_score",    "Risk Score",     lambda v: str(v)),
+                ]:
+                    lv = latest.get(field, 0) or 0
+                    pv = prev.get(field, 0)   or 0
+                    diff_val = lv - pv
+                    diff_str = ("+" if diff_val >= 0 else "") + fmt(diff_val) if callable(fmt) else str(diff_val)
+                    delta_rows.append({
+                        "Metric": label,
+                        "Previous": fmt(pv),
+                        "Latest":   fmt(lv),
+                        "Change":   diff_str,
+                        "▲":       "▲" if diff_val > 0 else ("▼" if diff_val < 0 else "="),
+                    })
+                st.dataframe(pd.DataFrame(delta_rows), use_container_width=True, hide_index=True)
+
+            # Download any version as JSON
+            v_idx = st.selectbox(
+                "Download version as JSON",
+                range(1, len(versions) + 1),
+                format_func=lambda i: f"v{i} — {versions[i-1].get('ts', '')} ({versions[i-1].get('project_type', '')})",
+                key="hist_ver_select",
+            )
+            st.download_button(
+                "📥 Download Version JSON",
+                data=json.dumps(versions[v_idx - 1], indent=2, default=str),
+                file_name=f"ECI_Proposal_v{v_idx}_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json",
+                key="dl_ver_json",
+            )
 
     # ── Delivery ──
     st.markdown("---")
