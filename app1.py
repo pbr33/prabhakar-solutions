@@ -411,65 +411,17 @@ def _pipeline_stepper_html(steps: list[str], current_idx: int) -> str:
 
 def _kpi_card(icon: str, title: str, value: str, subtitle: str, animated: bool = False) -> str:
     """Return an HTML KPI card. When animated=True, add the living gradient border."""
-    import re
     extra_cls = " kpi-glow" if animated else ""
-    # Try to embed a counter animation via data attributes
-    m = re.search(r"([\d,]+)", value)
-    if m and animated:
-        raw = int(m.group(1).replace(",", ""))
-        pre = value[: m.start()]
-        suf = value[m.end() :]
-        val_html = (
-            f"{pre}"
-            f'<span class="kpi-counter" data-num="{raw}" '
-            f'data-pre="{pre}" data-suf="{suf}">0</span>'
-            f"{suf}"
-        )
-    else:
-        val_html = value
     return (
         f'<div class="kpi{extra_cls}">'
         f'<div class="kpi-i">{icon}</div>'
-        f'<div class="kpi-v">{val_html}</div>'
+        f'<div class="kpi-v">{value}</div>'
         f'<div class="kpi-t">{title}</div>'
         f'<div class="kpi-s">{subtitle}</div>'
         f"</div>"
     )
 
 
-_KPI_COUNTER_JS = """
-<script>
-(function(){
-  function runCounters(){
-    document.querySelectorAll('.kpi-counter').forEach(function(el){
-      if(el.dataset.done) return;
-      el.dataset.done = '1';
-      var target = parseInt(el.dataset.num, 10);
-      var dur = 900, start = null;
-      function step(ts){
-        if(!start) start = ts;
-        var pct = Math.min((ts-start)/dur, 1);
-        var eased = 1 - Math.pow(1-pct, 3);
-        el.textContent = Math.round(target * eased).toLocaleString();
-        if(pct < 1) requestAnimationFrame(step);
-      }
-      requestAnimationFrame(step);
-    });
-  }
-  setTimeout(runCounters, 250);
-})();
-</script>"""
-
-_SCROLL_TO_RESULTS_JS = """
-<script>
-(function(){
-  setTimeout(function(){
-    var el = document.querySelector('[data-testid="stHorizontalBlock"]') ||
-             document.querySelector('.stTabs');
-    if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
-  }, 400);
-})();
-</script>"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6595,7 +6547,6 @@ def show_results():
         with cols[i]:
             st.markdown(_kpi_card(ic, t, v, s, animated=True), unsafe_allow_html=True)
     # Inject counter animation + smooth scroll
-    st.markdown(_KPI_COUNTER_JS + _SCROLL_TO_RESULTS_JS, unsafe_allow_html=True)
 
     tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History"])
 
