@@ -335,7 +335,141 @@ def inject_css():
     .stMarkdown code{color:var(--c5)!important;background:var(--bg2)!important}
     [data-testid="stExpander"] summary p,[data-testid="stExpander"] summary span{color:var(--t1)!important}
     [data-testid="stExpander"] details summary{color:var(--t1)!important}
+
+    /* ── Animated gradient progress bar ── */
+    [data-testid="stProgressBar"]>div{background:linear-gradient(90deg,var(--c1),var(--c3),var(--c1))!important;background-size:200% 100%!important;animation:pb-shimmer 2s linear infinite;box-shadow:0 0 10px var(--c1)!important;transition:width .3s ease}
+    @keyframes pb-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+    /* ── Animated gradient border on KPI cards ── */
+    .kpi-glow{background:linear-gradient(var(--bg2),var(--bg2)) padding-box,linear-gradient(135deg,var(--c1) 0%,var(--c3) 50%,var(--c1) 100%) border-box;border:1.5px solid transparent!important;background-size:200%;animation:kpi-border 4s linear infinite}
+    @keyframes kpi-border{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+
+    /* ── Toast notifications ── */
+    .toast{position:fixed;bottom:24px;right:24px;z-index:9999;background:var(--bg2);border-radius:10px;padding:13px 20px;font-family:'DM Sans',sans-serif;font-size:.88rem;color:var(--t1);box-shadow:0 4px 32px rgba(0,0,0,.5);max-width:360px;animation:toast-anim 5s ease forwards;pointer-events:none}
+    .toast.success{border-left:3px solid var(--c6)}.toast.error{border-left:3px solid var(--c4)}.toast.info{border-left:3px solid var(--c2)}.toast.warn{border-left:3px solid var(--c5)}
+    @keyframes toast-anim{0%{opacity:0;transform:translateX(80px)}8%{opacity:1;transform:translateX(0)}80%{opacity:1}100%{opacity:0;transform:translateX(80px)}}
+
+    /* ── Skeleton shimmer ── */
+    .skeleton{background:linear-gradient(90deg,var(--bg2) 25%,rgba(255,255,255,.04) 50%,var(--bg2) 75%);background-size:200% 100%;animation:sk-anim 1.5s infinite;border-radius:10px}
+    @keyframes sk-anim{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    .sk-kpi{height:110px}.sk-row{height:18px;margin-bottom:8px}.sk-row.w80{width:80%}.sk-row.w60{width:60%}.sk-row.w40{width:40%}
+
+    /* ── Pipeline stepper ── */
+    .pipe-stepper{display:flex;align-items:center;overflow-x:auto;padding:14px 0;margin-bottom:10px;scrollbar-width:none}.pipe-stepper::-webkit-scrollbar{display:none}
+    .ps-step{display:flex;align-items:center;gap:5px;white-space:nowrap}
+    .ps-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:.7rem;font-weight:700;flex-shrink:0;transition:all .4s}
+    .ps-dot.done{background:var(--c6);color:#0a0e1a}.ps-dot.active{background:var(--c1);color:#0a0e1a;box-shadow:0 0 12px var(--c1);animation:ps-pulse 1s ease-in-out infinite}.ps-dot.pend{background:var(--bg2);border:1px solid var(--bd);color:var(--t3)}
+    @keyframes ps-pulse{0%,100%{box-shadow:0 0 10px var(--c1)}50%{box-shadow:0 0 22px var(--c1),0 0 40px var(--gc)}}
+    .ps-lbl{font-family:'DM Sans',sans-serif;font-size:.72rem;color:var(--t3);transition:color .4s}.ps-lbl.done{color:var(--c6)}.ps-lbl.active{color:var(--t1);font-weight:600}
+    .ps-conn{width:18px;height:2px;flex-shrink:0;transition:background .4s}.ps-conn.done{background:var(--c6)}.ps-conn.pend{background:var(--bd)}
+
+    /* ── Ambient animated background glow ── */
+    .stApp::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:radial-gradient(ellipse 60% 50% at 15% 40%,rgba(0,212,170,.04) 0%,transparent 60%),radial-gradient(ellipse 60% 50% at 85% 60%,rgba(123,97,255,.04) 0%,transparent 60%);animation:ambient-shift 10s ease-in-out infinite alternate;pointer-events:none;z-index:0}
+    @keyframes ambient-shift{0%{opacity:.6}100%{opacity:1}}
+
+    /* ── KPI value fade-up animation ── */
+    .kpi-v{animation:kpi-appear .5s ease both}
+    @keyframes kpi-appear{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
     </style>""", unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  HELPERS: UI / UX utilities
+# ═══════════════════════════════════════════════════════════════════════
+
+def show_toast(message: str, kind: str = "success"):
+    """Inject a self-dismissing floating toast notification (CSS animation, no JS)."""
+    icons = {"success": "✅", "error": "❌", "info": "ℹ️", "warn": "⚠️"}
+    icon = icons.get(kind, "ℹ️")
+    st.markdown(
+        f'<div class="toast {kind}">{icon}&nbsp; {message}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _pipeline_stepper_html(steps: list[str], current_idx: int) -> str:
+    """Return HTML for a horizontal animated pipeline stepper."""
+    parts: list[str] = []
+    for i, label in enumerate(steps):
+        if i < current_idx:
+            dot_cls, lbl_cls, dot_txt = "done", "done", "✓"
+        elif i == current_idx:
+            dot_cls, lbl_cls, dot_txt = "active", "active", str(i + 1)
+        else:
+            dot_cls, lbl_cls, dot_txt = "pend", "", str(i + 1)
+        parts.append(
+            f'<div class="ps-step">'
+            f'<div class="ps-dot {dot_cls}">{dot_txt}</div>'
+            f'<span class="ps-lbl {lbl_cls}">{label}</span>'
+            f'</div>'
+        )
+        if i < len(steps) - 1:
+            conn_cls = "done" if i < current_idx else "pend"
+            parts.append(f'<div class="ps-conn {conn_cls}"></div>')
+    return '<div class="pipe-stepper">' + "".join(parts) + "</div>"
+
+
+def _kpi_card(icon: str, title: str, value: str, subtitle: str, animated: bool = False) -> str:
+    """Return an HTML KPI card. When animated=True, add the living gradient border."""
+    import re
+    extra_cls = " kpi-glow" if animated else ""
+    # Try to embed a counter animation via data attributes
+    m = re.search(r"([\d,]+)", value)
+    if m and animated:
+        raw = int(m.group(1).replace(",", ""))
+        pre = value[: m.start()]
+        suf = value[m.end() :]
+        val_html = (
+            f"{pre}"
+            f'<span class="kpi-counter" data-num="{raw}" '
+            f'data-pre="{pre}" data-suf="{suf}">0</span>'
+            f"{suf}"
+        )
+    else:
+        val_html = value
+    return (
+        f'<div class="kpi{extra_cls}">'
+        f'<div class="kpi-i">{icon}</div>'
+        f'<div class="kpi-v">{val_html}</div>'
+        f'<div class="kpi-t">{title}</div>'
+        f'<div class="kpi-s">{subtitle}</div>'
+        f"</div>"
+    )
+
+
+_KPI_COUNTER_JS = """
+<script>
+(function(){
+  function runCounters(){
+    document.querySelectorAll('.kpi-counter').forEach(function(el){
+      if(el.dataset.done) return;
+      el.dataset.done = '1';
+      var target = parseInt(el.dataset.num, 10);
+      var dur = 900, start = null;
+      function step(ts){
+        if(!start) start = ts;
+        var pct = Math.min((ts-start)/dur, 1);
+        var eased = 1 - Math.pow(1-pct, 3);
+        el.textContent = Math.round(target * eased).toLocaleString();
+        if(pct < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  setTimeout(runCounters, 250);
+})();
+</script>"""
+
+_SCROLL_TO_RESULTS_JS = """
+<script>
+(function(){
+  setTimeout(function(){
+    var el = document.querySelector('[data-testid="stHorizontalBlock"]') ||
+             document.querySelector('.stTabs');
+    if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+  }, 400);
+})();
+</script>"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6314,14 +6448,25 @@ def run_pipeline(files):
         "gemini": "Google Gemini",
     }.get(pref, "AI")
     if live:
-        st.markdown(f'<div class="phdr">LIVE AI Processing via {model_name}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="phdr">⚡ LIVE AI Processing via {model_name}</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="phdr">Demo Mode — Configure an AI model in the sidebar for live processing</div>', unsafe_allow_html=True)
-    pb = st.progress(0)
-    status = st.empty()
+        st.markdown('<div class="phdr">🔵 Demo Mode — Configure an AI model in the sidebar for live processing</div>', unsafe_allow_html=True)
 
-    status.markdown("**1/12** Ingesting documents...")
-    pb.progress(5)
+    _PIPE_STEPS = [
+        "Ingest", "Intelligence", "Semantic", "RAG",
+        "Time", "Cost", "Risk", "Architecture",
+        "Scope", "Proposal", "Diagrams", "Done",
+    ]
+    pb       = st.progress(0)
+    stepper  = st.empty()
+    status   = st.empty()
+
+    def _upd(idx: int, msg: str, pct: int):
+        stepper.markdown(_pipeline_stepper_html(_PIPE_STEPS, idx), unsafe_allow_html=True)
+        status.markdown(f'<div style="font-family:\'DM Sans\',sans-serif;font-size:.82rem;color:var(--t2);padding:4px 0">{msg}</div>', unsafe_allow_html=True)
+        pb.progress(pct)
+
+    _upd(0, "Ingesting documents…", 5)
     dp = DocProcessor()
     text = ""
     for f in files:
@@ -6329,71 +6474,63 @@ def run_pipeline(files):
     log_agent("Ingestion", str(len(files)) + " file(s), " + str(len(text)) + " chars")
     time.sleep(0.2)
 
-    status.markdown("**2/12** Document Intelligence...")
-    pb.progress(10)
+    _upd(1, "Analysing document structure…", 10)
     intel = dp.analyze(text)
     log_agent("Intelligence", str(intel["section_count"]) + " sections, " + str(intel["word_count"]) + " words")
     time.sleep(0.2)
 
-    status.markdown("**3/12** Semantic Analysis" + (" (GPT-4)..." if live else "..."))
-    pb.progress(20)
+    _upd(2, ("Semantic analysis via " + model_name + "…") if live else "Semantic analysis…", 20)
     semantic = ai.analyze_requirements(text)
     st.session_state["_last_semantic"] = semantic
     log_agent("Semantic", str(len(safe_list(semantic.get("requirements")))) + " requirements, " + str(len(safe_list(semantic.get("technology_stack")))) + " technologies detected")
     time.sleep(0.2)
 
-    status.markdown("**4/12** Historical RAG...")
-    pb.progress(30)
+    _upd(3, "Historical RAG similarity search…", 30)
     rag = ai.search_historical(text, st.session_state.historical_projects)
     log_agent("RAG", str(len(safe_list(rag.get("similar_projects")))) + " matches")
     time.sleep(0.2)
 
-    status.markdown("**5/12** Time Estimator...")
-    pb.progress(40)
+    _upd(4, "Estimating time & effort…", 40)
     time_est = ai.estimate_time(semantic, rag)
     st.session_state["_last_time_est"] = time_est
     log_agent("Time", str(time_est.get("total_hours", 0)) + " hours across " + str(len(safe_list(time_est.get("phases")))) + " phases")
     time.sleep(0.2)
 
-    status.markdown("**6/12** Cost Calculator...")
-    pb.progress(50)
+    _upd(5, "Calculating Azure infrastructure cost…", 50)
     cost_est = ai.estimate_cost(semantic, time_est, rag)
     st.session_state["_last_cost_est"] = cost_est
     log_agent("Cost", "$" + str(cost_est.get("total_monthly_cost", 0)) + "/mo (" + str(len(safe_list(cost_est.get("azure_costs")))) + " services)")
     time.sleep(0.2)
 
-    status.markdown("**7/12** Risk Analyzer...")
-    pb.progress(60)
+    _upd(6, "Analysing risks…", 60)
     risk = ai.analyze_risk(semantic, time_est, cost_est)
     log_agent("Risk", str(risk.get("overall_score", 0)) + "/10 — " + str(len(safe_list(risk.get("risks")))) + " risks identified")
     time.sleep(0.2)
 
-    status.markdown("**8/12** Architecture Designer...")
-    pb.progress(70)
+    _upd(7, "Designing solution architecture…", 70)
     arch = ai.design_architecture(semantic, rag)
     log_agent("Architecture", str(len(safe_list(arch.get("components")))) + " components")
     time.sleep(0.2)
 
-    status.markdown("**9/12** Scope & Assumptions...")
-    pb.progress(80)
+    _upd(8, "Defining scope & assumptions…", 78)
     scope = ai.define_scope(semantic, time_est, cost_est)
     log_agent("Scope", "Boundaries defined")
     time.sleep(0.2)
 
-    status.markdown("**10/12** Proposal Writer...")
-    pb.progress(80)
+    _upd(9, "Writing proposal document…", 84)
     proposal = ai.write_proposal(semantic, time_est, cost_est, risk, arch, scope)
     log_agent("Proposal", "Document generated")
     time.sleep(0.2)
 
-    status.markdown("**11/12** Architecture Visualizer...")
-    pb.progress(90)
+    _upd(10, "Generating architecture diagrams…", 93)
     mermaid_diagrams = ai.generate_mermaid_diagrams(semantic, arch)
     log_agent("Visualizer", str(len(mermaid_diagrams)) + " diagrams generated")
     time.sleep(0.2)
 
     pb.progress(100)
-    status.markdown("**12/12** All agents completed!")
+    stepper.markdown(_pipeline_stepper_html(_PIPE_STEPS, len(_PIPE_STEPS)), unsafe_allow_html=True)
+    status.empty()
+    show_toast("🚀 Proposal ready — all 11 agents completed!", "success")
     st.session_state.processing_results = {
         "semantic_analysis": semantic, "rag": rag, "time_estimate": time_est,
         "cost_estimate": cost_est, "risk_assessment": risk, "architecture": arch,
@@ -6456,7 +6593,9 @@ def show_results():
     cols = st.columns(5)
     for i, (ic, t, v, s) in enumerate(kpis):
         with cols[i]:
-            st.markdown('<div class="kpi"><div class="kpi-i">' + ic + '</div><div class="kpi-v">' + v + '</div><div class="kpi-t">' + t + '</div><div class="kpi-s">' + s + '</div></div>', unsafe_allow_html=True)
+            st.markdown(_kpi_card(ic, t, v, s, animated=True), unsafe_allow_html=True)
+    # Inject counter animation + smooth scroll
+    st.markdown(_KPI_COUNTER_JS + _SCROLL_TO_RESULTS_JS, unsafe_allow_html=True)
 
     tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History"])
 
