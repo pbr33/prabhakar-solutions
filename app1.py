@@ -122,47 +122,51 @@ def _db_save_run(snapshot: dict, full_results: dict) -> int:
     tech = snapshot.get("tech_stack", [])
     cat  = _detect_category(snapshot.get("project_type", ""), tech)
     con  = sqlite3.connect(_DB_PATH)
-    cur  = con.execute("""
-        INSERT INTO proposals
-            (ts, category, project_type, total_hours, duration_weeks,
-             monthly_cost, annual_cost, risk_level, risk_score,
-             req_count, tech_stack, model_used, three_point, results_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        snapshot.get("ts",             datetime.now().strftime("%Y-%m-%d %H:%M")),
-        cat,
-        snapshot.get("project_type",   ""),
-        snapshot.get("total_hours",    0),
-        snapshot.get("duration_weeks", ""),
-        snapshot.get("monthly_cost",   0),
-        snapshot.get("annual_cost",    0),
-        snapshot.get("risk_level",     ""),
-        snapshot.get("risk_score",     0),
-        snapshot.get("req_count",      0),
-        json.dumps(tech),
-        snapshot.get("model_used",     ""),
-        json.dumps(snapshot.get("three_point", {})),
-        json.dumps(full_results, default=str),
-    ))
-    row_id = cur.lastrowid
-    con.commit()
-    con.close()
-    return row_id
+    try:
+        cur  = con.execute("""
+            INSERT INTO proposals
+                (ts, category, project_type, total_hours, duration_weeks,
+                 monthly_cost, annual_cost, risk_level, risk_score,
+                 req_count, tech_stack, model_used, three_point, results_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            snapshot.get("ts",             datetime.now().strftime("%Y-%m-%d %H:%M")),
+            cat,
+            snapshot.get("project_type",   ""),
+            snapshot.get("total_hours",    0),
+            snapshot.get("duration_weeks", ""),
+            snapshot.get("monthly_cost",   0),
+            snapshot.get("annual_cost",    0),
+            snapshot.get("risk_level",     ""),
+            snapshot.get("risk_score",     0),
+            snapshot.get("req_count",      0),
+            json.dumps(tech),
+            snapshot.get("model_used",     ""),
+            json.dumps(snapshot.get("three_point", {})),
+            json.dumps(full_results, default=str),
+        ))
+        row_id = cur.lastrowid
+        con.commit()
+        return row_id
+    finally:
+        con.close()
 
 
 def _db_load_runs(category: str = "All") -> list:
     """Return list of run dicts (no results_json) newest-first."""
     con = sqlite3.connect(_DB_PATH)
     con.row_factory = sqlite3.Row
-    if category and category != "All":
-        rows = con.execute(
-            "SELECT * FROM proposals WHERE category=? ORDER BY id DESC", (category,)
-        ).fetchall()
-    else:
-        rows = con.execute(
-            "SELECT * FROM proposals ORDER BY id DESC"
-        ).fetchall()
-    con.close()
+    try:
+        if category and category != "All":
+            rows = con.execute(
+                "SELECT * FROM proposals WHERE category=? ORDER BY id DESC", (category,)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM proposals ORDER BY id DESC"
+            ).fetchall()
+    finally:
+        con.close()
     result = []
     for r in rows:
         d = dict(r)
@@ -182,10 +186,12 @@ def _db_load_runs(category: str = "All") -> list:
 def _db_load_results(run_id: int) -> dict:
     """Return the full results_json for a single run (parsed)."""
     con = sqlite3.connect(_DB_PATH)
-    row = con.execute(
-        "SELECT results_json FROM proposals WHERE id=?", (run_id,)
-    ).fetchone()
-    con.close()
+    try:
+        row = con.execute(
+            "SELECT results_json FROM proposals WHERE id=?", (run_id,)
+        ).fetchone()
+    finally:
+        con.close()
     if row:
         try:
             return json.loads(row[0])
@@ -196,19 +202,23 @@ def _db_load_results(run_id: int) -> dict:
 
 def _db_delete_run(run_id: int):
     con = sqlite3.connect(_DB_PATH)
-    con.execute("DELETE FROM proposals WHERE id=?", (run_id,))
-    con.commit()
-    con.close()
+    try:
+        con.execute("DELETE FROM proposals WHERE id=?", (run_id,))
+        con.commit()
+    finally:
+        con.close()
 
 
 def _db_category_counts() -> dict:
     """Return {category: count, 'All': total} for the badge pills."""
     con = sqlite3.connect(_DB_PATH)
-    rows = con.execute(
-        "SELECT category, COUNT(*) as n FROM proposals GROUP BY category"
-    ).fetchall()
-    total = con.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
-    con.close()
+    try:
+        rows = con.execute(
+            "SELECT category, COUNT(*) as n FROM proposals GROUP BY category"
+        ).fetchall()
+        total = con.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
+    finally:
+        con.close()
     counts = {r[0]: r[1] for r in rows}
     counts["All"] = total
     return counts
@@ -3549,8 +3559,8 @@ class ArchitectNarrator:
                 resp = claude._call(_sys_prompt, _user_prompt)
                 if resp and isinstance(resp, dict) and resp.get("script"):
                     return safe_str(resp["script"])
-            except Exception:
-                pass
+            except Exception as e:
+                st.warning(f"Claude script generation failed: {str(e)[:120]}. Falling back to Azure.")
 
         # Try Azure OpenAI
         ai = AzureAI.from_session()
@@ -3559,8 +3569,8 @@ class ArchitectNarrator:
                 resp = ai._call(_sys_prompt, _user_prompt)
                 if resp and isinstance(resp, dict) and resp.get("script"):
                     return safe_str(resp["script"])
-            except Exception:
-                pass
+            except Exception as e:
+                st.warning(f"Azure script generation failed: {str(e)[:120]}. Using template script.")
 
         # Fallback: template-generated script
         cost_txt  = f"${monthly_cost:,} per month" if monthly_cost else "within your agreed budget"
@@ -5848,7 +5858,8 @@ _defaults = {
     "proposal_versions": [],
     "live_pricing_cache": {},
     "sp_url": "", "sp_cid": "", "sp_cs": "", "sp_tid": "",
-    "email_smtp": "", "email_sender": "",
+    "email_smtp": "", "email_sender": "", "cfg_email_pass": "",
+    "narrator_script": "",
     "elevenlabs_api_key": os.environ.get("ELEVENLABS_API_KEY", ""),
     "heygen_api_key":     os.environ.get("HEYGEN_API_KEY", ""),
     "heygen_avatar_id":   os.environ.get("HEYGEN_AVATAR_ID", ""),
