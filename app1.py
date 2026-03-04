@@ -370,6 +370,46 @@ def inject_css():
     /* ── KPI value fade-up animation ── */
     .kpi-v{animation:kpi-appear .5s ease both}
     @keyframes kpi-appear{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+    /* ── Shared empty-state animations ── */
+    @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+    @keyframes bounce-arr{0%,100%{transform:translateY(0);opacity:.5}50%{transform:translateY(-7px);opacity:1}}
+    @keyframes blink-dot{0%,80%,100%{opacity:.25;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
+    @keyframes fade-in-up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+
+    /* ── Home stats banner ── */
+    .home-stats{display:flex;align-items:center;justify-content:center;gap:2.5rem;flex-wrap:wrap;padding:1.1rem 2rem;background:linear-gradient(135deg,var(--gc),var(--gp));border:1px solid var(--bd);border-radius:12px;margin-bottom:1.4rem;animation:fade-in-up .5s ease}
+    .hs-item{text-align:center}
+    .hs-n{font-family:'JetBrains Mono',monospace;font-size:1.7rem;font-weight:700;color:var(--c1);display:block}
+    .hs-l{font-family:'DM Sans',sans-serif;font-size:.72rem;color:var(--t3);text-transform:uppercase;letter-spacing:.6px}
+    .hs-sep{width:1px;height:36px;background:var(--bd)}
+
+    /* ── Lottie-style empty state cards ── */
+    .empty-state{text-align:center;padding:2.5rem 1rem;animation:fade-in-up .5s ease}
+    .es-icon{font-size:3.8rem;display:inline-block;animation:float 3s ease-in-out infinite;line-height:1}
+    .es-arr{font-size:1.8rem;display:inline-block;animation:bounce-arr 1.4s ease-in-out infinite;margin-top:-.4rem}
+    .es-title{font-family:'Space Grotesk',sans-serif;font-size:1.1rem;font-weight:600;color:var(--t1);margin:.8rem 0 .3rem}
+    .es-sub{font-family:'DM Sans',sans-serif;font-size:.84rem;color:var(--t2);line-height:1.5;max-width:360px;margin:0 auto}
+    .typing-dots{display:flex;justify-content:center;gap:6px;margin:.6rem 0}
+    .typing-dots span{width:8px;height:8px;border-radius:50%;background:var(--c1);animation:blink-dot 1.4s infinite}
+    .typing-dots span:nth-child(2){animation-delay:.2s}
+    .typing-dots span:nth-child(3){animation-delay:.4s}
+
+    /* ── Command palette (injected into parent by JS) ── */
+    #cmdpal-overlay{display:none;position:fixed;inset:0;background:rgba(10,14,26,.88);backdrop-filter:blur(10px);z-index:2147483647;align-items:flex-start;justify-content:center;padding-top:13vh}
+    #cmdpal-overlay.open{display:flex}
+    #cmdpal-box{background:#111827;border:1px solid #1e2a4a;border-radius:14px;width:560px;max-width:92vw;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.7);font-family:'DM Sans',sans-serif}
+    #cmdpal-input{width:100%;background:transparent;border:none;border-bottom:1px solid #1e2a4a;padding:16px 20px;font-size:1rem;color:#e2e8f0;outline:none;font-family:'DM Sans',sans-serif}
+    #cmdpal-input::placeholder{color:#64748b}
+    #cmdpal-list{max-height:320px;overflow-y:auto;padding:6px 0}
+    #cmdpal-list::-webkit-scrollbar{width:4px}#cmdpal-list::-webkit-scrollbar-thumb{background:#1e2a4a;border-radius:2px}
+    .cmd-group{font-size:.7rem;color:#64748b;text-transform:uppercase;letter-spacing:.8px;padding:8px 20px 4px;font-family:'JetBrains Mono',monospace}
+    .cmd-item{display:flex;align-items:center;gap:12px;padding:9px 20px;cursor:pointer;transition:background .15s;color:#94a3b8;font-size:.9rem}
+    .cmd-item:hover,.cmd-item.active{background:rgba(0,212,170,.08);color:#e2e8f0}
+    .cmd-item-icon{font-size:1rem;width:22px;text-align:center;flex-shrink:0}
+    .cmd-item-label{flex:1}
+    .cmd-item-hint{font-size:.72rem;color:#64748b;font-family:'JetBrains Mono',monospace}
+    #cmdpal-footer{padding:8px 20px;border-top:1px solid #1e2a4a;display:flex;gap:16px;font-size:.72rem;color:#64748b;font-family:'JetBrains Mono',monospace}
     </style>""", unsafe_allow_html=True)
 
 
@@ -422,6 +462,250 @@ def _kpi_card(icon: str, title: str, value: str, subtitle: str, animated: bool =
     )
 
 
+# ───────────────────────────────────────────────────────────────────────
+#  Home stats banner (live DB counts)
+# ───────────────────────────────────────────────────────────────────────
+
+def _home_stats_banner():
+    """Render a live stats strip at the top of the Business Estimation tab."""
+    try:
+        counts = _db_category_counts()
+        total  = counts.get("All", 0)
+        runs   = _db_load_runs("All")
+        hours  = sum((r.get("total_hours") or 0) for r in runs)
+        cost   = sum((r.get("monthly_cost") or 0) for r in runs)
+    except Exception:
+        total = hours = cost = 0
+    st.markdown(
+        f'<div class="home-stats">'
+        f'<div class="hs-item"><span class="hs-n">{total}</span><span class="hs-l">Proposals Generated</span></div>'
+        f'<div class="hs-sep"></div>'
+        f'<div class="hs-item"><span class="hs-n">{hours:,}</span><span class="hs-l">Hours Estimated</span></div>'
+        f'<div class="hs-sep"></div>'
+        f'<div class="hs-item"><span class="hs-n">${cost:,}/mo</span><span class="hs-l">Infrastructure Sized</span></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────
+#  Animated empty-state components
+# ───────────────────────────────────────────────────────────────────────
+
+def _empty_upload():
+    """Animated empty state for the home screen (no file uploaded yet)."""
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="es-icon">📄</div>'
+        '<div class="es-arr">⬆</div>'
+        '<div class="es-title">Drop scope documents to begin</div>'
+        '<div class="es-sub">Upload PDF, DOCX, XLSX, PPTX, TXT or CSV — '
+        'the AI pipeline will extract requirements, estimate hours, cost, risk, and build the full proposal.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _empty_chat():
+    """Animated empty state for the chat tab (no messages yet)."""
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="es-icon">💬</div>'
+        '<div class="typing-dots"><span></span><span></span><span></span></div>'
+        '<div class="es-title">Ask anything about this proposal</div>'
+        '<div class="es-sub">'
+        'Try: <em>"Why does Phase 2 take so long?"</em> · '
+        '<em>"What is the biggest risk?"</em> · '
+        '<em>"How can we cut infrastructure cost by 20%?"</em>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _empty_library():
+    """Animated empty state for the Run Library tab."""
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="es-icon">🗂️</div>'
+        '<div class="es-title">No proposals yet</div>'
+        '<div class="es-sub">Upload a scope document in <strong>⚡ Business Estimation</strong> '
+        'and run the pipeline — results appear here automatically.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────
+#  Typing / streaming animation for chat responses
+# ───────────────────────────────────────────────────────────────────────
+
+def _stream_answer(text: str):
+    """Word-by-word generator for st.write_stream() typing effect."""
+    import time
+    words = text.split()
+    for i, word in enumerate(words):
+        yield word + (" " if i < len(words) - 1 else "")
+        time.sleep(0.022)
+
+
+# ───────────────────────────────────────────────────────────────────────
+#  Command palette (Ctrl+K) — injects into parent page via iframe JS
+# ───────────────────────────────────────────────────────────────────────
+
+def inject_command_palette():
+    """Inject a Ctrl+K command palette into the Streamlit parent document."""
+    commands_js = """[
+      {g:"Navigate", icon:"⚡", label:"Business Estimation", hint:"Main tab"},
+      {g:"Navigate", icon:"🗂️", label:"Run Library", hint:"Main tab"},
+      {g:"Navigate", icon:"⚙️", label:"Admin & Training", hint:"Main tab"},
+      {g:"Results",  icon:"📋", label:"Requirements",   hint:"Results tab"},
+      {g:"Results",  icon:"⏱️", label:"Time",           hint:"Results tab"},
+      {g:"Results",  icon:"💰", label:"Infra Cost",     hint:"Results tab"},
+      {g:"Results",  icon:"⚠️", label:"Risk",           hint:"Results tab"},
+      {g:"Results",  icon:"🏗️", label:"Architecture",   hint:"Results tab"},
+      {g:"Results",  icon:"📐", label:"Diagrams",       hint:"Results tab"},
+      {g:"Results",  icon:"📄", label:"Proposal",       hint:"Results tab"},
+      {g:"Results",  icon:"📌", label:"Scope",          hint:"Results tab"},
+      {g:"Results",  icon:"👥", label:"Team & Roles",   hint:"Results tab"},
+      {g:"Results",  icon:"🎮", label:"3D View",        hint:"Results tab"},
+      {g:"Results",  icon:"🎬", label:"Narrator",       hint:"Results tab"},
+      {g:"Results",  icon:"💬", label:"Chat",           hint:"Results tab"},
+      {g:"Results",  icon:"📚", label:"History",        hint:"Results tab"},
+      {g:"Admin",    icon:"📊", label:"Dashboard",      hint:"Admin tab"},
+      {g:"Admin",    icon:"🔧", label:"Config",         hint:"Admin tab"}
+    ]"""
+
+    st.components.v1.html(f"""<!DOCTYPE html><html><body style="margin:0">
+<script>
+(function(){{
+  var p = window.parent;
+  var pd = p.document;
+
+  // ── Inject CSS once ──
+  if (!pd.getElementById('cmdpal-style')) {{
+    var s = pd.createElement('style');
+    s.id = 'cmdpal-style';
+    s.textContent = [
+      '#cmdpal-overlay{{display:none;position:fixed;inset:0;background:rgba(10,14,26,.88);backdrop-filter:blur(10px);z-index:2147483647;align-items:flex-start;justify-content:center;padding-top:13vh}}',
+      '#cmdpal-overlay.open{{display:flex}}',
+      '#cmdpal-box{{background:#111827;border:1px solid #1e2a4a;border-radius:14px;width:560px;max-width:92vw;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.7);font-family:DM Sans,sans-serif}}',
+      '#cmdpal-input{{width:100%;box-sizing:border-box;background:transparent;border:none;border-bottom:1px solid #1e2a4a;padding:16px 20px;font-size:1rem;color:#e2e8f0;outline:none;font-family:DM Sans,sans-serif}}',
+      '#cmdpal-input::placeholder{{color:#64748b}}',
+      '#cmdpal-list{{max-height:320px;overflow-y:auto;padding:6px 0;scrollbar-width:thin}}',
+      '.cmd-group{{font-size:.68rem;color:#64748b;text-transform:uppercase;letter-spacing:.8px;padding:8px 20px 3px;font-family:JetBrains Mono,monospace}}',
+      '.cmd-item{{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;transition:background .12s;color:#94a3b8;font-size:.88rem}}',
+      '.cmd-item:hover,.cmd-item.cmd-active{{background:rgba(0,212,170,.09);color:#e2e8f0}}',
+      '.cmd-icon{{font-size:.95rem;width:22px;text-align:center;flex-shrink:0}}',
+      '.cmd-lbl{{flex:1}}',
+      '.cmd-hint{{font-size:.68rem;color:#64748b;font-family:JetBrains Mono,monospace}}',
+      '#cmdpal-footer{{padding:7px 20px;border-top:1px solid #1e2a4a;display:flex;gap:16px;font-size:.7rem;color:#64748b;font-family:JetBrains Mono,monospace}}'
+    ].join('');
+    pd.head.appendChild(s);
+  }}
+
+  // ── Inject HTML once ──
+  if (!pd.getElementById('cmdpal-overlay')) {{
+    var div = pd.createElement('div');
+    div.id = 'cmdpal-overlay';
+    div.innerHTML = '<div id="cmdpal-box">' +
+      '<input id="cmdpal-input" placeholder="Search commands… (e.g. Requirements, Chat, 3D View)" autocomplete="off"/>' +
+      '<div id="cmdpal-list"></div>' +
+      '<div id="cmdpal-footer"><span>↑↓ navigate</span><span>↵ select</span><span>esc close</span></div>' +
+      '</div>';
+    pd.body.appendChild(div);
+  }}
+
+  var CMDS = {commands_js};
+  var overlay = pd.getElementById('cmdpal-overlay');
+  var input   = pd.getElementById('cmdpal-input');
+  var list    = pd.getElementById('cmdpal-list');
+  var activeIdx = 0;
+
+  function navigate(label) {{
+    var tabs = pd.querySelectorAll('[data-baseweb="tab"]');
+    for (var i = 0; i < tabs.length; i++) {{
+      if (tabs[i].textContent.trim().includes(label.replace(/[⚡🗂️⚙️📋⏱️💰⚠️🏗️📐📄📌👥🎮🎬💬📚📊🔧]/g,'').trim())) {{
+        tabs[i].click();
+        break;
+      }}
+    }}
+    close();
+  }}
+
+  function renderList(q) {{
+    var filtered = CMDS.filter(function(c) {{
+      return !q || c.label.toLowerCase().includes(q.toLowerCase()) || c.g.toLowerCase().includes(q.toLowerCase());
+    }});
+    activeIdx = 0;
+    var html = '';
+    var lastGroup = '';
+    filtered.forEach(function(c, i) {{
+      if (c.g !== lastGroup) {{
+        html += '<div class="cmd-group">' + c.g + '</div>';
+        lastGroup = c.g;
+      }}
+      html += '<div class="cmd-item' + (i===0?' cmd-active':'') + '" data-label="' + c.label + '">' +
+        '<span class="cmd-icon">' + c.icon + '</span>' +
+        '<span class="cmd-lbl">' + c.label + '</span>' +
+        '<span class="cmd-hint">' + c.hint + '</span>' +
+        '</div>';
+    }});
+    list.innerHTML = html || '<div style="padding:20px;color:#64748b;text-align:center;font-size:.85rem">No results</div>';
+    list.querySelectorAll('.cmd-item').forEach(function(el) {{
+      el.addEventListener('click', function() {{ navigate(el.dataset.label); }});
+    }});
+  }}
+
+  function updateActive(delta) {{
+    var items = list.querySelectorAll('.cmd-item');
+    if (!items.length) return;
+    items[activeIdx].classList.remove('cmd-active');
+    activeIdx = (activeIdx + delta + items.length) % items.length;
+    items[activeIdx].classList.add('cmd-active');
+    items[activeIdx].scrollIntoView({{block:'nearest'}});
+  }}
+
+  function open() {{
+    overlay.classList.add('open');
+    input.value = '';
+    renderList('');
+    setTimeout(function(){{input.focus();}}, 50);
+  }}
+
+  function close() {{
+    overlay.classList.remove('open');
+  }}
+
+  // ── Event listeners (attach once via flag) ──
+  if (!p._cmdpalReady) {{
+    p._cmdpalReady = true;
+
+    pd.addEventListener('keydown', function(e) {{
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {{
+        e.preventDefault();
+        overlay.classList.contains('open') ? close() : open();
+      }}
+      if (!overlay.classList.contains('open')) return;
+      if (e.key === 'Escape') {{ close(); }}
+      if (e.key === 'ArrowDown') {{ e.preventDefault(); updateActive(1); }}
+      if (e.key === 'ArrowUp')   {{ e.preventDefault(); updateActive(-1); }}
+      if (e.key === 'Enter') {{
+        var items = list.querySelectorAll('.cmd-item');
+        if (items[activeIdx]) navigate(items[activeIdx].dataset.label);
+      }}
+    }});
+
+    overlay.addEventListener('click', function(e) {{
+      if (e.target === overlay) close();
+    }});
+  }}
+
+  input.addEventListener('input', function() {{ renderList(input.value); activeIdx=0; }});
+
+}})();
+</script>
+</body></html>""", height=0)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5969,6 +6253,7 @@ for k, v in _defaults.items():
         st.session_state[k] = v
 
 inject_css()
+inject_command_palette()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6130,6 +6415,7 @@ def log_agent(name, detail):
 # ═══════════════════════════════════════════════════════════════════════
 
 def tab_presale():
+    _home_stats_banner()
     st.markdown('<div class="shdr"><span class="shdr-i">📄</span> Document Ingestion</div>', unsafe_allow_html=True)
     uc, tc = st.columns([3, 2])
     with uc:
@@ -6148,6 +6434,9 @@ def tab_presale():
             else:
                 st.info("No documents found. Configure SharePoint in sidebar.")
         st.markdown("</div>", unsafe_allow_html=True)
+
+    if not files and not st.session_state.processing_results:
+        _empty_upload()
 
     if files:
         st.markdown("---")
@@ -7684,7 +7973,11 @@ def show_results():
             with st.chat_message("assistant"):
                 with st.spinner("Analysing…"):
                     answer = _ai_chat(system_prompt, st.session_state.chat_messages)
-                st.markdown(answer)
+                # Typing animation via write_stream (Streamlit ≥1.31), else plain markdown
+                if hasattr(st, "write_stream"):
+                    st.write_stream(_stream_answer(answer))
+                else:
+                    st.markdown(answer)
 
             st.session_state.chat_messages.append({"role": "assistant", "content": answer})
 
@@ -7693,13 +7986,7 @@ def show_results():
                 st.session_state.chat_messages = []
                 st.rerun()
         else:
-            st.info(
-                "💡 Try asking:\n"
-                "- _\"Why does Phase 2 take so long?\"_\n"
-                "- _\"What is the biggest risk in this project?\"_\n"
-                "- _\"How can we reduce the infrastructure cost by 20%?\"_\n"
-                "- _\"Explain the technology choices\"_"
-            )
+            _empty_chat()
 
     # ── History ──
     with tab_list[12]:
@@ -8076,10 +8363,7 @@ def tab_run_library():
     runs.sort(key=sort_key_map.get(sort_by, lambda r: -r["id"]))
 
     if not runs:
-        st.info(
-            "No runs saved yet. Upload a scope document in **⚡ Business Estimation** "
-            "and click **Analyse** — the result will appear here automatically."
-        )
+        _empty_library()
         return
 
     st.markdown(f"**{len(runs)} proposal{'s' if len(runs)!=1 else ''}** found")
