@@ -796,55 +796,63 @@ def _sanitize_mermaid(code: str) -> str:
 
 
 def render_mermaid(mermaid_code, height=450):
-    """Render a Mermaid.js diagram using streamlit HTML component."""
+    """Render a Mermaid.js diagram using streamlit HTML component.
+
+    Uses mermaid.render() (string API) instead of mermaid.run() (DOM scanner)
+    to avoid both:
+      - "svg element not in render tree"   (iframe timing issue with run())
+      - "Could not find a suitable point"  (edge routing on self-loops)
+    Pinned to mermaid@10.6.1 for stability.
+    """
     import html as _html
     import re as _re
+    import json as _json
 
-    # Sanitize: strip fences, fix self-loops / self-messages
     clean = _sanitize_mermaid(mermaid_code)
 
-    # Inject curve:linear for graph/flowchart so dagre never fails on
-    # degenerate edge paths (root cause of "Could not find a suitable point")
+    # curve:linear prevents dagre bezier failures on degenerate paths
     if _re.match(r'\s*(graph|flowchart)\s', clean) and not clean.lstrip().startswith("%%{"):
         clean = "%%{init:{'flowchart':{'curve':'linear'}}}%%\n" + clean
 
-    escaped = _html.escape(clean)
+    # Pass diagram source as JSON to avoid any escaping issues in the JS
+    code_json = _json.dumps(clean)
 
     html = f"""<!DOCTYPE html>
-<html><head>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
-mermaid.initialize({{
-  startOnLoad: false,
-  securityLevel: 'loose',
-  theme: 'dark',
-  themeVariables: {{
-    primaryColor: '#16274B',
-    primaryTextColor: '#e2e8f0',
-    primaryBorderColor: '#00929E',
-    lineColor: '#00b4d8',
-    secondaryColor: '#151c2e',
-    tertiaryColor: '#0a0e1a',
-    fontFamily: 'sans-serif'
-  }}
-}});
-</script>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
 <style>
-  body  {{ margin:0; padding:16px; background:#151c2e; border-radius:12px; }}
-  .mermaid {{ text-align:center; }}
-  .mer-err {{ color:#ff6b6b; font-family:monospace; font-size:13px;
-              background:#1e1a2e; border:1px solid #ff6b6b44;
-              padding:12px 16px; border-radius:8px; white-space:pre-wrap; }}
+  html,body{{margin:0;padding:0;background:#151c2e;}}
+  #box{{padding:16px;border-radius:12px;text-align:center;}}
+  svg{{max-width:100%;height:auto;}}
+  #err{{color:#ff6b6b;font-family:monospace;font-size:13px;
+        background:#1e1a2e;border:1px solid #ff6b6b55;
+        padding:12px 16px;border-radius:8px;white-space:pre-wrap;text-align:left;}}
 </style>
 </head><body>
-<pre class="mermaid">{escaped}</pre>
+<div id="box"><div id="out"></div></div>
 <script>
-document.addEventListener('DOMContentLoaded', function () {{
-  mermaid.run({{ querySelector: '.mermaid' }}).catch(function (err) {{
-    document.querySelector('.mermaid').innerHTML =
-      '<div class="mer-err">\u26a0 ' + (err.message || String(err)) + '</div>';
-  }});
-}});
+(async function(){{
+  const code = {code_json};
+  try {{
+    mermaid.initialize({{
+      startOnLoad: false,
+      securityLevel: 'loose',
+      theme: 'dark',
+      themeVariables:{{
+        primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
+        primaryBorderColor:'#00929E',lineColor:'#00b4d8',
+        secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
+        fontFamily:'sans-serif'
+      }}
+    }});
+    // mermaid.render() returns {{svg}} — no DOM-scan, no iframe timing issues
+    const {{ svg }} = await mermaid.render('mg', code);
+    document.getElementById('out').innerHTML = svg;
+  }} catch(e) {{
+    document.getElementById('out').innerHTML =
+      '<div id="err">\u26a0 ' + (e.message||String(e)) + '</div>';
+  }}
+}})();
 </script>
 </body></html>"""
     st.components.v1.html(html, height=height, scrolling=True)
