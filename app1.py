@@ -814,6 +814,7 @@ def render_mermaid(mermaid_code, height=450):
         clean = "%%{init:{'flowchart':{'curve':'linear'}}}%%\n" + clean
 
 
+    escaped = _html.escape(clean)
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
