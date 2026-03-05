@@ -740,37 +740,66 @@ def safe_dict(val):
 
 def _sanitize_mermaid(code: str) -> str:
     """
-    Fix common patterns that cause Mermaid 10 to throw
-    'Could not find a suitable point for the given distance':
-
-      1. Strip code fences (```mermaid ... ```)
-      2. sequenceDiagram self-messages  (A->>A: text)
-         converted to  Note over A: text
-      3. graph/flowchart self-loops  (A --> A)
-         removed (replaced with a comment)
+    Aggressively clean LLM-generated Mermaid to prevent syntax errors:
+      1. Strip code fences
+      2. Skip any text before the diagram type declaration
+      3. Remove style / classDef / linkStyle directives (LLM CSS is often invalid)
+      4. Fix self-loops in sequenceDiagram and graph/flowchart
+      5. Remove %%{init} blocks from AI output (we don't prepend our own either)
     """
     import re
 
     c = code.strip()
-    if c.startswith("```"):
+
+    # Strip markdown code fences
+    if "```" in c:
         c = "\n".join(
             l for l in c.splitlines() if not l.strip().startswith("```")
         ).strip()
 
     lines = c.splitlines()
-    diagram_type = ""
-    out = []
 
+    # ── Skip any prose/text before the actual diagram declaration ──────
+    DIAG_STARTS = ("sequenceDiagram", "flowchart", "graph ",
+                   "graph\t", "classDiagram", "stateDiagram",
+                   "erDiagram", "gantt", "pie", "%%{")
+    start_idx = 0
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if any(s.startswith(kw) for kw in DIAG_STARTS):
+            start_idx = i
+            break
+    lines = lines[start_idx:]
+
+    # ── Detect diagram type ─────────────────────────────────────────────
+    diagram_type = ""
+    for line in lines:
+        s = line.strip()
+        for kw in ("sequenceDiagram", "flowchart", "graph",
+                   "classDiagram", "stateDiagram", "erDiagram", "gantt", "pie"):
+            if s.startswith(kw):
+                diagram_type = kw
+                break
+        if diagram_type:
+            break
+
+    # ── Process lines ───────────────────────────────────────────────────
+    out = []
     for line in lines:
         s = line.strip()
 
-        if not diagram_type:
-            for kw in ("sequenceDiagram", "flowchart", "graph",
-                       "classDiagram", "stateDiagram", "erDiagram",
-                       "gantt", "pie"):
-                if s.startswith(kw):
-                    diagram_type = kw
-                    break
+        # Remove style directives — LLM-generated CSS is frequently malformed
+        if re.match(r'\s*style\s+\S+\s+', line):
+            continue
+        # Remove classDef lines
+        if re.match(r'\s*classDef\s+', line):
+            continue
+        # Remove linkStyle lines
+        if re.match(r'\s*linkStyle\s+', line):
+            continue
+        # Remove standalone class-assignment lines  (class NodeA someClass)
+        if re.match(r'\s*class\s+\S+\s+\S+\s*$', line) and ":::" not in line:
+            continue
 
         # sequenceDiagram: self-message A->>A: msg  ->  Note over A: msg
         if diagram_type == "sequenceDiagram":
@@ -783,7 +812,7 @@ def _sanitize_mermaid(code: str) -> str:
         # graph/flowchart: self-loop  A --> A  or  A -->|label| A
         if diagram_type in ("graph", "flowchart"):
             m = re.match(
-                r'^\ *(\w+)\ *(?:-->|---|-\.->\ *|===>?)\ *(?:\|[^|]*\|)?\ *\1\ *$',
+                r'^\ *(\w+)\ *(?:-->|---|-\.->|===>?)\ *(?:\|[^|]*\|)?\ *\1\s*$',
                 line,
             )
             if m:
@@ -805,15 +834,8 @@ def render_mermaid(mermaid_code, height=450):
     Pinned to mermaid@9.4.3 — v10+ introduced the "suitable point" dagre bug.
     """
     import html as _html
-    import re as _re
 
     clean = _sanitize_mermaid(mermaid_code)
-
-    # curve:linear prevents dagre bezier failures on degenerate paths
-    if _re.match(r'\s*(graph|flowchart)\s', clean) and not clean.lstrip().startswith("%%{"):
-        clean = "%%{init:{'flowchart':{'curve':'linear'}}}%%\n" + clean
-
-
     escaped = _html.escape(clean)
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
