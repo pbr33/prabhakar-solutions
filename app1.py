@@ -738,28 +738,85 @@ def safe_dict(val):
 #  MERMAID.JS DIAGRAM RENDERER
 # ═══════════════════════════════════════════════════════════════════════
 
+def _sanitize_mermaid(code: str) -> str:
+    """
+    Fix common patterns that cause Mermaid 10 to throw
+    'Could not find a suitable point for the given distance':
+
+      1. Strip code fences (```mermaid ... ```)
+      2. sequenceDiagram self-messages  (A->>A: text)
+         converted to  Note over A: text
+      3. graph/flowchart self-loops  (A --> A)
+         removed (replaced with a comment)
+    """
+    import re
+
+    c = code.strip()
+    if c.startswith("```"):
+        c = "\n".join(
+            l for l in c.splitlines() if not l.strip().startswith("```")
+        ).strip()
+
+    lines = c.splitlines()
+    diagram_type = ""
+    out = []
+
+    for line in lines:
+        s = line.strip()
+
+        if not diagram_type:
+            for kw in ("sequenceDiagram", "flowchart", "graph",
+                       "classDiagram", "stateDiagram", "erDiagram",
+                       "gantt", "pie"):
+                if s.startswith(kw):
+                    diagram_type = kw
+                    break
+
+        # sequenceDiagram: self-message A->>A: msg  ->  Note over A: msg
+        if diagram_type == "sequenceDiagram":
+            m = re.match(r'^\ *(\w+)\ *(->>|-->>|->|-->)\ *\1\ *:\ *(.+)$', line)
+            if m:
+                actor, _, msg = m.group(1), m.group(2), m.group(3)
+                out.append(f"    Note over {actor}: {msg}")
+                continue
+
+        # graph/flowchart: self-loop  A --> A  or  A -->|label| A
+        if diagram_type in ("graph", "flowchart"):
+            m = re.match(
+                r'^\ *(\w+)\ *(?:-->|---|-\.->\ *|===>?)\ *(?:\|[^|]*\|)?\ *\1\ *$',
+                line,
+            )
+            if m:
+                out.append(f"    %% removed self-loop: {s}")
+                continue
+
+        out.append(line)
+
+    return "\n".join(out)
+
+
 def render_mermaid(mermaid_code, height=450):
     """Render a Mermaid.js diagram using streamlit HTML component."""
     import html as _html
+    import re as _re
 
-    # Strip markdown code fences the AI sometimes wraps around diagrams
-    clean = mermaid_code.strip()
-    if clean.startswith("```"):
-        lines = clean.splitlines()
-        clean = "\n".join(
-            l for l in lines if not l.strip().startswith("```")
-        ).strip()
+    # Sanitize: strip fences, fix self-loops / self-messages
+    clean = _sanitize_mermaid(mermaid_code)
 
-    # HTML-escape so that < > & in labels don't break the DOM parser
+    # Inject curve:linear for graph/flowchart so dagre never fails on
+    # degenerate edge paths (root cause of "Could not find a suitable point")
+    if _re.match(r'\s*(graph|flowchart)\s', clean) and not clean.lstrip().startswith("%%{"):
+        clean = "%%{init:{'flowchart':{'curve':'linear'}}}%%\n" + clean
+
     escaped = _html.escape(clean)
 
     html = f"""<!DOCTYPE html>
 <html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
-// Initialize BEFORE DOMContentLoaded fires so config is ready
 mermaid.initialize({{
   startOnLoad: false,
+  securityLevel: 'loose',
   theme: 'dark',
   themeVariables: {{
     primaryColor: '#16274B',
@@ -773,21 +830,19 @@ mermaid.initialize({{
 }});
 </script>
 <style>
-  body {{ margin: 0; padding: 16px; background: #151c2e; border-radius: 12px; }}
-  .mermaid {{ text-align: center; }}
-  .mermaid-error {{ color: #ff6b6b; font-family: monospace; font-size: 13px;
-                    background: #1e1a2e; border: 1px solid #ff6b6b33;
-                    padding: 12px 16px; border-radius: 8px; margin-top: 12px; }}
+  body  {{ margin:0; padding:16px; background:#151c2e; border-radius:12px; }}
+  .mermaid {{ text-align:center; }}
+  .mer-err {{ color:#ff6b6b; font-family:monospace; font-size:13px;
+              background:#1e1a2e; border:1px solid #ff6b6b44;
+              padding:12px 16px; border-radius:8px; white-space:pre-wrap; }}
 </style>
 </head><body>
 <pre class="mermaid">{escaped}</pre>
 <script>
 document.addEventListener('DOMContentLoaded', function () {{
   mermaid.run({{ querySelector: '.mermaid' }}).catch(function (err) {{
-    var el = document.querySelector('.mermaid');
-    el.innerHTML =
-      '<div class="mermaid-error">⚠ Diagram syntax error: ' +
-      (err.message || err) + '</div>';
+    document.querySelector('.mermaid').innerHTML =
+      '<div class="mer-err">\u26a0 ' + (err.message || String(err)) + '</div>';
   }});
 }});
 </script>
@@ -3287,7 +3342,7 @@ class AzureAI:
         sequence += "    participant Func as Functions\n\n"
         sequence += "    U->>FD: HTTPS Request\n"
         sequence += "    FD->>API: Route and WAF\n"
-        sequence += "    API->>API: Auth and Rate Limit\n"
+        sequence += "    Note over API: Auth and Rate Limit\n"
         sequence += "    API->>App: Forward Request\n"
         sequence += "    App->>Cache: Check Cache\n"
         sequence += "    alt Cache Hit\n"
