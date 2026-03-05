@@ -854,26 +854,36 @@ def render_mermaid(mermaid_code, height=450):
 <script>
 (async function(){{
   const code = {code_json};
-  try {{
-    mermaid.initialize({{
-      startOnLoad: false,
-      securityLevel: 'loose',
-      theme: 'dark',
-      themeVariables:{{
-        primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
-        primaryBorderColor:'#00929E',lineColor:'#00b4d8',
-        secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
-        fontFamily:'sans-serif'
-      }}
-    }});
-    // mermaid 10 render() needs the element to exist in the DOM
-    const el = document.getElementById('hidden');
-    const {{ svg }} = await mermaid.render('mg_' + Date.now(), code, el);
-    document.getElementById('out').innerHTML = svg;
-  }} catch(e) {{
-    document.getElementById('out').innerHTML =
-      '<div id="err">\u26a0 ' + (e.message || String(e)) + '</div>';
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  mermaid.initialize({{
+    startOnLoad: false,
+    securityLevel: 'loose',
+    theme: 'dark',
+    themeVariables:{{
+      primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
+      primaryBorderColor:'#00929E',lineColor:'#00b4d8',
+      secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
+      fontFamily:'sans-serif'
+    }}
+  }});
+
+  // Mermaid 10 lazy-loads diagram parsers on first call via dynamic imports.
+  // Retry up to 4 times with backoff to handle the first-render race condition.
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {{
+    if (attempt > 0) await delay(300 * attempt);
+    try {{
+      const el = document.getElementById('hidden');
+      const {{ svg }} = await mermaid.render('mg_' + Date.now(), code, el);
+      document.getElementById('out').innerHTML = svg;
+      return;
+    }} catch(e) {{
+      lastErr = e;
+    }}
   }}
+  document.getElementById('out').innerHTML =
+    '<div id="err">\u26a0 ' + (lastErr.message || String(lastErr)) + '</div>';
 }})();
 </script>
 </body></html>"""
