@@ -740,15 +740,56 @@ def safe_dict(val):
 
 def render_mermaid(mermaid_code, height=450):
     """Render a Mermaid.js diagram using streamlit HTML component."""
-    clean_code = mermaid_code.strip()
+    import html as _html
+
+    # Strip markdown code fences the AI sometimes wraps around diagrams
+    clean = mermaid_code.strip()
+    if clean.startswith("```"):
+        lines = clean.splitlines()
+        clean = "\n".join(
+            l for l in lines if not l.strip().startswith("```")
+        ).strip()
+
+    # HTML-escape so that < > & in labels don't break the DOM parser
+    escaped = _html.escape(clean)
+
     html = f"""<!DOCTYPE html>
 <html><head>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<style>body{{margin:0;padding:16px;background:#151c2e;border-radius:12px;}} .mermaid{{text-align:center;}}</style>
-</head><body>
-<pre class="mermaid">{clean_code}</pre>
 <script>
-mermaid.initialize({{startOnLoad:true,theme:'dark',themeVariables:{{primaryColor:'#16274B',primaryTextColor:'#e2e8f0',primaryBorderColor:'#00929E',lineColor:'#00b4d8',secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',fontFamily:'sans-serif'}}}});
+// Initialize BEFORE DOMContentLoaded fires so config is ready
+mermaid.initialize({{
+  startOnLoad: false,
+  theme: 'dark',
+  themeVariables: {{
+    primaryColor: '#16274B',
+    primaryTextColor: '#e2e8f0',
+    primaryBorderColor: '#00929E',
+    lineColor: '#00b4d8',
+    secondaryColor: '#151c2e',
+    tertiaryColor: '#0a0e1a',
+    fontFamily: 'sans-serif'
+  }}
+}});
+</script>
+<style>
+  body {{ margin: 0; padding: 16px; background: #151c2e; border-radius: 12px; }}
+  .mermaid {{ text-align: center; }}
+  .mermaid-error {{ color: #ff6b6b; font-family: monospace; font-size: 13px;
+                    background: #1e1a2e; border: 1px solid #ff6b6b33;
+                    padding: 12px 16px; border-radius: 8px; margin-top: 12px; }}
+</style>
+</head><body>
+<pre class="mermaid">{escaped}</pre>
+<script>
+document.addEventListener('DOMContentLoaded', function () {{
+  mermaid.run({{ querySelector: '.mermaid' }}).catch(function (err) {{
+    var el = document.querySelector('.mermaid');
+    el.innerHTML =
+      '<div class="mermaid-error">⚠ Diagram syntax error: ' +
+      (err.message || err) + '</div>';
+  }});
+}});
 </script>
 </body></html>"""
     st.components.v1.html(html, height=height, scrolling=True)
