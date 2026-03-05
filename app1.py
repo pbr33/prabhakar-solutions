@@ -802,11 +802,10 @@ def render_mermaid(mermaid_code, height=450):
     to avoid both:
       - "svg element not in render tree"   (iframe timing issue with run())
       - "Could not find a suitable point"  (edge routing on self-loops)
-    Pinned to mermaid@10.6.1 for stability.
+    Pinned to mermaid@9.4.3 — v10+ introduced the "suitable point" dagre bug.
     """
     import html as _html
     import re as _re
-    import json as _json
 
     clean = _sanitize_mermaid(mermaid_code)
 
@@ -814,46 +813,30 @@ def render_mermaid(mermaid_code, height=450):
     if _re.match(r'\s*(graph|flowchart)\s', clean) and not clean.lstrip().startswith("%%{"):
         clean = "%%{init:{'flowchart':{'curve':'linear'}}}%%\n" + clean
 
-    # Pass diagram source as JSON to avoid any escaping issues in the JS
-    code_json = _json.dumps(clean)
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
 <style>
-  html,body{{margin:0;padding:0;background:#151c2e;}}
-  #box{{padding:16px;border-radius:12px;text-align:center;}}
+  html,body{{margin:0;padding:8px;background:#151c2e;}}
+  .mermaid{{text-align:center;}}
   svg{{max-width:100%;height:auto;}}
-  #err{{color:#ff6b6b;font-family:monospace;font-size:13px;
-        background:#1e1a2e;border:1px solid #ff6b6b55;
-        padding:12px 16px;border-radius:8px;white-space:pre-wrap;text-align:left;}}
 </style>
-</head><body>
-<div id="box"><div id="out"></div></div>
 <script>
-(async function(){{
-  const code = {code_json};
-  try {{
-    mermaid.initialize({{
-      startOnLoad: false,
-      securityLevel: 'loose',
-      theme: 'dark',
-      themeVariables:{{
-        primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
-        primaryBorderColor:'#00929E',lineColor:'#00b4d8',
-        secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
-        fontFamily:'sans-serif'
-      }}
-    }});
-    // mermaid.render() returns {{svg}} — no DOM-scan, no iframe timing issues
-    const {{ svg }} = await mermaid.render('mg', code);
-    document.getElementById('out').innerHTML = svg;
-  }} catch(e) {{
-    document.getElementById('out').innerHTML =
-      '<div id="err">\u26a0 ' + (e.message||String(e)) + '</div>';
-  }}
-}})();
+  mermaid.initialize({{
+    startOnLoad: true,
+    securityLevel: 'loose',
+    theme: 'dark',
+    themeVariables:{{
+      primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
+      primaryBorderColor:'#00929E',lineColor:'#00b4d8',
+      secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
+      fontFamily:'sans-serif'
+    }}
+  }});
 </script>
+</head><body>
+<pre class="mermaid">{escaped}</pre>
 </body></html>"""
     st.components.v1.html(html, height=height, scrolling=True)
 
@@ -1022,7 +1005,6 @@ def generate_3d_flythrough_html(ar, ce):
     architecture fly-through.  Uses ES-module importmap so OrbitControls loads
     reliably in every modern browser (Chrome 89+, Firefox 108+, Safari 16.4+).
     """
-    import json as _json
 
     arch = safe_dict(ar)
     cost = safe_dict(ce)
