@@ -827,39 +827,55 @@ def _sanitize_mermaid(code: str) -> str:
 def render_mermaid(mermaid_code, height=450):
     """Render a Mermaid.js diagram using streamlit HTML component.
 
-    Uses mermaid.render() (string API) instead of mermaid.run() (DOM scanner)
-    to avoid both:
-      - "svg element not in render tree"   (iframe timing issue with run())
-      - "Could not find a suitable point"  (edge routing on self-loops)
-    Pinned to mermaid@9.4.3 — v10+ introduced the "suitable point" dagre bug.
+    Uses mermaid@10.6.1 render() API with a hidden container element
+    so the SVG is generated in-tree (no iframe timing issues) and
+    style/classDef lines are pre-stripped to avoid syntax errors.
     """
     import html as _html
+    import json as _json
 
     clean = _sanitize_mermaid(mermaid_code)
-    escaped = _html.escape(clean)
+    code_json = _json.dumps(clean)
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
 <style>
   html,body{{margin:0;padding:8px;background:#151c2e;}}
-  .mermaid{{text-align:center;}}
+  #out{{text-align:center;}}
   svg{{max-width:100%;height:auto;}}
+  #err{{color:#ff6b6b;font-family:monospace;font-size:12px;
+        background:#1e1a2e;border:1px solid #ff6b6b55;
+        padding:10px;border-radius:6px;white-space:pre-wrap;text-align:left;}}
+  #hidden{{position:absolute;left:-9999px;top:-9999px;}}
 </style>
-<script>
-  mermaid.initialize({{
-    startOnLoad: true,
-    securityLevel: 'loose',
-    theme: 'dark',
-    themeVariables:{{
-      primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
-      primaryBorderColor:'#00929E',lineColor:'#00b4d8',
-      secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
-      fontFamily:'sans-serif'
-    }}
-  }});
-</script>
 </head><body>
-<pre class="mermaid">{escaped}</pre>
+<div id="out"></div>
+<div id="hidden"></div>
+<script>
+(async function(){{
+  const code = {code_json};
+  try {{
+    mermaid.initialize({{
+      startOnLoad: false,
+      securityLevel: 'loose',
+      theme: 'dark',
+      themeVariables:{{
+        primaryColor:'#16274B',primaryTextColor:'#e2e8f0',
+        primaryBorderColor:'#00929E',lineColor:'#00b4d8',
+        secondaryColor:'#151c2e',tertiaryColor:'#0a0e1a',
+        fontFamily:'sans-serif'
+      }}
+    }});
+    // mermaid 10 render() needs the element to exist in the DOM
+    const el = document.getElementById('hidden');
+    const {{ svg }} = await mermaid.render('mg_' + Date.now(), code, el);
+    document.getElementById('out').innerHTML = svg;
+  }} catch(e) {{
+    document.getElementById('out').innerHTML =
+      '<div id="err">\u26a0 ' + (e.message || String(e)) + '</div>';
+  }}
+}})();
+</script>
 </body></html>"""
     st.components.v1.html(html, height=height, scrolling=True)
 
@@ -1028,6 +1044,7 @@ def generate_3d_flythrough_html(ar, ce):
     architecture fly-through.  Uses ES-module importmap so OrbitControls loads
     reliably in every modern browser (Chrome 89+, Firefox 108+, Safari 16.4+).
     """
+    import json as _json
 
     arch = safe_dict(ar)
     cost = safe_dict(ce)
