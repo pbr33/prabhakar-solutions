@@ -3256,6 +3256,82 @@ class AzureAI:
             return r
         return self._fb_proposal(semantic, time_est, cost_est, risk, arch)
 
+    # ── Human Feedback: regenerate a single section ──────────────────
+    _SECTION_SYSTEMS = {
+        "requirements": (
+            "You are an expert IT presales analyst for ECI consulting. Analyze the scope document thoroughly. "
+            "Extract ALL requirements. Classify each as functional, non-functional, or integration. "
+            "Return JSON: {\"requirements\": [{\"title\": str, \"description\": str, \"type\": \"functional\" or \"non-functional\" or \"integration\", \"complexity\": \"Low\" or \"Medium\" or \"High\", \"priority\": str}], "
+            "\"technology_stack\": [str], \"business_objectives\": [str], \"complexity_score\": int 1-10, \"project_type\": str}"
+        ),
+        "time": (
+            "You are an expert ECI project estimator. Use three-point estimation. "
+            "Break every task into granular sub-tasks of 4-8 hours MAX. "
+            "Return JSON: {\"total_hours\": int, \"duration_weeks\": \"N weeks\", \"confidence\": str, \"buffer\": str, "
+            "\"phases\": [{\"name\": str, \"hours\": int, \"percentage\": \"N%\", \"week_label\": str, "
+            "\"tasks\": [{\"name\": str, \"hours\": int, \"low_hours\": int, \"high_hours\": int, \"role\": str, \"justification\": str}]}], "
+            "\"milestones\": [{\"name\": str, \"week\": int, \"description\": str}], "
+            "\"three_point\": {\"optimistic\": int, \"most_likely\": int, \"pessimistic\": int}, "
+            "\"roles\": [{\"name\": str, \"allocation_pct\": float, \"rate\": int}]}"
+        ),
+        "cost": (
+            "You are an ECI infrastructure cost estimator. Estimate ONLY Azure/cloud infrastructure costs. "
+            "Return JSON: {\"total_monthly_cost\": int, \"total_annual_cost\": int, "
+            "\"azure_costs\": [{\"service\": str, \"tier\": str, \"monthly_cost\": int, \"description\": str}], "
+            "\"third_party_costs\": [{\"name\": str, \"monthly_cost\": int, \"description\": str}], "
+            "\"cost_optimization\": [str], \"notes\": str}"
+        ),
+        "risk": (
+            "You are an ECI risk analyst. Assess Technical, Schedule, Resource, Budget, External risks. "
+            "Return JSON: {\"overall_score\": int, \"overall_level\": str, "
+            "\"risks\": [{\"category\": str, \"title\": str, \"description\": str, \"severity\": str, "
+            "\"probability\": str, \"impact\": str, \"mitigation\": str}]}"
+        ),
+        "architecture": (
+            "You are an Azure Solutions Architect for ECI. Use Well-Architected Framework. "
+            "Return JSON: {\"pattern\": str, \"components\": [{\"name\": str, \"type\": str, \"azure_service\": str, \"services\": [str]}], "
+            "\"data_flow\": [str], \"security\": [str], \"scalability\": str, \"availability\": str}"
+        ),
+        "scope": (
+            "You are an ECI scope expert. Define project boundaries precisely. "
+            "Return JSON: {\"in_scope\": [str], \"out_of_scope\": [str], \"assumptions\": [str], \"prerequisites\": [str]}"
+        ),
+        "proposal": (
+            "You are an ECI presales proposal writer. Write a professional proposal. "
+            "Return JSON: {\"sections\": [{\"title\": str, \"content\": str}], \"quality_checks\": {str: bool}}. "
+            "Include: Executive Summary, Understanding & Approach, Technical Solution, Team, Timeline, Infrastructure Costs."
+        ),
+        "diagrams": (
+            "You are an Azure Solutions Architect for ECI. Generate valid Mermaid.js diagram code. "
+            "Return JSON with keys: infrastructure, data_flow, sequence, deployment, security — each a valid Mermaid string."
+        ),
+    }
+
+    def regenerate_section(self, section_key: str, original_output: dict,
+                           feedback: str, context: dict) -> dict:
+        """Re-generate one section with human reviewer feedback applied.
+
+        The LLM receives the previous output + the reviewer's note +
+        the current dependency context, and returns a revised JSON object
+        matching the same schema as the original.
+        """
+        system = (
+            self._SECTION_SYSTEMS.get(section_key, "You are an ECI presales AI. Return valid JSON.")
+            + "\n\nIMPORTANT — REVISION INSTRUCTIONS: You are revising a previous output based on "
+            "expert feedback from the presales architect. Apply the feedback exactly. Keep everything "
+            "not mentioned unchanged. Return the same JSON schema as the original output."
+        )
+        user = (
+            "PREVIOUS OUTPUT:\n" + json.dumps(original_output, indent=2, default=str)[:5000]
+            + "\n\nEXPERT FEEDBACK:\n" + feedback
+            + "\n\nCURRENT CONTEXT:\n" + json.dumps(context, indent=2, default=str)[:4000]
+            + "\n\nReturn a revised JSON matching the exact same schema."
+        )
+        result = self._call(system, user)
+        if result and isinstance(result, dict):
+            return result
+        return original_output   # safe fallback: keep original if LLM fails
+
     # ── Sanitize time (CRITICAL: prevents the TypeError) ──
     def _sanitize_time(self, data):
         # Milestones
@@ -6491,6 +6567,8 @@ _defaults = {
     "_extracted_text": "",        # raw doc text stored for feedback reruns
     "feedback_items": {},         # {section_key: feedback_text}
     "feedback_log": [],           # list of {ts, items, summary} — audit trail
+    "results_before_regen": None, # snapshot before last regen (for diff/rollback)
+    "regen_sections": [],         # sections re-run in the last feedback round
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
 }
 for k, v in _defaults.items():
@@ -7068,6 +7146,119 @@ _FEEDBACK_SECTIONS = [
 ]
 
 
+def _quick_feedback(section_key: str, placeholder: str):
+    """Compact inline feedback widget placed at the bottom of a result tab.
+    Writes directly into st.session_state.feedback_items so the main
+    feedback panel reflects it immediately.
+    """
+    st.markdown("---")
+    qc1, qc2 = st.columns([5, 1])
+    with qc1:
+        val = st.text_input(
+            f"Feedback on {section_key.replace('_',' ').title()}",
+            placeholder=placeholder,
+            key=f"qfb_{section_key}",
+            label_visibility="collapsed",
+        )
+    with qc2:
+        if st.button("Add ➕", key=f"qfb_add_{section_key}", use_container_width=True):
+            if val.strip():
+                if "feedback_items" not in st.session_state:
+                    st.session_state.feedback_items = {}
+                st.session_state.feedback_items[section_key] = val.strip()
+                show_toast(f"Feedback queued for {section_key}. Open 'Review & Improve' to apply.", "info")
+                st.rerun()
+
+
+def _show_regen_diff():
+    """Show a Before/After diff panel after a feedback regeneration.
+    Includes Accept and Discard buttons — discarding rolls back to the
+    snapshot saved in results_before_regen.
+    """
+    before   = st.session_state.get("results_before_regen")
+    sections = st.session_state.get("regen_sections", [])
+    if not before or not sections:
+        return
+
+    KEY_FIELDS = {
+        "time_estimate":   [("total_hours", "Total Hours"), ("duration_weeks", "Duration"), ("confidence", "Confidence")],
+        "cost_estimate":   [("total_monthly_cost", "Monthly Cost ($)"), ("total_annual_cost", "Annual Cost ($)")],
+        "risk_assessment": [("overall_score", "Risk Score"), ("overall_level", "Risk Level")],
+        "architecture":    [("pattern", "Pattern"), ("components", "Components (count)")],
+        "scope":           [("in_scope", "In-Scope items"), ("out_of_scope", "Out-of-Scope items")],
+        "proposal":        [("sections", "Proposal sections")],
+        "semantic_analysis": [("project_type", "Project Type"), ("complexity_score", "Complexity"), ("requirements", "Requirements (count)")],
+        "mermaid_diagrams":  [],
+    }
+    SECTION_RESULT_KEY = {
+        "requirements": "semantic_analysis", "time": "time_estimate",
+        "cost": "cost_estimate", "risk": "risk_assessment",
+        "architecture": "architecture", "scope": "scope",
+        "proposal": "proposal", "diagrams": "mermaid_diagrams",
+    }
+
+    r_now = st.session_state.processing_results
+    with st.expander("🔍 **What Changed — Review & Accept**", expanded=True):
+        st.markdown(
+            '<div style="background:rgba(0,180,216,.08);border:1px solid #00b4d855;'
+            'border-radius:8px;padding:10px 16px;margin-bottom:12px">'
+            f'<strong style="color:#00b4d8">Revision complete</strong> — '
+            f'{len(sections)} section(s) updated. Review the changes below, then Accept or Discard.</div>',
+            unsafe_allow_html=True,
+        )
+
+        any_shown = False
+        for sec_key in sections:
+            rkey   = SECTION_RESULT_KEY.get(sec_key, sec_key)
+            fields = KEY_FIELDS.get(rkey, [])
+            if not fields:
+                continue
+            old_data = before.get(rkey, {})
+            new_data = r_now.get(rkey, {})
+            any_shown = True
+            st.markdown(f"**{sec_key.replace('_',' ').title()}**")
+            col_b, col_a = st.columns(2)
+            with col_b:
+                st.markdown("_Before_")
+                for fkey, flabel in fields:
+                    v = old_data.get(fkey)
+                    disp = len(v) if isinstance(v, list) else v
+                    st.markdown(f"- {flabel}: `{disp}`")
+            with col_a:
+                st.markdown("_After_")
+                for fkey, flabel in fields:
+                    v_new = new_data.get(fkey)
+                    v_old = old_data.get(fkey)
+                    d_new = len(v_new) if isinstance(v_new, list) else v_new
+                    d_old = len(v_old) if isinstance(v_old, list) else v_old
+                    changed = d_new != d_old
+                    colour  = "#00d4aa" if changed else "#94a3b8"
+                    arrow   = "  ◀ changed" if changed else ""
+                    st.markdown(
+                        f'- {flabel}: <span style="color:{colour};font-weight:bold">`{d_new}`</span>{arrow}',
+                        unsafe_allow_html=True,
+                    )
+            st.markdown("---")
+
+        if not any_shown:
+            st.info("Diagrams regenerated — click the Diagrams tab to view.")
+
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            if st.button("✅ Accept Changes", type="primary", use_container_width=True, key="fb_accept"):
+                st.session_state["results_before_regen"] = None
+                st.session_state["regen_sections"]       = []
+                show_toast("Changes accepted!", "success")
+                st.rerun()
+        with ac2:
+            if st.button("↩️ Discard — Restore Original", use_container_width=True, key="fb_discard"):
+                st.session_state.processing_results  = before
+                st.session_state["results_before_regen"] = None
+                st.session_state["regen_sections"]       = []
+                show_toast("Changes discarded — original results restored.", "info")
+                st.rerun()
+
+
 def _render_feedback_panel(r):
     """Collapsible feedback panel shown between KPI cards and result tabs."""
     # Show feedback history badge if any previous feedback rounds
@@ -7130,42 +7321,54 @@ def _render_feedback_panel(r):
 
 
 def run_pipeline_with_feedback(feedback_items: dict):
-    """Re-run only the sections that have feedback, injecting reviewer notes
-    into each AI prompt. Sections without feedback keep their existing output.
+    """Re-run affected sections with human reviewer feedback + cascade to dependents.
 
     feedback_items: {section_key: feedback_text}
-    Section keys: requirements, time, cost, risk, architecture, scope, proposal, diagrams
-    """
-    import json as _j
+    Keys: requirements, time, cost, risk, architecture, scope, proposal, diagrams
 
-    text = st.session_state.get("_extracted_text", "")
-    if not text:
+    Dependency expansion (e.g. feedback on 'time' also re-runs cost, risk, scope, proposal).
+    Uses ai.regenerate_section() so each AI call receives the previous output +
+    reviewer note + current dependency context — produces precise, targeted revisions.
+    """
+    import copy as _copy
+
+    if not st.session_state.get("_extracted_text"):
         st.error("Original document text not found. Please re-upload and process the documents first.")
         return
 
-    ai  = _pick_ai()
-    r   = dict(st.session_state.processing_results)   # copy current results
-    pb  = st.progress(0)
+    # ── Downstream dependency map ──────────────────────────────────────
+    DOWNSTREAM = {
+        "requirements": ["time", "cost", "risk", "architecture", "scope", "proposal", "diagrams"],
+        "time":         ["cost", "risk", "scope", "proposal"],
+        "cost":         ["risk", "proposal"],
+        "risk":         ["proposal"],
+        "architecture": ["proposal", "diagrams"],
+        "scope":        ["proposal"],
+        "proposal":     [],
+        "diagrams":     [],
+    }
+    PIPELINE_ORDER = ["requirements", "time", "cost", "risk", "architecture", "scope", "proposal", "diagrams"]
+
+    # Expand: collect all sections that must re-run (explicit + downstream)
+    dirty: dict = dict(feedback_items)
+    for key in list(feedback_items.keys()):
+        for downstream_key in DOWNSTREAM.get(key, []):
+            if downstream_key not in dirty:
+                # Downstream section — note which upstream change triggered it
+                dirty[downstream_key] = f"[auto] upstream '{key}' was revised — ensure consistency"
+
+    # ── Snapshot originals for diff/rollback ──────────────────────────
+    r = _copy.deepcopy(st.session_state.processing_results)
+    st.session_state["results_before_regen"] = _copy.deepcopy(r)
+    st.session_state["regen_sections"]       = list(dirty.keys())
+
+    ai     = _pick_ai()
+    pb     = st.progress(0)
     status = st.empty()
+    total  = len(dirty)
+    done   = 0
 
-    # ── Helper: prepend feedback to prompt context ─────────────────────
-    def _with_feedback(base_text: str, key: str, current_output) -> str:
-        fb = feedback_items.get(key, "").strip()
-        if not fb:
-            return base_text
-        feedback_block = (
-            "\n\n=== HUMAN REVIEWER FEEDBACK ===\n"
-            + fb
-            + "\n\n=== YOUR PREVIOUS OUTPUT (please revise based on the feedback above) ===\n"
-            + _j.dumps(current_output, default=str)[:4000]
-            + "\n================================\n\n"
-        )
-        return feedback_block + base_text
-
-    sections_done = 0
-    total = len(feedback_items)
-
-    # ── Dependency order — each section uses the best available output ──
+    # Live dependency refs — updated as each section is revised in order
     semantic = r["semantic_analysis"]
     rag      = r["rag"]
     time_est = r["time_estimate"]
@@ -7174,130 +7377,88 @@ def run_pipeline_with_feedback(feedback_items: dict):
     arch     = r["architecture"]
     scope    = r["scope"]
 
-    if "requirements" in feedback_items:
-        status.markdown("**Revising Requirements & Semantic Analysis…**")
-        semantic = ai.analyze_requirements(_with_feedback(text, "requirements", r["semantic_analysis"]))
-        r["semantic_analysis"] = semantic
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+    for key in PIPELINE_ORDER:
+        if key not in dirty:
+            continue
+        done += 1
+        pb.progress(int(done / total * 90))
+        label = key.replace("_", " ").title()
+        fb    = dirty[key]
 
-    if "time" in feedback_items:
-        status.markdown("**Revising Time & Effort Estimate…**")
-        ctx = _with_feedback(
-            "Requirements: " + _j.dumps(semantic, default=str)[:2000],
-            "time", r["time_estimate"]
-        )
-        time_est = ai.estimate_time(semantic, rag) if not feedback_items.get("time") else \
-                   ai._call(
-                       "You are an Azure Solutions Architect estimating project effort. Return JSON matching the time_estimate schema.",
-                       ctx
-                   ) or ai.estimate_time(semantic, rag)
-        r["time_estimate"] = time_est
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        # Build context dict for this section from current (possibly revised) deps
+        ctx = {
+            "extracted_text_excerpt": st.session_state.get("_extracted_text", "")[:2000],
+            "semantic":  semantic,
+            "rag":       rag,
+            "time_est":  time_est,
+            "cost_est":  cost_est,
+            "risk":      risk,
+            "arch":      arch,
+            "scope":     scope,
+        }
 
-    if "cost" in feedback_items:
-        status.markdown("**Revising Infrastructure Cost Estimate…**")
-        ctx = _with_feedback(
-            "Requirements: " + _j.dumps(semantic, default=str)[:1500]
-            + "\nTime estimate: " + _j.dumps(time_est, default=str)[:1500],
-            "cost", r["cost_estimate"]
-        )
-        cost_est = ai._call(
-            "You are an Azure cost architect. Return JSON matching the cost_estimate schema with azure_costs list and total_monthly_cost.",
-            ctx
-        ) or ai.estimate_cost(semantic, time_est, rag)
-        r["cost_estimate"] = cost_est
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        # Map section key → current output in results dict
+        result_key_map = {
+            "requirements": "semantic_analysis",
+            "time":         "time_estimate",
+            "cost":         "cost_estimate",
+            "risk":         "risk_assessment",
+            "architecture": "architecture",
+            "scope":        "scope",
+            "proposal":     "proposal",
+            "diagrams":     "mermaid_diagrams",
+        }
+        rkey    = result_key_map[key]
+        original = r.get(rkey, {})
 
-    if "risk" in feedback_items:
-        status.markdown("**Revising Risk Assessment…**")
-        ctx = _with_feedback(
-            "Semantic: " + _j.dumps(semantic, default=str)[:1500],
-            "risk", r["risk_assessment"]
-        )
-        risk = ai._call(
-            "You are a risk analyst for Azure projects. Return JSON matching the risk_assessment schema.",
-            ctx
-        ) or ai.analyze_risk(semantic, time_est, cost_est)
-        r["risk_assessment"] = risk
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        if "[auto]" in fb:
+            status.markdown(f"**Updating {label}** to stay consistent with upstream changes…")
+        else:
+            status.markdown(f"**Revising {label}** based on your feedback…")
 
-    if "architecture" in feedback_items:
-        status.markdown("**Revising Solution Architecture…**")
-        ctx = _with_feedback(
-            "Requirements: " + _j.dumps(semantic, default=str)[:2000],
-            "architecture", r["architecture"]
-        )
-        arch = ai._call(
-            "You are an Azure Solutions Architect. Return JSON matching the architecture schema with components and data_flow.",
-            ctx
-        ) or ai.design_architecture(semantic, rag)
-        r["architecture"] = arch
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        revised = ai.regenerate_section(key, original, fb, ctx)
 
-    if "scope" in feedback_items:
-        status.markdown("**Revising Scope & Assumptions…**")
-        ctx = _with_feedback(
-            "Semantic: " + _j.dumps(semantic, default=str)[:1500],
-            "scope", r["scope"]
-        )
-        scope = ai._call(
-            "You are a presales architect defining project scope. Return JSON matching the scope schema.",
-            ctx
-        ) or ai.define_scope(semantic, time_est, cost_est)
-        r["scope"] = scope
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        # Apply time sanitizer to keep numeric types clean
+        if key == "time" and isinstance(revised, dict):
+            revised = ai._sanitize_time(revised)
 
-    if "proposal" in feedback_items:
-        status.markdown("**Revising Proposal Document…**")
-        ctx = _with_feedback(
-            "Semantic: " + _j.dumps(semantic, default=str)[:1000]
-            + "\nTime: " + _j.dumps(time_est, default=str)[:800]
-            + "\nCost: " + _j.dumps(cost_est, default=str)[:800]
-            + "\nRisk: " + _j.dumps(risk, default=str)[:600]
-            + "\nArch: " + _j.dumps(arch, default=str)[:800],
-            "proposal", r["proposal"]
-        )
-        new_proposal = ai._call(
-            "You are an ECI presales writer. Return JSON matching the proposal schema with sections list.",
-            ctx
-        ) or ai.write_proposal(semantic, time_est, cost_est, risk, arch, scope)
-        r["proposal"] = new_proposal
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        r[rkey] = revised
 
-    if "diagrams" in feedback_items:
-        status.markdown("**Revising Architecture Diagrams…**")
-        ctx = _with_feedback(
-            "Architecture: " + _j.dumps(arch, default=str)[:2000],
-            "diagrams", r["mermaid_diagrams"]
-        )
-        new_diag = ai._call(
-            "You are an Azure Solutions Architect. Generate Mermaid.js diagrams. "
-            "Return JSON with keys: infrastructure, data_flow, sequence, deployment, security — each a valid Mermaid string.",
-            ctx
-        ) or ai.generate_mermaid_diagrams(semantic, arch)
-        r["mermaid_diagrams"] = new_diag
-        sections_done += 1; pb.progress(int(sections_done / total * 85))
+        # Update live refs so downstream sections see the latest values
+        if key == "requirements": semantic = revised
+        elif key == "time":       time_est = revised
+        elif key == "cost":       cost_est = revised
+        elif key == "risk":       risk     = revised
+        elif key == "architecture": arch   = revised
+        elif key == "scope":      scope    = revised
+
+        # Audit log entry
+        st.session_state.feedback_log.append({
+            "ts":       datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "section":  key,
+            "feedback": fb,
+            "auto":     fb.startswith("[auto]"),
+        })
 
     pb.progress(100)
     status.empty()
     pb.empty()
 
-    # ── Log feedback for audit trail ───────────────────────────────────
-    from datetime import datetime as _dt
-    log_entry = {
-        "ts":      _dt.now().strftime("%Y-%m-%d %H:%M"),
-        "items":   dict(feedback_items),
-        "summary": ", ".join(feedback_items.keys()),
-    }
-    if "feedback_log" not in st.session_state:
-        st.session_state.feedback_log = []
-    st.session_state.feedback_log.append(log_entry)
+    # Append summary to feedback_log header
+    st.session_state.feedback_log.append({
+        "ts":      datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "summary": f"{len(feedback_items)} explicit + {len(dirty)-len(feedback_items)} cascaded = {len(dirty)} sections revised",
+    })
 
-    # ── Commit updated results ─────────────────────────────────────────
-    st.session_state.processing_results = r
-    st.session_state.feedback_items = {}
-    st.session_state["show_diagrams"] = False   # reset diagram render flag
-    show_toast("✅ Feedback applied — " + str(total) + " section(s) revised!", "success")
+    st.session_state.processing_results  = r
+    st.session_state.feedback_items      = {}
+    st.session_state["show_diagrams"]    = False
+    n_explicit = len(feedback_items)
+    n_cascade  = len(dirty) - n_explicit
+    msg = f"✅ {n_explicit} section(s) revised"
+    if n_cascade:
+        msg += f" + {n_cascade} cascaded automatically"
+    show_toast(msg, "success")
     st.rerun()
 
 
@@ -7309,6 +7470,9 @@ def show_results():
     with st.expander("Agent Activity Log", expanded=False):
         for entry in st.session_state.agent_logs:
             st.markdown('<div class="alog"><span class="abadge">' + entry["agent"] + '</span><span class="aok">Done</span><span class="adet">' + entry["detail"] + '</span></div>', unsafe_allow_html=True)
+
+    # ── Show diff if a feedback regeneration just completed ────────────
+    _show_regen_diff()
 
     se = safe_dict(r.get("semantic_analysis"))
     te = safe_dict(r.get("time_estimate"))
@@ -7463,6 +7627,8 @@ def show_results():
                 use_container_width=True, type="primary", key="dl_time_xlsx",
             )
 
+        _quick_feedback("time", 'e.g. "hours are too low, add 20% for integration testing"')
+
     # ── Cost (Infrastructure) ──
     with tab_list[2]:
         azure_costs = safe_list(ce.get("azure_costs"))
@@ -7559,6 +7725,8 @@ def show_results():
                 use_container_width=True, type="primary", key="dl_cost_xlsx",
             )
 
+        _quick_feedback("cost", 'e.g. "switch SQL to Premium tier, add Redis Cache"')
+
     # ── Risk ──
     with tab_list[3]:
         score = safe_int(ri.get("overall_score", 0))
@@ -7569,6 +7737,8 @@ def show_results():
             sev = safe_str(rk.get("severity"))
             sc = "#06d6a0" if sev == "Low" else "#ffd166" if sev == "Medium" else "#ff6b6b"
             st.markdown('<div class="rc" style="border-left:3px solid ' + sc + ';"><div class="rch2"><strong>' + safe_str(rk.get("category")) + ': ' + safe_str(rk.get("title")) + '</strong><span class="rsev" style="color:' + sc + ';">' + sev + '</span></div><p>' + safe_str(rk.get("description")) + '</p><div class="rmit"><strong>Mitigation:</strong> ' + safe_str(rk.get("mitigation")) + '</div></div>', unsafe_allow_html=True)
+
+        _quick_feedback("risk", 'e.g. "risk score is too high, this is a simple CRUD app"')
 
     # ── Architecture ──
     with tab_list[4]:
@@ -7701,6 +7871,7 @@ def show_results():
             st.markdown("### Security Controls")
             for s in sec_items:
                 st.markdown("- " + safe_str(s))
+        _quick_feedback("architecture", 'e.g. "add Redis Cache and Azure Service Bus"')
 
     # ── Diagrams (Mermaid.js) ──
     with tab_list[5]:
@@ -7769,6 +7940,7 @@ def show_results():
                 mime="application/pdf",
                 use_container_width=True, type="primary", key="dl_sow_pdf",
             )
+        _quick_feedback("proposal", 'e.g. "rewrite executive summary, make it more concise"')
 
     # ── Scope ──
     with tab_list[7]:
@@ -7788,6 +7960,7 @@ def show_results():
             st.markdown("**Prerequisites:**")
             for x in safe_list(sc.get("prerequisites")):
                 st.markdown("- " + safe_str(x))
+        _quick_feedback("scope", 'e.g. "move API integration to out-of-scope, it\'s a phase 2 item"')
 
     # ── Team & Roles ──
     with tab_list[8]:
