@@ -6488,6 +6488,9 @@ _defaults = {
     "narrator_did_presenters": [],
     "processing_results": None, "historical_projects": [], "agent_logs": [],
     "discovery_results": None, "discovery_transcript": "",
+    "_extracted_text": "",        # raw doc text stored for feedback reruns
+    "feedback_items": {},         # {section_key: feedback_text}
+    "feedback_log": [],           # list of {ts, items, summary} — audit trail
     "model_metrics": {"accuracy": 78.5, "proposals_processed": 0, "win_rate": 62.0, "variance": 12.3},
 }
 for k, v in _defaults.items():
@@ -6954,6 +6957,8 @@ def run_pipeline(files):
     text = ""
     for f in files:
         text += dp.extract(f) + "\n\n"
+    st.session_state["_extracted_text"] = text   # stored for feedback reruns
+    st.session_state["feedback_items"] = {}       # reset feedback on fresh run
     log_agent("Ingestion", str(len(files)) + " file(s), " + str(len(text)) + " chars")
     time.sleep(0.2)
 
@@ -7051,6 +7056,251 @@ def run_pipeline(files):
     st.session_state.chat_messages = []
 
 
+_FEEDBACK_SECTIONS = [
+    ("requirements",  "📋 Requirements",  "Add/remove requirements, change project type, fix misunderstood scope"),
+    ("time",          "⏱️ Time Estimate", "Adjust hours up/down, change phase durations, add missing tasks"),
+    ("cost",          "💰 Infra Cost",    "Change Azure tiers, add/remove services, adjust monthly budget"),
+    ("risk",          "⚠️ Risk",          "Update risk score, add risks, change mitigations"),
+    ("architecture",  "🏗️ Architecture", "Add/remove components, change Azure services, update data flow"),
+    ("scope",         "📌 Scope",         "Update in-scope/out-of-scope items, assumptions, exclusions"),
+    ("proposal",      "📄 Proposal",      "Rewrite sections, change tone, update executive summary"),
+    ("diagrams",      "📐 Diagrams",      "Regenerate Mermaid diagrams with updated architecture"),
+]
+
+
+def _render_feedback_panel(r):
+    """Collapsible feedback panel shown between KPI cards and result tabs."""
+    # Show feedback history badge if any previous feedback rounds
+    fl = st.session_state.get("feedback_log", [])
+    badge = f"  `{len(fl)} revision(s) applied`" if fl else ""
+    with st.expander(f"✏️ **Review & Improve** — Give feedback to revise any section{badge}", expanded=False):
+        st.markdown(
+            "Select the sections you want to improve, write your feedback, "
+            "then click **Apply Feedback**. Only selected sections will be re-generated — "
+            "everything else stays as-is."
+        )
+
+        # Per-section feedback inputs
+        pending = {}
+        cols_left, cols_right = st.columns(2)
+        for idx, (key, label, hint) in enumerate(_FEEDBACK_SECTIONS):
+            col = cols_left if idx % 2 == 0 else cols_right
+            with col:
+                # Checkbox to include this section
+                include = st.checkbox(f"{label}", key=f"fb_chk_{key}")
+                if include:
+                    val = st.text_area(
+                        f"Feedback for {label}",
+                        placeholder=hint,
+                        key=f"fb_txt_{key}",
+                        height=90,
+                        label_visibility="collapsed",
+                    )
+                    if val.strip():
+                        pending[key] = val.strip()
+
+        st.markdown("---")
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            if pending:
+                st.info(f"**{len(pending)} section(s) queued:** {', '.join(pending.keys())}")
+            else:
+                st.caption("Check boxes above and write feedback to enable regeneration.")
+        with c2:
+            if fl:
+                if st.button("📋 View Revision Log", use_container_width=True, key="fb_log_btn"):
+                    st.session_state["_show_fb_log"] = not st.session_state.get("_show_fb_log", False)
+        with c3:
+            apply_clicked = st.button(
+                "🔄 Apply Feedback",
+                disabled=not pending,
+                use_container_width=True,
+                type="primary",
+                key="fb_apply_btn",
+            )
+
+        if apply_clicked and pending:
+            run_pipeline_with_feedback(pending)
+
+        # Revision log viewer
+        if st.session_state.get("_show_fb_log") and fl:
+            st.markdown("**Revision History:**")
+            for i, entry in enumerate(reversed(fl), 1):
+                st.markdown(f"- **Round {len(fl)-i+1}** ({entry['ts']}): revised `{entry['summary']}`")
+
+
+def run_pipeline_with_feedback(feedback_items: dict):
+    """Re-run only the sections that have feedback, injecting reviewer notes
+    into each AI prompt. Sections without feedback keep their existing output.
+
+    feedback_items: {section_key: feedback_text}
+    Section keys: requirements, time, cost, risk, architecture, scope, proposal, diagrams
+    """
+    import json as _j
+
+    text = st.session_state.get("_extracted_text", "")
+    if not text:
+        st.error("Original document text not found. Please re-upload and process the documents first.")
+        return
+
+    ai  = _pick_ai()
+    r   = dict(st.session_state.processing_results)   # copy current results
+    pb  = st.progress(0)
+    status = st.empty()
+
+    # ── Helper: prepend feedback to prompt context ─────────────────────
+    def _with_feedback(base_text: str, key: str, current_output) -> str:
+        fb = feedback_items.get(key, "").strip()
+        if not fb:
+            return base_text
+        feedback_block = (
+            "\n\n=== HUMAN REVIEWER FEEDBACK ===\n"
+            + fb
+            + "\n\n=== YOUR PREVIOUS OUTPUT (please revise based on the feedback above) ===\n"
+            + _j.dumps(current_output, default=str)[:4000]
+            + "\n================================\n\n"
+        )
+        return feedback_block + base_text
+
+    sections_done = 0
+    total = len(feedback_items)
+
+    # ── Dependency order — each section uses the best available output ──
+    semantic = r["semantic_analysis"]
+    rag      = r["rag"]
+    time_est = r["time_estimate"]
+    cost_est = r["cost_estimate"]
+    risk     = r["risk_assessment"]
+    arch     = r["architecture"]
+    scope    = r["scope"]
+
+    if "requirements" in feedback_items:
+        status.markdown("**Revising Requirements & Semantic Analysis…**")
+        semantic = ai.analyze_requirements(_with_feedback(text, "requirements", r["semantic_analysis"]))
+        r["semantic_analysis"] = semantic
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "time" in feedback_items:
+        status.markdown("**Revising Time & Effort Estimate…**")
+        ctx = _with_feedback(
+            "Requirements: " + _j.dumps(semantic, default=str)[:2000],
+            "time", r["time_estimate"]
+        )
+        time_est = ai.estimate_time(semantic, rag) if not feedback_items.get("time") else \
+                   ai._call(
+                       "You are an Azure Solutions Architect estimating project effort. Return JSON matching the time_estimate schema.",
+                       ctx
+                   ) or ai.estimate_time(semantic, rag)
+        r["time_estimate"] = time_est
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "cost" in feedback_items:
+        status.markdown("**Revising Infrastructure Cost Estimate…**")
+        ctx = _with_feedback(
+            "Requirements: " + _j.dumps(semantic, default=str)[:1500]
+            + "\nTime estimate: " + _j.dumps(time_est, default=str)[:1500],
+            "cost", r["cost_estimate"]
+        )
+        cost_est = ai._call(
+            "You are an Azure cost architect. Return JSON matching the cost_estimate schema with azure_costs list and total_monthly_cost.",
+            ctx
+        ) or ai.estimate_cost(semantic, time_est, rag)
+        r["cost_estimate"] = cost_est
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "risk" in feedback_items:
+        status.markdown("**Revising Risk Assessment…**")
+        ctx = _with_feedback(
+            "Semantic: " + _j.dumps(semantic, default=str)[:1500],
+            "risk", r["risk_assessment"]
+        )
+        risk = ai._call(
+            "You are a risk analyst for Azure projects. Return JSON matching the risk_assessment schema.",
+            ctx
+        ) or ai.analyze_risk(semantic, time_est, cost_est)
+        r["risk_assessment"] = risk
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "architecture" in feedback_items:
+        status.markdown("**Revising Solution Architecture…**")
+        ctx = _with_feedback(
+            "Requirements: " + _j.dumps(semantic, default=str)[:2000],
+            "architecture", r["architecture"]
+        )
+        arch = ai._call(
+            "You are an Azure Solutions Architect. Return JSON matching the architecture schema with components and data_flow.",
+            ctx
+        ) or ai.design_architecture(semantic, rag)
+        r["architecture"] = arch
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "scope" in feedback_items:
+        status.markdown("**Revising Scope & Assumptions…**")
+        ctx = _with_feedback(
+            "Semantic: " + _j.dumps(semantic, default=str)[:1500],
+            "scope", r["scope"]
+        )
+        scope = ai._call(
+            "You are a presales architect defining project scope. Return JSON matching the scope schema.",
+            ctx
+        ) or ai.define_scope(semantic, time_est, cost_est)
+        r["scope"] = scope
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "proposal" in feedback_items:
+        status.markdown("**Revising Proposal Document…**")
+        ctx = _with_feedback(
+            "Semantic: " + _j.dumps(semantic, default=str)[:1000]
+            + "\nTime: " + _j.dumps(time_est, default=str)[:800]
+            + "\nCost: " + _j.dumps(cost_est, default=str)[:800]
+            + "\nRisk: " + _j.dumps(risk, default=str)[:600]
+            + "\nArch: " + _j.dumps(arch, default=str)[:800],
+            "proposal", r["proposal"]
+        )
+        new_proposal = ai._call(
+            "You are an ECI presales writer. Return JSON matching the proposal schema with sections list.",
+            ctx
+        ) or ai.write_proposal(semantic, time_est, cost_est, risk, arch, scope)
+        r["proposal"] = new_proposal
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    if "diagrams" in feedback_items:
+        status.markdown("**Revising Architecture Diagrams…**")
+        ctx = _with_feedback(
+            "Architecture: " + _j.dumps(arch, default=str)[:2000],
+            "diagrams", r["mermaid_diagrams"]
+        )
+        new_diag = ai._call(
+            "You are an Azure Solutions Architect. Generate Mermaid.js diagrams. "
+            "Return JSON with keys: infrastructure, data_flow, sequence, deployment, security — each a valid Mermaid string.",
+            ctx
+        ) or ai.generate_mermaid_diagrams(semantic, arch)
+        r["mermaid_diagrams"] = new_diag
+        sections_done += 1; pb.progress(int(sections_done / total * 85))
+
+    pb.progress(100)
+    status.empty()
+    pb.empty()
+
+    # ── Log feedback for audit trail ───────────────────────────────────
+    from datetime import datetime as _dt
+    log_entry = {
+        "ts":      _dt.now().strftime("%Y-%m-%d %H:%M"),
+        "items":   dict(feedback_items),
+        "summary": ", ".join(feedback_items.keys()),
+    }
+    if "feedback_log" not in st.session_state:
+        st.session_state.feedback_log = []
+    st.session_state.feedback_log.append(log_entry)
+
+    # ── Commit updated results ─────────────────────────────────────────
+    st.session_state.processing_results = r
+    st.session_state.feedback_items = {}
+    st.session_state["show_diagrams"] = False   # reset diagram render flag
+    show_toast("✅ Feedback applied — " + str(total) + " section(s) revised!", "success")
+    st.rerun()
+
+
 def show_results():
     r = st.session_state.processing_results
     st.markdown("---")
@@ -7077,7 +7327,8 @@ def show_results():
     for i, (ic, t, v, s) in enumerate(kpis):
         with cols[i]:
             st.markdown(_kpi_card(ic, t, v, s, animated=True), unsafe_allow_html=True)
-    # Inject counter animation + smooth scroll
+    # ── Human Review & Feedback Panel ─────────────────────────────────
+    _render_feedback_panel(r)
 
     tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History"])
 
