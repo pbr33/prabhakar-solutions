@@ -1,12 +1,328 @@
 import sys, os, base64, zipfile, sqlite3
 import streamlit as st
 
-st.set_page_config(page_title="ECI Presale", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="ECI — Business Estimation",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-import json, time, io, re, smtplib
+import json, time, io, re, smtplib, hashlib, urllib.parse
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AUTH — Microsoft SSO + admin fallback
+# ═══════════════════════════════════════════════════════════════════════
+
+try:
+    import msal
+    import requests as _requests
+    HAS_MSAL = True
+except ImportError:
+    HAS_MSAL = False
+
+# ── Credentials & Azure AD config (override via .streamlit/secrets.toml) ──
+_ADMIN_USER     = "genaiwithprabhakar"
+_ADMIN_PASS_SHA = hashlib.sha256(b"ECI@2025!Presale").hexdigest()   # default password: ECI@2025!Presale
+_AAD_CLIENT_ID  = st.secrets.get("AAD_CLIENT_ID",  "")   # Azure AD App (client) ID
+_AAD_TENANT_ID  = st.secrets.get("AAD_TENANT_ID",  "")   # Azure AD Tenant ID
+_AAD_CLIENT_SEC = st.secrets.get("AAD_CLIENT_SECRET", "")
+_APP_BASE_URL   = st.secrets.get("APP_BASE_URL", "http://localhost:8501")
+_REDIRECT_URI   = _APP_BASE_URL.rstrip("/") + "/"
+
+# ── MSAL confidential-client app (lazy-init) ──────────────────────────
+@st.cache_resource
+def _msal_app():
+    if not (HAS_MSAL and _AAD_CLIENT_ID and _AAD_TENANT_ID):
+        return None
+    authority = f"https://login.microsoftonline.com/{_AAD_TENANT_ID}"
+    return msal.ConfidentialClientApplication(
+        _AAD_CLIENT_ID,
+        authority=authority,
+        client_credential=_AAD_CLIENT_SEC or None,
+    )
+
+def _logo_b64(path: str) -> str:
+    try:
+        return base64.b64encode(open(path, "rb").read()).decode()
+    except Exception:
+        return ""
+
+# ── Login page UI ─────────────────────────────────────────────────────
+def _show_login():
+    logo_b64 = _logo_b64("eci_logo_white.png") or _logo_b64("eci.png")
+    logo_tag  = (
+        f'<img src="data:image/png;base64,{logo_b64}" style="height:64px;margin-bottom:8px" />'
+        if logo_b64 else
+        '<div style="font-size:2rem;font-weight:900;letter-spacing:2px;color:#fff">ECI</div>'
+    )
+
+    # Inject full-page styles — animated gradient background, glassmorphism card
+    st.markdown("""
+<style>
+/* ── Full viewport takeover ────────────────────────────────── */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0a0e27 0%, #0d1b4b 30%, #0a2744 60%, #061a36 100%) !important;
+    min-height: 100vh;
+}
+[data-testid="stAppViewContainer"]::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse 80% 60% at 20% 10%, rgba(0,180,216,.18) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 80% at 80% 90%, rgba(123,97,255,.18) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 50% at 50% 50%, rgba(0,212,170,.06) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+}
+/* Animated floating orbs */
+@keyframes float1 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(40px,-60px) scale(1.1)} }
+@keyframes float2 { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-50px,40px) scale(.9)} }
+@keyframes float3 { 0%,100%{transform:translate(0,0)} 33%{transform:translate(30px,30px)} 66%{transform:translate(-20px,-20px)} }
+[data-testid="stAppViewContainer"]::after {
+    content: '';
+    position: fixed;
+    width: 500px; height: 500px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,180,216,.12) 0%, transparent 70%);
+    top: -100px; left: -100px;
+    animation: float1 12s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
+}
+/* Grid overlay */
+[data-testid="stMain"] {
+    background: repeating-linear-gradient(
+        0deg, transparent, transparent 39px, rgba(255,255,255,.03) 39px, rgba(255,255,255,.03) 40px
+    ),
+    repeating-linear-gradient(
+        90deg, transparent, transparent 39px, rgba(255,255,255,.03) 39px, rgba(255,255,255,.03) 40px
+    );
+}
+[data-testid="stHeader"] { background: transparent !important; }
+[data-testid="stSidebar"] { display: none !important; }
+/* Card */
+.login-card {
+    background: rgba(255,255,255,.05);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 20px;
+    padding: 44px 48px 40px;
+    max-width: 460px;
+    margin: 0 auto;
+    box-shadow:
+        0 32px 80px rgba(0,0,0,.5),
+        inset 0 1px 0 rgba(255,255,255,.08);
+    position: relative;
+    z-index: 10;
+}
+.login-card h1 {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: .5px;
+    line-height: 1.35;
+    margin: 10px 0 4px;
+}
+.login-card .subtitle {
+    font-size: .8rem;
+    color: rgba(255,255,255,.5);
+    margin-bottom: 28px;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+}
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    color: rgba(255,255,255,.25);
+    font-size: .75rem;
+    letter-spacing: 1px;
+}
+.divider::before,.divider::after {
+    content:'';
+    flex:1;
+    height:1px;
+    background: rgba(255,255,255,.12);
+}
+/* Streamlit input overrides inside login */
+div[data-testid="stTextInput"] input {
+    background: rgba(255,255,255,.06) !important;
+    border: 1px solid rgba(255,255,255,.15) !important;
+    border-radius: 10px !important;
+    color: #fff !important;
+    padding: 12px 14px !important;
+    font-size: .9rem !important;
+}
+div[data-testid="stTextInput"] input:focus {
+    border-color: rgba(0,180,216,.6) !important;
+    box-shadow: 0 0 0 3px rgba(0,180,216,.15) !important;
+}
+div[data-testid="stTextInput"] label { color: rgba(255,255,255,.7) !important; font-size:.8rem !important; }
+/* Buttons */
+div[data-testid="stButton"] > button[kind="primary"] {
+    background: linear-gradient(135deg, #0078d4 0%, #005a9e 100%) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 700 !important;
+    font-size: .9rem !important;
+    padding: 12px !important;
+    letter-spacing: .5px;
+    box-shadow: 0 4px 20px rgba(0,120,212,.4) !important;
+    transition: all .2s !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 28px rgba(0,120,212,.55) !important;
+}
+div[data-testid="stButton"] > button[kind="secondary"] {
+    background: rgba(255,255,255,.06) !important;
+    border: 1px solid rgba(255,255,255,.18) !important;
+    border-radius: 10px !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+    font-size: .85rem !important;
+}
+.ms-btn-wrap > button {
+    background: #2f2f2f !important;
+}
+/* Error / info banners */
+div[data-testid="stAlert"] {
+    background: rgba(255,80,80,.1) !important;
+    border: 1px solid rgba(255,80,80,.25) !important;
+    border-radius: 10px !important;
+    color: #ffaaaa !important;
+}
+/* Hide streamlit branding */
+#MainMenu, footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+    # Centre the card
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        # Card wrapper
+        st.markdown(f"""
+<div class="login-card" style="margin-top:60px">
+  <div style="text-align:center">
+    {logo_tag}
+    <div style="font-size:.65rem;font-weight:700;letter-spacing:3px;color:rgba(255,255,255,.4);
+                text-transform:uppercase;margin-bottom:16px">
+      ENTERPRISE COMPUTING INC.
+    </div>
+    <h1>Business Estimation<br>Leveraging Automated Learning</h1>
+    <div class="subtitle">Presale Intelligence Platform · Powered by Generative AI</div>
+  </div>
+""", unsafe_allow_html=True)
+
+        # ── Microsoft SSO button ──────────────────────────────────────
+        msal_app = _msal_app()
+        if msal_app and _AAD_CLIENT_ID:
+            scopes = ["openid", "profile", "email", "User.Read"]
+            # Check for OAuth callback code in URL params
+            params = st.query_params
+            if "code" in params:
+                with st.spinner("Completing Microsoft sign-in…"):
+                    try:
+                        result = msal_app.acquire_token_by_authorization_code(
+                            params["code"],
+                            scopes=scopes,
+                            redirect_uri=_REDIRECT_URI,
+                        )
+                        if "access_token" in result:
+                            # Fetch user profile
+                            headers = {"Authorization": "Bearer " + result["access_token"]}
+                            profile  = _requests.get(
+                                "https://graph.microsoft.com/v1.0/me", headers=headers
+                            ).json()
+                            st.session_state["auth_user"]  = profile.get("displayName", "User")
+                            st.session_state["auth_email"] = profile.get("mail") or profile.get("userPrincipalName","")
+                            st.session_state["auth_method"] = "Microsoft SSO"
+                            st.session_state["auth_ok"]    = True
+                            st.query_params.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"SSO error: {result.get('error_description', result.get('error','Unknown'))}")
+                    except Exception as ex:
+                        st.error(f"SSO callback failed: {ex}")
+            else:
+                auth_url = msal_app.get_authorization_request_url(
+                    scopes, redirect_uri=_REDIRECT_URI
+                )
+                st.markdown(
+                    f'<a href="{auth_url}" target="_self" style="text-decoration:none;display:block;'
+                    f'background:linear-gradient(135deg,#2f2f2f,#1a1a1a);border:1px solid rgba(255,255,255,.15);'
+                    f'border-radius:10px;padding:12px 20px;text-align:center;color:#fff;'
+                    f'font-weight:700;font-size:.88rem;letter-spacing:.3px;margin-bottom:4px;'
+                    f'box-shadow:0 4px 16px rgba(0,0,0,.3);transition:all .2s">'
+                    f'<span style="vertical-align:middle;margin-right:10px;font-size:1.1rem">🪟</span>'
+                    f'Sign in with Microsoft</a>',
+                    unsafe_allow_html=True,
+                )
+            st.markdown('<div class="divider">OR</div>', unsafe_allow_html=True)
+        else:
+            # SSO not configured — show info
+            st.markdown(
+                '<div style="background:rgba(0,180,216,.08);border:1px solid rgba(0,180,216,.2);'
+                'border-radius:8px;padding:10px 14px;font-size:.75rem;color:rgba(255,255,255,.55);'
+                'margin-bottom:16px;text-align:center">'
+                '🪟 Microsoft SSO — configure <code>AAD_CLIENT_ID</code>, '
+                '<code>AAD_TENANT_ID</code> in <code>.streamlit/secrets.toml</code> to enable'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── Admin credentials form ────────────────────────────────────
+        with st.form("login_form", clear_on_submit=False):
+            st.markdown(
+                '<div style="font-size:.75rem;font-weight:700;color:rgba(255,255,255,.5);'
+                'letter-spacing:1px;text-transform:uppercase;margin-bottom:12px">Admin Login</div>',
+                unsafe_allow_html=True,
+            )
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input("Password", type="password", placeholder="Enter password")
+            login_btn = st.form_submit_button("Sign In →", type="primary", use_container_width=True)
+
+        if login_btn:
+            pw_hash = hashlib.sha256(password.encode()).hexdigest()
+            if username.strip() == _ADMIN_USER and pw_hash == _ADMIN_PASS_SHA:
+                st.session_state["auth_ok"]     = True
+                st.session_state["auth_user"]   = "Prabhakar Gupta"
+                st.session_state["auth_email"]  = "admin@eci.com"
+                st.session_state["auth_method"] = "Admin"
+                st.rerun()
+            else:
+                st.error("Incorrect username or password. Please try again.")
+
+        # Footer
+        st.markdown(
+            '<div style="text-align:center;margin-top:24px;font-size:.7rem;color:rgba(255,255,255,.25)">'
+            '© 2025 Enterprise Computing Inc. · All rights reserved'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)   # close .login-card
+
+
+def _check_auth() -> bool:
+    """Returns True if user is authenticated. Shows login page otherwise."""
+    if st.session_state.get("auth_ok"):
+        return True
+    _show_login()
+    st.stop()
+    return False
+
+
+# ── Run auth gate immediately ─────────────────────────────────────────
+_check_auth()
+
+
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -9298,6 +9614,34 @@ def tab_run_library():
 # ═══════════════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════
+
+# ── Sidebar: user identity + logout ───────────────────────────────────
+with st.sidebar:
+    logo_b64_side = _logo_b64("eci_logo_white.png") or _logo_b64("eci.png")
+    if logo_b64_side:
+        st.markdown(
+            f'<img src="data:image/png;base64,{logo_b64_side}" '
+            f'style="height:40px;margin-bottom:8px" />',
+            unsafe_allow_html=True,
+        )
+    user_name   = st.session_state.get("auth_user", "User")
+    user_email  = st.session_state.get("auth_email", "")
+    auth_method = st.session_state.get("auth_method", "")
+    method_icon = "🪟" if auth_method == "Microsoft SSO" else "🔑"
+    st.markdown(
+        f'<div style="background:rgba(0,180,216,.08);border:1px solid rgba(0,180,216,.2);'
+        f'border-radius:10px;padding:12px 14px;margin-bottom:12px">'
+        f'<div style="font-weight:700;color:#e2e8f0;font-size:.9rem">{user_name}</div>'
+        f'<div style="font-size:.72rem;color:#64748b;margin-top:2px">{user_email}</div>'
+        f'<div style="font-size:.7rem;color:#00b4d8;margin-top:4px">{method_icon} {auth_method}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("🚪 Sign Out", use_container_width=True, type="secondary"):
+        for k in ["auth_ok", "auth_user", "auth_email", "auth_method"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+    st.markdown("---")
 
 main_t1, main_t2, main_t3 = st.tabs([
     "⚡ Business Estimation",
