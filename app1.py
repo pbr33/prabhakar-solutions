@@ -8,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-import json, time, io, re, smtplib, hashlib, urllib.parse
+import json, time, io, re, smtplib, hashlib, urllib.parse, random
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -4158,13 +4158,17 @@ class GeminiAI(AzureAI):
             return True, f"Connected to {self.model}"
         return False, "Connection failed — check your Gemini API key."
 
-    def _call(self, system: str, user: str) -> "dict | str | None":
-        """Call Gemini generateContent API; return parsed JSON dict or raw text."""
+    def _call(self, system: str, user: str, _max_retries: int = 5) -> "dict | str | None":
+        """Call Gemini generateContent API; return parsed JSON dict or raw text.
+
+        Retries automatically on HTTP 429 (rate limit) with exponential backoff
+        so the free-tier 15 RPM quota is handled gracefully.
+        """
         if not self.key:
             return None
         import urllib.request, urllib.error
 
-        url = f"{self._BASE}/{self.model}:generateContent?key={self.key}"
+        url      = f"{self._BASE}/{self.model}:generateContent?key={self.key}"
         combined = system + "\n\n" + user
         payload  = json.dumps({
             "contents": [{"role": "user", "parts": [{"text": combined}]}],
@@ -4174,46 +4178,59 @@ class GeminiAI(AzureAI):
                 "responseMimeType": "application/json",
             },
         }).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                txt  = ""
-                try:
-                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                except (KeyError, IndexError):
-                    return None
-                try:
-                    return json.loads(txt)
-                except json.JSONDecodeError:
-                    pass
-                m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", txt)
-                if m:
-                    try:
-                        return json.loads(m.group(1))
-                    except Exception:
-                        pass
-                m2 = re.search(r"\{[\s\S]*\}", txt)
-                if m2:
-                    try:
-                        return json.loads(m2.group(0))
-                    except Exception:
-                        pass
-                return txt
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="ignore")[:300]
-            st.warning(f"Gemini error {e.code}: {body[:200]}")
-            return None
-        except Exception as e:
-            st.warning(f"Gemini request failed: {str(e)[:200]}")
-            return None
 
-    def _call_text(self, system: str, user: str, max_tokens: int = 1024) -> "str | None":
-        """Call Gemini without JSON mode — returns plain text for chat."""
+        for attempt in range(_max_retries):
+            req = urllib.request.Request(
+                url, data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    txt  = ""
+                    try:
+                        txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                    except (KeyError, IndexError):
+                        return None
+                    try:
+                        return json.loads(txt)
+                    except json.JSONDecodeError:
+                        pass
+                    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", txt)
+                    if m:
+                        try:
+                            return json.loads(m.group(1))
+                        except Exception:
+                            pass
+                    m2 = re.search(r"\{[\s\S]*\}", txt)
+                    if m2:
+                        try:
+                            return json.loads(m2.group(0))
+                        except Exception:
+                            pass
+                    return txt
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                    st.toast(f"⏳ Gemini rate limit — retrying in {wait:.0f}s (attempt {attempt + 1}/{_max_retries})…")
+                    time.sleep(wait)
+                    continue
+                body = e.read().decode("utf-8", errors="ignore")[:300]
+                st.warning(f"Gemini error {e.code}: {body[:200]}")
+                return None
+            except Exception as e:
+                st.warning(f"Gemini request failed: {str(e)[:200]}")
+                return None
+
+        st.error("Gemini: free-tier rate limit hit after all retries. Wait 60 s then try again, or switch to gemini-1.5-flash.")
+        return None
+
+    def _call_text(self, system: str, user: str, max_tokens: int = 1024, _max_retries: int = 5) -> "str | None":
+        """Call Gemini without JSON mode — returns plain text for chat.
+
+        Retries on 429 with exponential backoff (same as _call).
+        """
         if not self.key:
             return None
         import urllib.request, urllib.error
@@ -4223,15 +4240,29 @@ class GeminiAI(AzureAI):
             "contents": [{"role": "user", "parts": [{"text": system + "\n\n" + user}]}],
             "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.4},
         }).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            return None
+
+        for attempt in range(_max_retries):
+            req = urllib.request.Request(
+                url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                    time.sleep(wait)
+                    continue
+                return None
+            except Exception:
+                return None
+
+        return None
+
+    def call_raw_text(self, system: str, user: str, max_tokens: int = 8000) -> "str | None":
+        """Call Gemini and return raw text (no JSON mode) — used for Live Demo generation."""
+        return self._call_text(system, user, max_tokens=max_tokens)
 
 
 # ═══════════════════════════════════════════════════════════════════════
