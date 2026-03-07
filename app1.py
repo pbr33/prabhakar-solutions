@@ -890,6 +890,112 @@ def render_mermaid(mermaid_code, height=450):
     st.components.v1.html(html, height=height, scrolling=True)
 
 
+def render_mermaid_tabs(diagrams):
+    """Render all architecture diagrams in a SINGLE iframe with built-in tabs.
+
+    diagrams: list of (key, label, mermaid_code) tuples
+
+    One Mermaid instance loads once, renders all diagrams sequentially —
+    eliminates the per-iframe race condition that caused first-load failures.
+    """
+    import json as _json
+
+    tabs_data = []
+    for key, label, code in diagrams:
+        clean = _sanitize_mermaid(code) if code else ""
+        tabs_data.append({"key": key, "label": label, "code": clean})
+
+    tabs_json = _json.dumps(tabs_data)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0;}}
+  body{{background:#151c2e;font-family:sans-serif;}}
+  .tabs{{display:flex;gap:4px;padding:10px 10px 0;border-bottom:1px solid #2a3550;flex-wrap:wrap;}}
+  .tab{{padding:7px 14px;cursor:pointer;border-radius:6px 6px 0 0;font-size:13px;
+        color:#94a3b8;background:#1e2a42;border:1px solid #2a3550;border-bottom:none;}}
+  .tab.active{{color:#00b4d8;background:#151c2e;border-color:#00929E;}}
+  .panels{{padding:12px;}}
+  .panel{{display:none;}}
+  .panel.active{{display:block;}}
+  .diagram{{text-align:center;min-height:60px;}}
+  svg{{max-width:100%;height:auto;}}
+  .err{{color:#ff6b6b;font-family:monospace;font-size:12px;background:#1e1a2e;
+        border:1px solid #ff6b6b55;padding:10px;border-radius:6px;white-space:pre-wrap;}}
+  #hidden{{position:absolute;left:-9999px;top:-9999px;}}
+  .spinner{{color:#94a3b8;font-size:13px;padding:20px;}}
+</style>
+</head><body>
+<div class="tabs" id="tabbar"></div>
+<div class="panels" id="panels"></div>
+<div id="hidden"></div>
+<script>
+(async function(){{
+  const tabs = {tabs_json};
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  // Build tab bar and panel divs
+  const tabbar = document.getElementById('tabbar');
+  const panels = document.getElementById('panels');
+  tabs.forEach((t, i) => {{
+    const btn = document.createElement('div');
+    btn.className = 'tab' + (i===0 ? ' active' : '');
+    btn.textContent = t.label;
+    btn.onclick = () => {{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel_'+i).classList.add('active');
+    }};
+    tabbar.appendChild(btn);
+
+    const panel = document.createElement('div');
+    panel.className = 'panel' + (i===0 ? ' active' : '');
+    panel.id = 'panel_' + i;
+    panel.innerHTML = '<div class="diagram spinner" id="diag_'+i+'">Rendering...</div>';
+    panels.appendChild(panel);
+  }});
+
+  mermaid.initialize({{
+    startOnLoad: false, securityLevel: 'loose', theme: 'dark',
+    themeVariables:{{
+      primaryColor:'#16274B', primaryTextColor:'#e2e8f0',
+      primaryBorderColor:'#00929E', lineColor:'#00b4d8',
+      secondaryColor:'#151c2e', tertiaryColor:'#0a0e1a', fontFamily:'sans-serif'
+    }}
+  }});
+
+  // Render each diagram sequentially so Mermaid's dynamic imports are
+  // fully cached by the time the next diagram is processed.
+  const el = document.getElementById('hidden');
+  for (let i = 0; i < tabs.length; i++) {{
+    const t = tabs[i];
+    const out = document.getElementById('diag_' + i);
+    if (!t.code) {{ out.innerHTML = '<div class="err">No diagram data.</div>'; continue; }}
+    let lastErr;
+    let rendered = false;
+    for (let attempt = 0; attempt < 4; attempt++) {{
+      if (attempt > 0) await delay(400 * attempt);
+      try {{
+        const {{ svg }} = await mermaid.render('mg_'+i+'_'+attempt, t.code, el);
+        out.className = 'diagram';
+        out.innerHTML = svg;
+        rendered = true;
+        break;
+      }} catch(e) {{ lastErr = e; }}
+    }}
+    if (!rendered) {{
+      out.innerHTML = '<div class="err">\u26a0 '+((lastErr&&lastErr.message)||String(lastErr))+'</div>';
+    }}
+  }}
+}})();
+</script>
+</body></html>"""
+    st.components.v1.html(html, height=620, scrolling=True)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  AUDIO / VIDEO TRANSCRIPT EXTRACTOR
 # ═══════════════════════════════════════════════════════════════════════
@@ -7349,24 +7455,15 @@ def show_results():
     with tab_list[5]:
         mermaid_data = safe_dict(r.get("mermaid_diagrams"))
         if mermaid_data:
-            diagram_tabs = st.tabs(["🏗️ Infrastructure", "🔄 Data Flow", "📨 Sequence", "🚀 Deployment", "🔒 Security"])
             diagram_map = [
-                ("infrastructure", "Azure Infrastructure Architecture", 500),
-                ("data_flow", "Data Flow Diagram", 450),
-                ("sequence", "Request Sequence Diagram", 500),
-                ("deployment", "CI/CD & Deployment Pipeline", 450),
-                ("security", "Security Architecture & Controls", 450),
+                ("infrastructure", "🏗️ Infrastructure",   safe_str(mermaid_data.get("infrastructure", ""))),
+                ("data_flow",      "🔄 Data Flow",         safe_str(mermaid_data.get("data_flow", ""))),
+                ("sequence",       "📨 Sequence",          safe_str(mermaid_data.get("sequence", ""))),
+                ("deployment",     "🚀 Deployment",        safe_str(mermaid_data.get("deployment", ""))),
+                ("security",       "🔒 Security",          safe_str(mermaid_data.get("security", ""))),
             ]
-            for i, (key, title, h) in enumerate(diagram_map):
-                with diagram_tabs[i]:
-                    code = safe_str(mermaid_data.get(key, ""))
-                    if code:
-                        st.markdown("**" + title + "**")
-                        render_mermaid(code, height=h)
-                        with st.expander("View Mermaid Source"):
-                            st.code(code, language="text")
-                    else:
-                        st.info("Diagram not available for this project.")
+            # Single iframe — one Mermaid instance, no per-diagram race conditions
+            render_mermaid_tabs(diagram_map)
             st.markdown("---")
             st.download_button(
                 "📥 Download All Diagrams (JSON)",
