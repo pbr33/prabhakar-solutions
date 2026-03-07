@@ -3427,6 +3427,38 @@ class AnthropicAI:
             st.warning(f"Anthropic request failed: {str(e)[:200]}")
             return None
 
+    def call_raw_text(self, system: str, user: str, max_tokens: int = 8000) -> "str | None":
+        """Call Anthropic and return raw text output — no JSON parsing."""
+        if not self.key:
+            return None
+        import urllib.request, urllib.error
+        payload = json.dumps({
+            "model":      self.model,
+            "max_tokens": max_tokens,
+            "system":     system,
+            "messages":   [{"role": "user", "content": user}],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            self._BASE, data=payload,
+            headers={
+                "x-api-key":         self.key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type":      "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return (data.get("content") or [{}])[0].get("text", "")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            st.warning(f"Anthropic error {e.code}: {body}")
+            return None
+        except Exception as e:
+            st.warning(f"Anthropic request failed: {str(e)[:200]}")
+            return None
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  AZURE OPENAI CLIENT — PRODUCTION
@@ -4053,6 +4085,25 @@ class AzureAI:
             "sentiment": "Positive — stakeholders are motivated and have executive buy-in for modernization",
             "key_themes": ["Automation", "Real-time Analytics", "System Integration", "Security", "Cloud Migration", "Mobile Access"],
         }
+
+    def call_raw_text(self, system: str, user: str, max_tokens: int = 8000) -> "str | None":
+        """Call Azure OpenAI and return raw text output — no JSON mode."""
+        if not self._client:
+            return None
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.deployment,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.4,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            st.warning("Azure OpenAI raw call: " + str(e)[:150])
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -7096,6 +7147,476 @@ def log_agent(name, detail):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  LIVE DEMO GENERATOR
+# ═══════════════════════════════════════════════════════════════════════
+
+def _pick_ai_for_raw():
+    """Return the first available AI client that supports call_raw_text, or None."""
+    preferred = st.session_state.get("preferred_llm", "azure")
+    ant = AnthropicAI.from_session()
+    az  = AzureAI.from_session()
+    gem = GeminiAI.from_session()
+    if preferred == "azure" and az.is_live:
+        return az
+    if ant.is_live:
+        return ant
+    if az.is_live:
+        return az
+    if gem.is_live:
+        return gem
+    return None
+
+
+def _build_demo_prompt(se, te, ce, r):
+    """Construct the mega-prompt for generating the interactive HTML demo."""
+    project_type   = safe_str(r.get("project_type", "Enterprise Solution"))
+    reqs           = safe_list(se.get("requirements"))[:10]
+    tech_stack     = safe_list(se.get("technology_stack"))[:10]
+    phases         = safe_list(te.get("phases"))[:6]
+    total_hours    = safe_int(te.get("total_hours"))
+    duration_weeks = safe_str(te.get("duration_weeks", "12 weeks"))
+    monthly_cost   = safe_int(ce.get("total_monthly_cost", 0))
+    annual_cost    = safe_int(ce.get("total_annual_cost", 0))
+    azure_costs    = safe_list(ce.get("azure_costs"))[:6]
+    risks          = safe_list(r.get("risks", {}).get("risks") if isinstance(r.get("risks"), dict) else [])[:4]
+    arch_comps     = safe_list((r.get("architecture") or {}).get("components", []))[:6]
+    milestones     = safe_list(te.get("milestones"))[:5]
+    roles          = safe_list(te.get("roles"))[:6]
+    biz_objectives = safe_list(se.get("business_objectives"))[:4]
+    risk_level     = safe_str((r.get("risks") or {}).get("overall_level", "Medium"))
+    confidence     = safe_str(te.get("confidence", "85%"))
+
+    req_items = "\n".join(
+        f'  - {safe_str(x.get("title","Feature"))}: {safe_str(x.get("description",""))} [{safe_str(x.get("complexity","Medium"))} complexity]'
+        for x in reqs if isinstance(x, dict)
+    ) or "  - Core platform features"
+
+    tech_items   = ", ".join(tech_stack) or "Azure, React, .NET, SQL Server"
+    phase_items  = "\n".join(
+        f'  - {safe_str(p.get("name","Phase"))} — {safe_int(p.get("hours",0))}h ({safe_str(p.get("percentage",""))})'
+        for p in phases if isinstance(p, dict)
+    ) or "  - Discovery, Design, Build, Test, Deploy"
+    cost_items   = "\n".join(
+        f'  - {safe_str(a.get("service","Azure Service"))} ({safe_str(a.get("tier",""))}): ${safe_int(a.get("monthly_cost",0))}/mo'
+        for a in azure_costs if isinstance(a, dict)
+    ) or "  - Azure App Service, Azure SQL, Azure Storage"
+    risk_items   = "\n".join(
+        f'  - [{safe_str(x.get("severity","Medium"))}] {safe_str(x.get("title","Risk"))}: {safe_str(x.get("mitigation",""))}'
+        for x in risks if isinstance(x, dict)
+    ) or "  - Integration complexity — mitigate with phased rollout"
+    arch_items   = "\n".join(
+        f'  - {safe_str(a.get("name","Component"))}: {safe_str(a.get("azure_service","Azure"))}'
+        for a in arch_comps if isinstance(a, dict)
+    ) or "  - API Gateway, Application Layer, Data Layer, Security"
+    milestone_items = "\n".join(
+        f'  - Week {safe_str(x.get("week",""))}: {safe_str(x.get("name","Milestone"))}'
+        for x in milestones if isinstance(x, dict)
+    ) or "  - Week 2: Discovery complete\n  - Week 6: MVP ready\n  - Week 10: Go-live"
+    role_items   = "\n".join(
+        f'  - {safe_str(x.get("name","Engineer"))} ({safe_str(x.get("allocation_pct",100))}% allocation)'
+        for x in roles if isinstance(x, dict)
+    ) or "  - Solution Architect, Lead Developer, QA Engineer, PM"
+    biz_items    = "\n".join(f"  - {o}" for o in biz_objectives) or "  - Increase operational efficiency\n  - Reduce manual effort"
+
+    system = (
+        "You are a world-class frontend engineer and UX designer. "
+        "Your task is to generate a SINGLE, self-contained HTML file that serves as a stunning "
+        "interactive product demo/prototype of a proposed enterprise software solution. "
+        "The demo must look 100% real, professional, and production-ready — NOT a wireframe. "
+        "Use ONLY inline HTML, CSS (inside <style>), and JavaScript (inside <script>). "
+        "DO NOT use any external CDN or script tags — everything must be inline or use only browser built-ins. "
+        "Output ONLY the raw HTML starting with <!DOCTYPE html> — no markdown, no code fences, no explanation."
+    )
+
+    user = f"""Generate a stunning interactive HTML demo for this enterprise solution proposal:
+
+PROJECT: {project_type}
+TECH STACK: {tech_items}
+TOTAL EFFORT: {total_hours} hours over {duration_weeks}
+INFRASTRUCTURE COST: ${monthly_cost:,}/month (${annual_cost:,}/year)
+RISK LEVEL: {risk_level} | CONFIDENCE: {confidence}
+
+BUSINESS OBJECTIVES:
+{biz_items}
+
+KEY FEATURES/REQUIREMENTS:
+{req_items}
+
+DELIVERY PHASES:
+{phase_items}
+
+MILESTONES:
+{milestone_items}
+
+TEAM COMPOSITION:
+{role_items}
+
+AZURE INFRASTRUCTURE:
+{cost_items}
+
+KEY RISKS & MITIGATIONS:
+{risk_items}
+
+ARCHITECTURE COMPONENTS:
+{arch_items}
+
+DESIGN REQUIREMENTS (MUST FOLLOW EXACTLY):
+1. Dark professional theme: background #0a0e27, accent #00d4aa (teal), secondary accent #7b61ff (purple), danger #ff6b6b
+2. Left sidebar navigation with 6 screens: Dashboard, Features, Timeline, Infrastructure, Team, Risk & Mitigation
+3. Each nav item has an icon + label; active item highlighted with teal accent
+4. Dashboard screen must show:
+   - Large animated KPI cards (Total Hours, Duration, Monthly Cost, Risk Level, Requirements Count, Confidence)
+   - A horizontal project progress bar showing phases with percentage fill
+   - A donut/pie chart (pure CSS or SVG) showing phase effort distribution
+   - "Recently Added Features" list with status badges
+   - Live blinking "LIVE" indicator in the header
+5. Features screen: beautiful card grid showing each requirement with complexity badge, description, tech tags
+6. Timeline screen: visual Gantt-style chart with phases as horizontal bars, milestone diamonds
+7. Infrastructure screen: Azure service cards with cost per month, animated cost counter, total monthly/annual summary
+8. Team screen: profile cards for each role with allocation ring chart
+9. Risk screen: risk matrix heatmap (severity x probability), mitigation cards per risk
+10. ALL numbers must animate/count up when a screen first appears (IntersectionObserver or timeout)
+11. Smooth slide transitions between screens (CSS transform translate)
+12. Hover effects on every card (subtle glow, scale 1.02)
+13. Header bar with "ECI — {project_type}" title + "LIVE DEMO" blinking badge + current date
+14. Footer: "Generated by ECI BELAL · Powered by Generative AI · Confidential"
+15. Sidebar collapse button (hamburger) that hides/shows the sidebar
+16. All charts and visualizations must use PURE SVG or CSS — NO external chart libraries
+17. Make it look exactly like a real deployed enterprise application — pixel perfect, no placeholders
+18. Add subtle CSS particle animation or grid pattern to the background
+19. Screen transitions must feel premium — use cubic-bezier easing
+
+Generate the complete self-contained HTML file now. Start with <!DOCTYPE html>."""
+
+    return system, user
+
+
+def generate_live_demo_html(se, te, ce, r) -> "str | None":
+    """Call AI to generate the interactive HTML demo. Returns HTML string or None."""
+    ai = _pick_ai_for_raw()
+    if ai is None:
+        return None
+    system, user = _build_demo_prompt(se, te, ce, r)
+    raw = ai.call_raw_text(system, user, max_tokens=8000)
+    if not raw:
+        return None
+    # Strip any accidental markdown fences
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw.strip())
+    # Ensure it starts with <!DOCTYPE
+    if "<!DOCTYPE" not in raw[:200] and "<html" not in raw[:200]:
+        idx = raw.find("<!DOCTYPE")
+        if idx == -1:
+            idx = raw.find("<html")
+        if idx != -1:
+            raw = raw[idx:]
+    return raw if raw.strip() else None
+
+
+def _demo_loading_animation() -> str:
+    """Return HTML for the cinematic loading screen shown while AI generates the demo."""
+    return """
+<style>
+@keyframes gradShift {
+  0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%}
+}
+@keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes barFill { from{width:0} to{width:var(--w)} }
+@keyframes fadeInUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+.demo-loader {
+  background: linear-gradient(135deg,#0a0e27,#0d1b4b,#0a2744);
+  background-size: 200% 200%;
+  animation: gradShift 4s ease infinite;
+  min-height: 520px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  position: relative;
+  overflow: hidden;
+}
+.demo-loader::before {
+  content:'';
+  position:absolute;inset:0;
+  background: radial-gradient(circle at 20% 50%, rgba(0,212,170,.08) 0%, transparent 60%),
+              radial-gradient(circle at 80% 20%, rgba(123,97,255,.08) 0%, transparent 60%);
+}
+.loader-ring {
+  width:72px;height:72px;
+  border:3px solid rgba(0,212,170,.2);
+  border-top-color:#00d4aa;
+  border-radius:50%;
+  animation:spin .8s linear infinite;
+  margin-bottom:28px;
+}
+.loader-title {
+  font-size:1.4rem;font-weight:700;color:#fff;
+  letter-spacing:1px;margin-bottom:8px;
+  animation:fadeInUp .5s ease;
+}
+.loader-sub {
+  font-size:.85rem;color:rgba(255,255,255,.5);
+  margin-bottom:32px;
+  animation:fadeInUp .5s ease .1s both;
+}
+.loader-steps { width:100%;max-width:420px; animation:fadeInUp .5s ease .2s both; }
+.loader-step {
+  display:flex;align-items:center;gap:12px;
+  padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);
+}
+.step-icon { font-size:1.1rem;width:24px;text-align:center; }
+.step-label { flex:1;font-size:.82rem;color:rgba(255,255,255,.7); }
+.step-status { font-size:.75rem;font-weight:600;padding:2px 10px;border-radius:12px; }
+.step-done  { background:rgba(0,212,170,.15);color:#00d4aa; }
+.step-wip   { background:rgba(123,97,255,.15);color:#7b61ff;animation:pulse 1s infinite; }
+.step-wait  { background:rgba(255,255,255,.07);color:rgba(255,255,255,.3); }
+.loader-progress {
+  width:100%;max-width:420px;margin-top:24px;
+  background:rgba(255,255,255,.08);border-radius:8px;height:6px;overflow:hidden;
+  animation:fadeInUp .5s ease .3s both;
+}
+.loader-progress-bar {
+  height:100%;background:linear-gradient(90deg,#00d4aa,#7b61ff);
+  border-radius:8px;transition:width .5s ease;
+}
+</style>
+<div class="demo-loader">
+  <div class="loader-ring"></div>
+  <div class="loader-title">🎯 AI is crafting your personalised demo</div>
+  <div class="loader-sub">Analysing scope &amp; generating interactive prototype…</div>
+  <div class="loader-steps" id="loaderSteps">
+    <div class="loader-step"><span class="step-icon">🔍</span><span class="step-label">Analysing scope &amp; architecture</span><span class="step-status step-done">✓ Done</span></div>
+    <div class="loader-step"><span class="step-icon">🎨</span><span class="step-label">Designing UI components &amp; screens</span><span class="step-status step-wip">Building…</span></div>
+    <div class="loader-step"><span class="step-icon">⚡</span><span class="step-label">Wiring up interactions &amp; animations</span><span class="step-status step-wait">Pending</span></div>
+    <div class="loader-step"><span class="step-icon">📊</span><span class="step-label">Populating live data from your scope</span><span class="step-status step-wait">Pending</span></div>
+    <div class="loader-step"><span class="step-icon">🚀</span><span class="step-label">Finalising &amp; rendering your demo</span><span class="step-status step-wait">Pending</span></div>
+  </div>
+  <div class="loader-progress"><div class="loader-progress-bar" style="width:35%"></div></div>
+</div>
+"""
+
+
+def render_live_demo_tab(se, te, ce, r):
+    """Render the 🎯 Live Demo tab content."""
+
+    st.markdown("""
+<style>
+.demo-hero {
+  background: linear-gradient(135deg, #0a0e27 0%, #0d1b4b 50%, #0a2744 100%);
+  border: 1px solid rgba(0,212,170,.25);
+  border-radius: 20px;
+  padding: 36px 40px;
+  margin-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.demo-hero::before {
+  content:'';position:absolute;inset:0;
+  background: radial-gradient(circle at 80% 50%, rgba(0,212,170,.07) 0%, transparent 60%);
+}
+.demo-hero-title {
+  font-size:1.8rem;font-weight:800;color:#fff;
+  margin-bottom:8px;letter-spacing:.5px;
+}
+.demo-hero-sub {
+  font-size:.95rem;color:rgba(255,255,255,.6);
+  max-width:600px;line-height:1.6;
+}
+.demo-badge {
+  display:inline-block;
+  background:linear-gradient(135deg,rgba(0,212,170,.2),rgba(123,97,255,.2));
+  border:1px solid rgba(0,212,170,.4);
+  color:#00d4aa;font-size:.72rem;font-weight:700;
+  letter-spacing:1.5px;padding:4px 14px;border-radius:20px;
+  margin-bottom:16px;
+}
+.demo-feature-grid {
+  display:grid;grid-template-columns:repeat(3,1fr);gap:16px;
+  margin-bottom:24px;
+}
+.demo-feature-card {
+  background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;padding:20px;
+  transition:all .2s ease;
+}
+.demo-feature-card:hover {
+  background:rgba(0,212,170,.06);
+  border-color:rgba(0,212,170,.25);
+  transform:translateY(-2px);
+}
+.demo-feature-icon { font-size:1.6rem;margin-bottom:10px; }
+.demo-feature-title { font-size:.9rem;font-weight:700;color:#fff;margin-bottom:4px; }
+.demo-feature-desc  { font-size:.78rem;color:rgba(255,255,255,.5);line-height:1.5; }
+.demo-iframe-wrap {
+  border-radius:16px;overflow:hidden;
+  border:1px solid rgba(0,212,170,.3);
+  box-shadow:0 0 60px rgba(0,212,170,.08), 0 20px 60px rgba(0,0,0,.4);
+}
+.demo-iframe-bar {
+  background:rgba(255,255,255,.04);
+  border-bottom:1px solid rgba(255,255,255,.08);
+  padding:10px 16px;
+  display:flex;align-items:center;gap:8px;
+}
+.wbar-dot { width:12px;height:12px;border-radius:50%; }
+.wbar-url {
+  flex:1;background:rgba(255,255,255,.07);
+  border-radius:20px;padding:4px 14px;
+  font-size:.72rem;color:rgba(255,255,255,.4);
+  margin:0 8px;font-family:monospace;
+}
+.demo-action-row {
+  display:flex;gap:12px;margin-top:20px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+    project_type = safe_str(r.get("project_type", "Enterprise Solution"))
+    total_hours  = safe_int(te.get("total_hours"))
+    monthly_cost = safe_int(ce.get("total_monthly_cost", 0))
+    req_count    = len(safe_list(se.get("requirements")))
+
+    # Hero banner
+    st.markdown(f"""
+<div class="demo-hero">
+  <div class="demo-badge">✨ AI-POWERED LIVE DEMO</div>
+  <div class="demo-hero-title">🎯 Interactive Product Demo</div>
+  <div class="demo-hero-sub">
+    Watch AI generate a fully interactive, real-looking prototype of your <strong>{project_type}</strong> solution —
+    personalised with your actual scope, requirements, costs and team. No mockup tools, no templates.
+    Pure AI generation in real-time.
+  </div>
+</div>
+<div class="demo-feature-grid">
+  <div class="demo-feature-card">
+    <div class="demo-feature-icon">⚡</div>
+    <div class="demo-feature-title">Real Scope Data</div>
+    <div class="demo-feature-desc">{req_count} requirements · {total_hours:,}h estimate · ${monthly_cost:,}/mo infra — all wired in automatically</div>
+  </div>
+  <div class="demo-feature-card">
+    <div class="demo-feature-icon">🎨</div>
+    <div class="demo-feature-title">6 Interactive Screens</div>
+    <div class="demo-feature-desc">Dashboard, Features, Timeline, Infrastructure, Team &amp; Risk — fully clickable navigation</div>
+  </div>
+  <div class="demo-feature-card">
+    <div class="demo-feature-icon">🚀</div>
+    <div class="demo-feature-title">One-Click Download</div>
+    <div class="demo-feature-desc">Download the demo as a standalone HTML file — share with clients, embed in decks</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    ai = _pick_ai_for_raw()
+    ai_status_color = "#00d4aa" if ai else "#ff6b6b"
+    ai_status_text  = (f"✓ AI Ready — {type(ai).__name__}" if ai else "✗ No AI configured — configure Claude / Azure / Gemini in sidebar")
+    st.markdown(
+        f'<span style="background:rgba(0,0,0,.3);border:1px solid {ai_status_color};color:{ai_status_color};'
+        f'padding:4px 14px;border-radius:20px;font-size:.75rem;font-weight:600">{ai_status_text}</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Buttons ──
+    btn_cols = st.columns([2, 1, 1])
+    with btn_cols[0]:
+        gen_clicked = st.button(
+            "🎯 Create Live Demo",
+            use_container_width=True,
+            type="primary",
+            disabled=(ai is None),
+            key="btn_gen_demo",
+            help="AI will generate a fully interactive HTML prototype from your scope in ~30 seconds",
+        )
+    with btn_cols[1]:
+        regen_clicked = st.button(
+            "🔄 Regenerate",
+            use_container_width=True,
+            disabled=(ai is None or "live_demo_html" not in st.session_state),
+            key="btn_regen_demo",
+        )
+    with btn_cols[2]:
+        if st.session_state.get("live_demo_html"):
+            st.download_button(
+                "📥 Download Demo",
+                data=st.session_state["live_demo_html"],
+                file_name=f"ECI_LiveDemo_{project_type.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="btn_dl_demo",
+            )
+
+    # ── Generate ──
+    if gen_clicked or regen_clicked:
+        loader_slot = st.empty()
+        loader_slot.markdown(_demo_loading_animation(), unsafe_allow_html=True)
+        try:
+            html_result = generate_live_demo_html(se, te, ce, r)
+            loader_slot.empty()
+            if html_result:
+                st.session_state["live_demo_html"] = html_result
+                st.success("✅ Demo generated! Scroll down to explore the interactive prototype.")
+                st.rerun()
+            else:
+                loader_slot.empty()
+                st.error("Demo generation failed — AI did not return valid HTML. Check your API key in the sidebar.")
+        except Exception as ex:
+            loader_slot.empty()
+            st.error(f"Generation error: {str(ex)[:300]}")
+
+    # ── Render the iframe ──
+    demo_html = st.session_state.get("live_demo_html")
+    if demo_html:
+        # Wrap in fake browser chrome for wow factor
+        b64 = base64.b64encode(demo_html.encode("utf-8")).decode("utf-8")
+        st.markdown(f"""
+<div class="demo-iframe-wrap">
+  <div class="demo-iframe-bar">
+    <div class="wbar-dot" style="background:#ff5f56"></div>
+    <div class="wbar-dot" style="background:#ffbd2e"></div>
+    <div class="wbar-dot" style="background:#27c93f"></div>
+    <div class="wbar-url">https://eci-demo.azure.com/{project_type.lower().replace(' ','-')}/live</div>
+    <span style="font-size:.7rem;color:rgba(0,212,170,.7);font-weight:600">🔒 SECURE · LIVE DEMO</span>
+  </div>
+  <iframe
+    src="data:text/html;base64,{b64}"
+    width="100%" height="820"
+    style="border:none;display:block;"
+    sandbox="allow-scripts allow-same-origin"
+    title="ECI Live Demo">
+  </iframe>
+</div>
+""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.caption(
+            "💡 **Tip:** Click the sidebar nav items inside the demo to explore all 6 screens. "
+            "Download the HTML file to share with your client as a standalone demo."
+        )
+    elif not gen_clicked:
+        # Teaser preview when nothing generated yet
+        st.markdown("""
+<div style="border:2px dashed rgba(0,212,170,.2);border-radius:16px;padding:60px 40px;
+     text-align:center;background:rgba(0,212,170,.02);margin-top:16px">
+  <div style="font-size:3rem;margin-bottom:16px">🎯</div>
+  <div style="font-size:1.2rem;font-weight:700;color:rgba(255,255,255,.8);margin-bottom:8px">
+    Your interactive demo will appear here
+  </div>
+  <div style="font-size:.85rem;color:rgba(255,255,255,.4);max-width:460px;margin:0 auto;line-height:1.6">
+    Click <strong style="color:#00d4aa">Create Live Demo</strong> above and watch AI generate
+    a fully interactive prototype of your solution — complete with animated dashboards,
+    clickable navigation, real data from your scope, and a professional enterprise UI.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  TAB 1: PRESALE
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -7910,7 +8431,7 @@ def show_results():
     # ── Human Review & Feedback Panel ─────────────────────────────────
     _render_feedback_panel(r)
 
-    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History"])
+    tab_list = st.tabs(["📋 Requirements", "⏱️ Time", "💰 Infra Cost", "⚠️ Risk", "🏗️ Architecture", "📐 Diagrams", "📄 Proposal", "📌 Scope", "👥 Team & Roles", "🎮 3D View", "🎬 Narrator", "💬 Chat", "📚 History", "🎯 Live Demo"])
 
     # ── Requirements ──
     with tab_list[0]:
@@ -9132,6 +9653,10 @@ def show_results():
                 mime="application/json",
                 key="dl_ver_json",
             )
+
+    # ── Live Demo ──
+    with tab_list[13]:
+        render_live_demo_tab(se, te, ce, r)
 
     # ── Delivery ──
     st.markdown("---")
