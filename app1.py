@@ -7455,23 +7455,27 @@ def show_results():
     with tab_list[5]:
         mermaid_data = safe_dict(r.get("mermaid_diagrams"))
         if mermaid_data:
-            diagram_map = [
-                ("infrastructure", "🏗️ Infrastructure",   safe_str(mermaid_data.get("infrastructure", ""))),
-                ("data_flow",      "🔄 Data Flow",         safe_str(mermaid_data.get("data_flow", ""))),
-                ("sequence",       "📨 Sequence",          safe_str(mermaid_data.get("sequence", ""))),
-                ("deployment",     "🚀 Deployment",        safe_str(mermaid_data.get("deployment", ""))),
-                ("security",       "🔒 Security",          safe_str(mermaid_data.get("security", ""))),
-            ]
-            # Single iframe — one Mermaid instance, no per-diagram race conditions
-            render_mermaid_tabs(diagram_map)
-            st.markdown("---")
-            st.download_button(
-                "📥 Download All Diagrams (JSON)",
-                data=json.dumps(mermaid_data, indent=2),
-                file_name="ECI_Diagrams_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
-                mime="application/json",
-                use_container_width=True, key="dl_diagrams",
-            )
+            st.markdown("Click **Generate Diagrams** to render the architecture diagrams.")
+            if st.button("🔄 Generate Diagrams", key="btn_gen_diagrams", use_container_width=True):
+                st.session_state["show_diagrams"] = True
+
+            if st.session_state.get("show_diagrams"):
+                diagram_map = [
+                    ("infrastructure", "🏗️ Infrastructure",   safe_str(mermaid_data.get("infrastructure", ""))),
+                    ("data_flow",      "🔄 Data Flow",         safe_str(mermaid_data.get("data_flow", ""))),
+                    ("sequence",       "📨 Sequence",          safe_str(mermaid_data.get("sequence", ""))),
+                    ("deployment",     "🚀 Deployment",        safe_str(mermaid_data.get("deployment", ""))),
+                    ("security",       "🔒 Security",          safe_str(mermaid_data.get("security", ""))),
+                ]
+                render_mermaid_tabs(diagram_map)
+                st.markdown("---")
+                st.download_button(
+                    "📥 Download All Diagrams (JSON)",
+                    data=json.dumps(mermaid_data, indent=2),
+                    file_name="ECI_Diagrams_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
+                    mime="application/json",
+                    use_container_width=True, key="dl_diagrams",
+                )
         else:
             st.info("Architecture diagrams will be generated after processing documents.")
 
