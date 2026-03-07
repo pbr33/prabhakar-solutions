@@ -27,10 +27,18 @@ except ImportError:
 # ── Credentials & Azure AD config (override via .streamlit/secrets.toml) ──
 _ADMIN_USER     = "genaiwithprabhakar"
 _ADMIN_PASS_SHA = hashlib.sha256(b"ECI@2025!Presale").hexdigest()   # default password: ECI@2025!Presale
-_AAD_CLIENT_ID  = st.secrets.get("AAD_CLIENT_ID",  "")   # Azure AD App (client) ID
-_AAD_TENANT_ID  = st.secrets.get("AAD_TENANT_ID",  "")   # Azure AD Tenant ID
-_AAD_CLIENT_SEC = st.secrets.get("AAD_CLIENT_SECRET", "")
-_APP_BASE_URL   = st.secrets.get("APP_BASE_URL", "http://localhost:8501")
+
+def _secret(key: str, default: str = "") -> str:
+    """Safe secrets accessor — returns default when secrets.toml doesn't exist."""
+    try:
+        return st.secrets.get(key, default) or default
+    except Exception:
+        return default
+
+_AAD_CLIENT_ID  = _secret("AAD_CLIENT_ID")
+_AAD_TENANT_ID  = _secret("AAD_TENANT_ID")
+_AAD_CLIENT_SEC = _secret("AAD_CLIENT_SECRET")
+_APP_BASE_URL   = _secret("APP_BASE_URL", "http://localhost:8501")
 _REDIRECT_URI   = _APP_BASE_URL.rstrip("/") + "/"
 
 # ── MSAL confidential-client app (lazy-init) ──────────────────────────
