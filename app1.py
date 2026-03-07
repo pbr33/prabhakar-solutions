@@ -7168,123 +7168,168 @@ def _pick_ai_for_raw():
 
 
 def _build_demo_prompt(se, te, ce, r):
-    """Construct the mega-prompt for generating the interactive HTML demo."""
+    """Construct the mega-prompt for generating an interactive HTML demo of the ACTUAL SOLUTION."""
     project_type   = safe_str(r.get("project_type", "Enterprise Solution"))
-    reqs           = safe_list(se.get("requirements"))[:10]
-    tech_stack     = safe_list(se.get("technology_stack"))[:10]
-    phases         = safe_list(te.get("phases"))[:6]
-    total_hours    = safe_int(te.get("total_hours"))
-    duration_weeks = safe_str(te.get("duration_weeks", "12 weeks"))
-    monthly_cost   = safe_int(ce.get("total_monthly_cost", 0))
-    annual_cost    = safe_int(ce.get("total_annual_cost", 0))
-    azure_costs    = safe_list(ce.get("azure_costs"))[:6]
-    risks          = safe_list(r.get("risks", {}).get("risks") if isinstance(r.get("risks"), dict) else [])[:4]
-    arch_comps     = safe_list((r.get("architecture") or {}).get("components", []))[:6]
-    milestones     = safe_list(te.get("milestones"))[:5]
-    roles          = safe_list(te.get("roles"))[:6]
-    biz_objectives = safe_list(se.get("business_objectives"))[:4]
-    risk_level     = safe_str((r.get("risks") or {}).get("overall_level", "Medium"))
-    confidence     = safe_str(te.get("confidence", "85%"))
+    reqs           = safe_list(se.get("requirements"))[:12]
+    tech_stack     = safe_list(se.get("technology_stack"))[:8]
+    biz_objectives = safe_list(se.get("business_objectives"))[:5]
+    arch_comps     = safe_list((r.get("architecture") or {}).get("components", []))[:8]
+    scope_items    = safe_list((r.get("scope") or {}).get("in_scope", []))[:8]
+    pain_points    = safe_list(se.get("pain_points", []))[:5]
 
     req_items = "\n".join(
-        f'  - {safe_str(x.get("title","Feature"))}: {safe_str(x.get("description",""))} [{safe_str(x.get("complexity","Medium"))} complexity]'
+        f'  - {safe_str(x.get("title","Feature"))}: {safe_str(x.get("description",""))} '
+        f'[{safe_str(x.get("type","functional"))} | {safe_str(x.get("complexity","Medium"))} complexity]'
         for x in reqs if isinstance(x, dict)
     ) or "  - Core platform features"
 
-    tech_items   = ", ".join(tech_stack) or "Azure, React, .NET, SQL Server"
-    phase_items  = "\n".join(
-        f'  - {safe_str(p.get("name","Phase"))} — {safe_int(p.get("hours",0))}h ({safe_str(p.get("percentage",""))})'
-        for p in phases if isinstance(p, dict)
-    ) or "  - Discovery, Design, Build, Test, Deploy"
-    cost_items   = "\n".join(
-        f'  - {safe_str(a.get("service","Azure Service"))} ({safe_str(a.get("tier",""))}): ${safe_int(a.get("monthly_cost",0))}/mo'
-        for a in azure_costs if isinstance(a, dict)
-    ) or "  - Azure App Service, Azure SQL, Azure Storage"
-    risk_items   = "\n".join(
-        f'  - [{safe_str(x.get("severity","Medium"))}] {safe_str(x.get("title","Risk"))}: {safe_str(x.get("mitigation",""))}'
-        for x in risks if isinstance(x, dict)
-    ) or "  - Integration complexity — mitigate with phased rollout"
-    arch_items   = "\n".join(
-        f'  - {safe_str(a.get("name","Component"))}: {safe_str(a.get("azure_service","Azure"))}'
+    tech_items  = ", ".join(tech_stack) or "React, Azure, .NET Core, SQL Server"
+    biz_items   = "\n".join(f"  - {o}" for o in biz_objectives) or "  - Improve operational efficiency"
+    arch_items  = "\n".join(
+        f'  - {safe_str(a.get("name","Component"))}: {safe_str(a.get("type","Service"))}'
         for a in arch_comps if isinstance(a, dict)
-    ) or "  - API Gateway, Application Layer, Data Layer, Security"
-    milestone_items = "\n".join(
-        f'  - Week {safe_str(x.get("week",""))}: {safe_str(x.get("name","Milestone"))}'
-        for x in milestones if isinstance(x, dict)
-    ) or "  - Week 2: Discovery complete\n  - Week 6: MVP ready\n  - Week 10: Go-live"
-    role_items   = "\n".join(
-        f'  - {safe_str(x.get("name","Engineer"))} ({safe_str(x.get("allocation_pct",100))}% allocation)'
-        for x in roles if isinstance(x, dict)
-    ) or "  - Solution Architect, Lead Developer, QA Engineer, PM"
-    biz_items    = "\n".join(f"  - {o}" for o in biz_objectives) or "  - Increase operational efficiency\n  - Reduce manual effort"
+    ) or "  - Frontend, API Layer, Database, Authentication"
+    scope_text  = "\n".join(f"  - {s}" for s in scope_items if isinstance(s, str)) or "  - Core features as per requirements"
+    pain_text   = "\n".join(f"  - {p}" for p in pain_points if isinstance(p, str)) or ""
 
     system = (
-        "You are a world-class frontend engineer and UX designer. "
-        "Your task is to generate a SINGLE, self-contained HTML file that serves as a stunning "
-        "interactive product demo/prototype of a proposed enterprise software solution. "
-        "The demo must look 100% real, professional, and production-ready — NOT a wireframe. "
+        "You are a world-class product designer and frontend engineer specializing in enterprise UX. "
+        "Your task is to generate a SINGLE, self-contained HTML file that is a realistic, interactive prototype "
+        "of the ACTUAL SOFTWARE PRODUCT described — showing exactly what the END USERS will see and use day-to-day. "
+        "This is NOT a project proposal, NOT an estimation tool, and NOT a dashboard showing hours/costs/risks. "
+        "This is a visual product demo of the SOLUTION BEING DELIVERED — the client should see it and think "
+        "'this is what we are getting'. "
         "Use ONLY inline HTML, CSS (inside <style>), and JavaScript (inside <script>). "
-        "DO NOT use any external CDN or script tags — everything must be inline or use only browser built-ins. "
+        "DO NOT use any external CDN, libraries, or script tags — everything must be inline or browser built-ins. "
         "Output ONLY the raw HTML starting with <!DOCTYPE html> — no markdown, no code fences, no explanation."
     )
 
-    user = f"""Generate a stunning interactive HTML demo for this enterprise solution proposal:
+    user = f"""Generate a stunning interactive HTML product demo showing what the ACTUAL SOLUTION looks like to its end users.
 
-PROJECT: {project_type}
-TECH STACK: {tech_items}
-TOTAL EFFORT: {total_hours} hours over {duration_weeks}
-INFRASTRUCTURE COST: ${monthly_cost:,}/month (${annual_cost:,}/year)
-RISK LEVEL: {risk_level} | CONFIDENCE: {confidence}
+SOLUTION TYPE: {project_type}
+TECHNOLOGY STACK: {tech_items}
+
+BUSINESS PROBLEMS BEING SOLVED:
+{pain_text or biz_items}
 
 BUSINESS OBJECTIVES:
 {biz_items}
 
-KEY FEATURES/REQUIREMENTS:
+WHAT IS BEING BUILT (requirements — these become the product's features):
 {req_items}
 
-DELIVERY PHASES:
-{phase_items}
-
-MILESTONES:
-{milestone_items}
-
-TEAM COMPOSITION:
-{role_items}
-
-AZURE INFRASTRUCTURE:
-{cost_items}
-
-KEY RISKS & MITIGATIONS:
-{risk_items}
-
-ARCHITECTURE COMPONENTS:
+SYSTEM ARCHITECTURE COMPONENTS:
 {arch_items}
 
-DESIGN REQUIREMENTS (MUST FOLLOW EXACTLY):
-1. Dark professional theme: background #0a0e27, accent #00d4aa (teal), secondary accent #7b61ff (purple), danger #ff6b6b
-2. Left sidebar navigation with 6 screens: Dashboard, Features, Timeline, Infrastructure, Team, Risk & Mitigation
-3. Each nav item has an icon + label; active item highlighted with teal accent
-4. Dashboard screen must show:
-   - Large animated KPI cards (Total Hours, Duration, Monthly Cost, Risk Level, Requirements Count, Confidence)
-   - A horizontal project progress bar showing phases with percentage fill
-   - A donut/pie chart (pure CSS or SVG) showing phase effort distribution
-   - "Recently Added Features" list with status badges
-   - Live blinking "LIVE" indicator in the header
-5. Features screen: beautiful card grid showing each requirement with complexity badge, description, tech tags
-6. Timeline screen: visual Gantt-style chart with phases as horizontal bars, milestone diamonds
-7. Infrastructure screen: Azure service cards with cost per month, animated cost counter, total monthly/annual summary
-8. Team screen: profile cards for each role with allocation ring chart
-9. Risk screen: risk matrix heatmap (severity x probability), mitigation cards per risk
-10. ALL numbers must animate/count up when a screen first appears (IntersectionObserver or timeout)
-11. Smooth slide transitions between screens (CSS transform translate)
-12. Hover effects on every card (subtle glow, scale 1.02)
-13. Header bar with "ECI — {project_type}" title + "LIVE DEMO" blinking badge + current date
-14. Footer: "Generated by ECI BELAL · Powered by Generative AI · Confidential"
-15. Sidebar collapse button (hamburger) that hides/shows the sidebar
-16. All charts and visualizations must use PURE SVG or CSS — NO external chart libraries
-17. Make it look exactly like a real deployed enterprise application — pixel perfect, no placeholders
-18. Add subtle CSS particle animation or grid pattern to the background
-19. Screen transitions must feel premium — use cubic-bezier easing
+IN SCOPE:
+{scope_text}
+
+===========================================
+CRITICAL INSTRUCTIONS — READ CAREFULLY
+===========================================
+
+STEP 1 — UNDERSTAND THE SOLUTION TYPE:
+Analyse the project type, requirements, pain points, and objectives above.
+Determine what kind of software product this is, for example:
+  - Chatbot / Conversational AI / Virtual Assistant
+  - Data Analytics / Business Intelligence / Reporting Platform
+  - Customer Portal / Self-Service Web App
+  - CRM / Sales Tool / Lead Management
+  - HR / People Management Platform
+  - Inventory / Supply Chain / Warehouse Management
+  - Document Management / SharePoint / Intranet
+  - Integration Platform / API Hub / Middleware
+  - Finance / Accounting / ERP Module
+  - Healthcare / Clinical / Patient Management
+  - Retail / E-commerce / Order Management
+  - Field Service / Ticketing / ITSM
+  - Mobile App (show mobile-style layout)
+  - Custom Enterprise App
+
+STEP 2 — DESIGN 5–6 PRODUCT SCREENS APPROPRIATE TO THIS SOLUTION:
+Choose screens that show the REAL USER WORKFLOWS for this specific product.
+DO NOT show: project hours, delivery phases, team composition, Azure infra costs, risk matrices, or any estimation data.
+DO show: what actual users log into and use every day.
+
+Examples by product type (choose what fits your solution — do not copy blindly):
+
+  CHATBOT / AI ASSISTANT:
+  → Chat interface: conversation thread, bot avatar, user bubbles, typing indicator, suggested quick replies
+  → Admin console: active conversations, resolution rate, bot confidence scores, escalation queue
+  → Knowledge base manager: FAQ list, topic categories, edit/add articles
+  → Analytics: conversation volume trend (SVG line chart), top intents, CSAT score, deflection rate
+  → Settings: bot personality, language, escalation rules, integrations
+
+  DATA ANALYTICS / BI PLATFORM:
+  → Main dashboard: domain-relevant KPI cards + SVG bar/line/donut charts with real-looking data
+  → Report explorer: list of reports with filters, last-run date, owner
+  → Report detail: chart with drill-down table, export button
+  → Data sources: connection cards (database, API, file) with status indicators
+  → Scheduled jobs: pipeline list with run status, next run time
+
+  WEB PORTAL / ENTERPRISE APP:
+  → Home: domain-relevant KPI summary + recent activity feed
+  → Core entity list: table/card grid of the main records (orders, cases, assets, etc.)
+  → Detail / form view: full record with fields, tabs, action buttons
+  → Notifications / inbox
+  → Settings / profile
+
+  CRM / SALES TOOL:
+  → Pipeline: kanban board with deal stages or list with deal value
+  → Contact / account detail: info card, activity timeline, notes
+  → Tasks & follow-ups: to-do list with due dates, priority badges
+  → Analytics: win rate donut, revenue forecast bar chart, lead source breakdown
+
+  HR / PEOPLE PLATFORM:
+  → Employee directory: search + card grid with avatars, department, role
+  → Leave management: calendar view or request list with approval status
+  → Onboarding tracker: checklist with completion progress per new hire
+  → Performance: goal list with completion %, review schedule
+
+  INVENTORY / SUPPLY CHAIN:
+  → Stock overview: KPI cards (total SKUs, low-stock alerts, pending orders) + stock level bar chart
+  → Product catalog: table with image placeholder, SKU, stock, reorder level
+  → Order management: order list with status badges (Pending/Processing/Shipped/Delivered)
+  → Supplier management: supplier cards with rating, lead time, last order
+
+  FINANCE / ERP:
+  → Financial dashboard: revenue vs expense line chart, budget utilization, outstanding invoices
+  → Invoice list: table with amount, due date, status badge
+  → Expense approvals: card list with requester, amount, category, approve/reject buttons
+  → GL / Chart of accounts: hierarchical account list
+
+  FIELD SERVICE / ITSM / TICKETING:
+  → Ticket queue: list with priority colour coding, assignee, SLA countdown
+  → Ticket detail: description, comments thread, status workflow, attachments
+  → SLA dashboard: response time gauge, breach rate, agent performance
+  → Knowledge base: article search + category tree
+
+STEP 3 — USE DOMAIN-APPROPRIATE REALISTIC FAKE DATA:
+Populate every screen with realistic, domain-specific sample data.
+  - Healthcare → patient names, clinical terms, medical query examples
+  - Retail → product names, store locations, sales figures
+  - Finance → invoice numbers, GL codes, budget lines
+  - HR → realistic employee names, departments, leave types
+  - IT/ITSM → ticket IDs, incident categories, resolution times
+Make data look REAL, not "Sample Data 1 / Sample Data 2".
+
+STEP 4 — UI DESIGN REQUIREMENTS:
+  - Dark professional theme: background #0a0e27, accent #00d4aa (teal), secondary #7b61ff (purple), alert #ff6b6b
+  - Left sidebar navigation with 5–6 product screens, icons + labels, active item highlighted in teal
+  - Sidebar hamburger collapse button
+  - Header bar: product/solution name (derived from the project type) + logged-in user avatar + date
+  - Smooth CSS slide transitions between screens (cubic-bezier easing)
+  - Hover effects on cards (subtle teal glow, scale 1.02)
+  - ALL charts must be PURE SVG — no external libraries whatsoever
+  - Numbers animate/count up when a screen first appears
+  - Subtle CSS grid or dot pattern on the background
+  - Footer: "Powered by ECI · {project_type} · Confidential Preview"
+
+STEP 5 — QUALITY BAR:
+  - Every screen must reflect ACTUAL USER WORKFLOWS derived from the requirements above
+  - No generic placeholders — every label, button, column, and data point must be solution-specific
+  - Include realistic interactive elements: search bars, filter dropdowns (visual), data tables, status badges
+  - The client should see this demo and immediately understand the value of the solution
 
 Generate the complete self-contained HTML file now. Start with <!DOCTYPE html>."""
 
@@ -7387,14 +7432,14 @@ def _demo_loading_animation() -> str:
 </style>
 <div class="demo-loader">
   <div class="loader-ring"></div>
-  <div class="loader-title">🎯 AI is crafting your personalised demo</div>
-  <div class="loader-sub">Analysing scope &amp; generating interactive prototype…</div>
+  <div class="loader-title">🎯 AI is building your solution preview</div>
+  <div class="loader-sub">Reading requirements &amp; designing the actual product UI your users will see…</div>
   <div class="loader-steps" id="loaderSteps">
-    <div class="loader-step"><span class="step-icon">🔍</span><span class="step-label">Analysing scope &amp; architecture</span><span class="step-status step-done">✓ Done</span></div>
-    <div class="loader-step"><span class="step-icon">🎨</span><span class="step-label">Designing UI components &amp; screens</span><span class="step-status step-wip">Building…</span></div>
-    <div class="loader-step"><span class="step-icon">⚡</span><span class="step-label">Wiring up interactions &amp; animations</span><span class="step-status step-wait">Pending</span></div>
-    <div class="loader-step"><span class="step-icon">📊</span><span class="step-label">Populating live data from your scope</span><span class="step-status step-wait">Pending</span></div>
-    <div class="loader-step"><span class="step-icon">🚀</span><span class="step-label">Finalising &amp; rendering your demo</span><span class="step-status step-wait">Pending</span></div>
+    <div class="loader-step"><span class="step-icon">🔍</span><span class="step-label">Identifying solution type &amp; user workflows</span><span class="step-status step-done">✓ Done</span></div>
+    <div class="loader-step"><span class="step-icon">🎨</span><span class="step-label">Designing product screens &amp; navigation</span><span class="step-status step-wip">Building…</span></div>
+    <div class="loader-step"><span class="step-icon">📊</span><span class="step-label">Populating domain-specific sample data</span><span class="step-status step-wait">Pending</span></div>
+    <div class="loader-step"><span class="step-icon">⚡</span><span class="step-icon">⚡</span><span class="step-label">Wiring interactions &amp; animations</span><span class="step-status step-wait">Pending</span></div>
+    <div class="loader-step"><span class="step-icon">🚀</span><span class="step-label">Rendering your interactive product demo</span><span class="step-status step-wait">Pending</span></div>
   </div>
   <div class="loader-progress"><div class="loader-progress-bar" style="width:35%"></div></div>
 </div>
@@ -7485,29 +7530,29 @@ def render_live_demo_tab(se, te, ce, r):
     # Hero banner
     st.markdown(f"""
 <div class="demo-hero">
-  <div class="demo-badge">✨ AI-POWERED LIVE DEMO</div>
-  <div class="demo-hero-title">🎯 Interactive Product Demo</div>
+  <div class="demo-badge">✨ AI-POWERED SOLUTION VISUALISER</div>
+  <div class="demo-hero-title">🎯 See Your Solution Before It's Built</div>
   <div class="demo-hero-sub">
-    Watch AI generate a fully interactive, real-looking prototype of your <strong>{project_type}</strong> solution —
-    personalised with your actual scope, requirements, costs and team. No mockup tools, no templates.
-    Pure AI generation in real-time.
+    AI reads your scope document and generates an interactive prototype of the <strong>actual {project_type}</strong> product —
+    the real screens your end users will log into. Not an estimation dashboard. Not a proposal deck.
+    A live, clickable preview of what you're getting.
   </div>
 </div>
 <div class="demo-feature-grid">
   <div class="demo-feature-card">
-    <div class="demo-feature-icon">⚡</div>
-    <div class="demo-feature-title">Real Scope Data</div>
-    <div class="demo-feature-desc">{req_count} requirements · {total_hours:,}h estimate · ${monthly_cost:,}/mo infra — all wired in automatically</div>
+    <div class="demo-feature-icon">🖥️</div>
+    <div class="demo-feature-title">Real Product Screens</div>
+    <div class="demo-feature-desc">AI detects your solution type (chatbot, portal, analytics, CRM…) and builds the right UI — not generic placeholders</div>
   </div>
   <div class="demo-feature-card">
     <div class="demo-feature-icon">🎨</div>
-    <div class="demo-feature-title">6 Interactive Screens</div>
-    <div class="demo-feature-desc">Dashboard, Features, Timeline, Infrastructure, Team &amp; Risk — fully clickable navigation</div>
+    <div class="demo-feature-title">Domain-Specific Data</div>
+    <div class="demo-feature-desc">Every screen is populated with realistic, domain-appropriate sample data derived from your actual requirements</div>
   </div>
   <div class="demo-feature-card">
     <div class="demo-feature-icon">🚀</div>
-    <div class="demo-feature-title">One-Click Download</div>
-    <div class="demo-feature-desc">Download the demo as a standalone HTML file — share with clients, embed in decks</div>
+    <div class="demo-feature-title">Share With Your Client</div>
+    <div class="demo-feature-desc">Download as a standalone HTML file — open in any browser, embed in a deck, send before the pitch</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -7531,7 +7576,7 @@ def render_live_demo_tab(se, te, ce, r):
             type="primary",
             disabled=(ai is None),
             key="btn_gen_demo",
-            help="AI will generate a fully interactive HTML prototype from your scope in ~30 seconds",
+            help="AI reads your scope, detects the solution type, and generates realistic product screens your end users will actually use — not estimation slides",
         )
     with btn_cols[1]:
         regen_clicked = st.button(
@@ -7560,7 +7605,7 @@ def render_live_demo_tab(se, te, ce, r):
             loader_slot.empty()
             if html_result:
                 st.session_state["live_demo_html"] = html_result
-                st.success("✅ Demo generated! Scroll down to explore the interactive prototype.")
+                st.success("✅ Solution preview generated! Scroll down to explore the product screens your end users will see.")
                 st.rerun()
             else:
                 loader_slot.empty()
@@ -7595,8 +7640,8 @@ def render_live_demo_tab(se, te, ce, r):
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.caption(
-            "💡 **Tip:** Click the sidebar nav items inside the demo to explore all 6 screens. "
-            "Download the HTML file to share with your client as a standalone demo."
+            "💡 **Tip:** Click the sidebar nav items inside the demo to explore the product screens. "
+            "This shows the actual solution your end users will use — download and share with your client before the pitch."
         )
     elif not gen_clicked:
         # Teaser preview when nothing generated yet
@@ -7605,12 +7650,12 @@ def render_live_demo_tab(se, te, ce, r):
      text-align:center;background:rgba(0,212,170,.02);margin-top:16px">
   <div style="font-size:3rem;margin-bottom:16px">🎯</div>
   <div style="font-size:1.2rem;font-weight:700;color:rgba(255,255,255,.8);margin-bottom:8px">
-    Your interactive demo will appear here
+    Your solution preview will appear here
   </div>
-  <div style="font-size:.85rem;color:rgba(255,255,255,.4);max-width:460px;margin:0 auto;line-height:1.6">
-    Click <strong style="color:#00d4aa">Create Live Demo</strong> above and watch AI generate
-    a fully interactive prototype of your solution — complete with animated dashboards,
-    clickable navigation, real data from your scope, and a professional enterprise UI.
+  <div style="font-size:.85rem;color:rgba(255,255,255,.4);max-width:480px;margin:0 auto;line-height:1.6">
+    Click <strong style="color:#00d4aa">Create Live Demo</strong> above and AI will read your scope,
+    identify the solution type (chatbot, portal, analytics platform…) and generate realistic product
+    screens — the actual UI your end users will log into. Show your client exactly what they're getting.
   </div>
 </div>
 """, unsafe_allow_html=True)
