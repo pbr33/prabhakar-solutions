@@ -94,27 +94,46 @@ def _db_init():
     con = sqlite3.connect(_DB_PATH)
     con.execute("""
         CREATE TABLE IF NOT EXISTS proposals (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts            TEXT    NOT NULL,
-            category      TEXT    NOT NULL DEFAULT 'General',
-            project_type  TEXT,
-            total_hours   INTEGER DEFAULT 0,
-            duration_weeks TEXT,
-            monthly_cost  INTEGER DEFAULT 0,
-            annual_cost   INTEGER DEFAULT 0,
-            risk_level    TEXT,
-            risk_score    INTEGER DEFAULT 0,
-            req_count     INTEGER DEFAULT 0,
-            tech_stack    TEXT    DEFAULT '[]',
-            model_used    TEXT,
-            three_point   TEXT    DEFAULT '{}',
-            results_json  TEXT    DEFAULT '{}'
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts                TEXT    NOT NULL,
+            category          TEXT    NOT NULL DEFAULT 'General',
+            project_type      TEXT,
+            total_hours       INTEGER DEFAULT 0,
+            duration_weeks    TEXT,
+            monthly_cost      INTEGER DEFAULT 0,
+            annual_cost       INTEGER DEFAULT 0,
+            risk_level        TEXT,
+            risk_score        INTEGER DEFAULT 0,
+            req_count         INTEGER DEFAULT 0,
+            tech_stack        TEXT    DEFAULT '[]',
+            model_used        TEXT,
+            three_point       TEXT    DEFAULT '{}',
+            results_json      TEXT    DEFAULT '{}',
+            architect_reviewed INTEGER DEFAULT 0,
+            review_ts         TEXT    DEFAULT NULL,
+            review_notes      TEXT    DEFAULT ''
         )
     """)
     con.commit()
     con.close()
 
 _db_init()   # run once at import time
+
+# ── Migrate existing databases to add architect-review columns ────────
+def _db_migrate():
+    con = sqlite3.connect(_DB_PATH)
+    existing_cols = {row[1] for row in con.execute("PRAGMA table_info(proposals)").fetchall()}
+    for col, ddl in [
+        ("architect_reviewed", "INTEGER DEFAULT 0"),
+        ("review_ts",          "TEXT    DEFAULT NULL"),
+        ("review_notes",       "TEXT    DEFAULT ''"),
+    ]:
+        if col not in existing_cols:
+            con.execute(f"ALTER TABLE proposals ADD COLUMN {col} {ddl}")
+    con.commit()
+    con.close()
+
+_db_migrate()
 
 
 def _db_save_run(snapshot: dict, full_results: dict) -> int:
@@ -204,6 +223,25 @@ def _db_delete_run(run_id: int):
     con = sqlite3.connect(_DB_PATH)
     try:
         con.execute("DELETE FROM proposals WHERE id=?", (run_id,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _db_mark_reviewed(run_id: int, notes: str = "", unmark: bool = False):
+    """Toggle the architect-reviewed flag for a run."""
+    con = sqlite3.connect(_DB_PATH)
+    try:
+        if unmark:
+            con.execute(
+                "UPDATE proposals SET architect_reviewed=0, review_ts=NULL, review_notes='' WHERE id=?",
+                (run_id,),
+            )
+        else:
+            con.execute(
+                "UPDATE proposals SET architect_reviewed=1, review_ts=?, review_notes=? WHERE id=?",
+                (datetime.now().strftime("%Y-%m-%d %H:%M"), notes, run_id),
+            )
         con.commit()
     finally:
         con.close()
@@ -7260,64 +7298,120 @@ def _show_regen_diff():
 
 
 def _render_feedback_panel(r):
-    """Collapsible feedback panel shown between KPI cards and result tabs."""
-    # Show feedback history badge if any previous feedback rounds
-    fl = st.session_state.get("feedback_log", [])
-    badge = f"  `{len(fl)} revision(s) applied`" if fl else ""
-    with st.expander(f"✏️ **Review & Improve** — Give feedback to revise any section{badge}", expanded=False):
+    """Collapsible feedback panel — Review & Improve with per-section feedback,
+    revision history log, and Architect Review badge.
+    """
+    fl     = [e for e in st.session_state.get("feedback_log", []) if "round" in e]  # round-level entries only
+    n_rnds = len(fl)
+    badge  = f" `{n_rnds} revision(s) applied`" if n_rnds else ""
+
+    # Pre-populate from quick-feedback widgets (queued via _quick_feedback)
+    queued = st.session_state.get("feedback_items", {})
+
+    with st.expander(f"✏️ **Review & Improve** — Give feedback to revise any section{badge}", expanded=bool(queued)):
         st.markdown(
-            "Select the sections you want to improve, write your feedback, "
-            "then click **Apply Feedback**. Only selected sections will be re-generated — "
-            "everything else stays as-is."
+            "Check a section, write your feedback, then click **Apply Feedback**. "
+            "Only selected sections are re-generated — everything else stays as-is. "
+            "Downstream sections update automatically to stay consistent."
         )
 
-        # Per-section feedback inputs
+        # ── Per-section inputs ─────────────────────────────────────────
         pending = {}
         cols_left, cols_right = st.columns(2)
         for idx, (key, label, hint) in enumerate(_FEEDBACK_SECTIONS):
             col = cols_left if idx % 2 == 0 else cols_right
             with col:
-                # Checkbox to include this section
-                include = st.checkbox(f"{label}", key=f"fb_chk_{key}")
+                # Pre-tick if already queued via quick-feedback
+                pre_checked = key in queued
+                include = st.checkbox(label, value=pre_checked, key=f"fb_chk_{key}")
                 if include:
+                    pre_val = queued.get(key, "")
                     val = st.text_area(
                         f"Feedback for {label}",
+                        value=pre_val,
                         placeholder=hint,
                         key=f"fb_txt_{key}",
-                        height=90,
+                        height=80,
                         label_visibility="collapsed",
                     )
                     if val.strip():
                         pending[key] = val.strip()
 
         st.markdown("---")
+
+        # ── Action row ────────────────────────────────────────────────
         c1, c2, c3 = st.columns([2, 1, 1])
         with c1:
             if pending:
-                st.info(f"**{len(pending)} section(s) queued:** {', '.join(pending.keys())}")
+                cascade_count = sum(
+                    1 for k in {
+                        "requirements": ["time","cost","risk","architecture","scope","proposal","diagrams"],
+                        "time":         ["cost","risk","scope","proposal"],
+                        "cost":         ["risk","proposal"],
+                        "risk":         ["proposal"],
+                        "architecture": ["proposal","diagrams"],
+                        "scope":        ["proposal"],
+                        "proposal":     [],
+                        "diagrams":     [],
+                    }.items()
+                    if k[0] in pending
+                    for d in k[1]
+                    if d not in pending
+                )
+                st.info(
+                    f"**{len(pending)} selected** + ~{cascade_count} auto-cascade "
+                    f"→ {', '.join(pending.keys())}"
+                )
             else:
-                st.caption("Check boxes above and write feedback to enable regeneration.")
+                st.caption("Tick a section above and write feedback to enable regeneration.")
         with c2:
-            if fl:
-                if st.button("📋 View Revision Log", use_container_width=True, key="fb_log_btn"):
-                    st.session_state["_show_fb_log"] = not st.session_state.get("_show_fb_log", False)
+            if fl and st.button("📋 Revision Log", use_container_width=True, key="fb_log_btn"):
+                st.session_state["_show_fb_log"] = not st.session_state.get("_show_fb_log", False)
         with c3:
-            apply_clicked = st.button(
+            if st.button(
                 "🔄 Apply Feedback",
                 disabled=not pending,
                 use_container_width=True,
                 type="primary",
                 key="fb_apply_btn",
-            )
+            ) and pending:
+                # Clear quick-feedback queue so text areas are fresh after rerun
+                st.session_state.feedback_items = {}
+                run_pipeline_with_feedback(pending)
 
-        if apply_clicked and pending:
-            run_pipeline_with_feedback(pending)
-
-        # Revision log viewer
+        # ── Revision log viewer ───────────────────────────────────────
         if st.session_state.get("_show_fb_log") and fl:
             st.markdown("**Revision History:**")
-            for i, entry in enumerate(reversed(fl), 1):
-                st.markdown(f"- **Round {len(fl)-i+1}** ({entry['ts']}): revised `{entry['summary']}`")
+            for i, entry in enumerate(reversed(fl)):
+                rnd    = entry.get("round", n_rnds - i)
+                ts     = entry.get("ts", "")
+                n_exp  = entry.get("n_explicit", 0)
+                n_cas  = entry.get("n_cascade", 0)
+                secs   = ", ".join(entry.get("explicit_sections", []))
+                st.markdown(
+                    f"- **Round {rnd}** ({ts}): "
+                    f"{n_exp} explicit ({secs})"
+                    + (f" + {n_cas} cascaded" if n_cas else "")
+                )
+
+        # ── Architect review badge for the current session ────────────
+        run_id = st.session_state.get("_last_run_id")
+        if run_id:
+            st.markdown("---")
+            rev_col1, rev_col2 = st.columns([3, 1])
+            with rev_col1:
+                rev_notes = st.text_input(
+                    "Architect review notes (optional)",
+                    placeholder="e.g. 'Reviewed and approved by J. Smith — proceed to client'",
+                    key="rev_notes_input",
+                )
+            with rev_col2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✅ Mark as Architect Reviewed", use_container_width=True,
+                             type="primary", key="btn_mark_reviewed"):
+                    _db_mark_reviewed(run_id, notes=rev_notes)
+                    show_toast("Proposal marked as Architect Reviewed ✅", "success")
+                    st.rerun()
 
 
 def run_pipeline_with_feedback(feedback_items: dict):
@@ -7432,29 +7526,27 @@ def run_pipeline_with_feedback(feedback_items: dict):
         elif key == "architecture": arch   = revised
         elif key == "scope":      scope    = revised
 
-        # Audit log entry
-        st.session_state.feedback_log.append({
-            "ts":       datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "section":  key,
-            "feedback": fb,
-            "auto":     fb.startswith("[auto]"),
-        })
-
     pb.progress(100)
     status.empty()
     pb.empty()
 
-    # Append summary to feedback_log header
+    # ── Single clean round entry in feedback_log ──────────────────────
+    n_explicit = len(feedback_items)
+    n_cascade  = len(dirty) - n_explicit
+    existing_rounds = [e for e in st.session_state.feedback_log if "round" in e]
     st.session_state.feedback_log.append({
-        "ts":      datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "summary": f"{len(feedback_items)} explicit + {len(dirty)-len(feedback_items)} cascaded = {len(dirty)} sections revised",
+        "round":            len(existing_rounds) + 1,
+        "ts":               datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "explicit_sections": list(feedback_items.keys()),
+        "cascade_sections": [k for k in dirty if k not in feedback_items],
+        "n_explicit":       n_explicit,
+        "n_cascade":        n_cascade,
+        "feedbacks":        dict(feedback_items),
     })
 
     st.session_state.processing_results  = r
     st.session_state.feedback_items      = {}
     st.session_state["show_diagrams"]    = False
-    n_explicit = len(feedback_items)
-    n_cascade  = len(dirty) - n_explicit
     msg = f"✅ {n_explicit} section(s) revised"
     if n_cascade:
         msg += f" + {n_cascade} cascaded automatically"
@@ -8992,7 +9084,7 @@ def tab_run_library():
     st.markdown(pill_html, unsafe_allow_html=True)
     st.markdown("")
 
-    filter_cols = st.columns([2, 2, 4])
+    filter_cols = st.columns([2, 2, 1, 3])
     with filter_cols[0]:
         selected_cat = st.selectbox(
             "Category", cats,
@@ -9002,6 +9094,8 @@ def tab_run_library():
     with filter_cols[1]:
         sort_by = st.selectbox("Sort by", ["Newest", "Oldest", "Highest Cost", "Most Hours", "Highest Risk"], key="lib_sort")
     with filter_cols[2]:
+        review_filter = st.selectbox("Review status", ["All", "✅ Reviewed", "⏳ Pending"], key="lib_rev_filter")
+    with filter_cols[3]:
         search_q = st.text_input("Search project type / tech stack", placeholder="e.g. migration, GPT, retail…", key="lib_search")
 
     # ── Load + filter ──────────────────────────────────────────────────
@@ -9013,6 +9107,10 @@ def tab_run_library():
             if q in (r.get("project_type") or "").lower()
             or any(q in t.lower() for t in (r.get("tech_stack") or []))
         ]
+    if review_filter == "✅ Reviewed":
+        runs = [r for r in runs if r.get("architect_reviewed", 0)]
+    elif review_filter == "⏳ Pending":
+        runs = [r for r in runs if not r.get("architect_reviewed", 0)]
 
     sort_key_map = {
         "Newest":       lambda r: -r["id"],
@@ -9027,7 +9125,13 @@ def tab_run_library():
         _empty_library()
         return
 
-    st.markdown(f"**{len(runs)} proposal{'s' if len(runs)!=1 else ''}** found")
+    n_reviewed = sum(1 for r in runs if r.get("architect_reviewed", 0))
+    st.markdown(
+        f"**{len(runs)} proposal{'s' if len(runs)!=1 else ''}** found — "
+        f'<span style="color:#06d6a0;font-weight:700">✅ {n_reviewed} architect-reviewed</span> · '
+        f'<span style="color:#ffd166;font-weight:700">⏳ {len(runs)-n_reviewed} pending review</span>',
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     # ── Summary table ──────────────────────────────────────────────────
@@ -9036,6 +9140,7 @@ def tab_run_library():
         for r in runs:
             tbl_rows.append({
                 "ID":       r["id"],
+                "Reviewed": "✅ Yes" if r.get("architect_reviewed", 0) else "⏳ No",
                 "Time":     r.get("ts", ""),
                 "Category": _CAT_ICONS.get(r.get("category",""), "📁") + " " + r.get("category",""),
                 "Project":  r.get("project_type", ""),
@@ -9045,6 +9150,7 @@ def tab_run_library():
                 "Risk":     r.get("risk_level", ""),
                 "Reqs":     r.get("req_count", 0),
                 "Model":    r.get("model_used", ""),
+                "Review by": r.get("review_ts", "") or "",
             })
         st.dataframe(pd.DataFrame(tbl_rows), use_container_width=True, hide_index=True)
 
@@ -9054,7 +9160,7 @@ def tab_run_library():
     COLS = 2
     grid_cols = st.columns(COLS)
     for idx, run in enumerate(runs):
-        col = grid_cols[idx % COLS]
+        col   = grid_cols[idx % COLS]
         cat   = run.get("category", "General")
         c_col = _CAT_COLORS.get(cat, "#94a3b8")
         hours = run.get("total_hours", 0)
@@ -9062,17 +9168,41 @@ def tab_run_library():
         risk  = run.get("risk_level", "")
         three = run.get("three_point", {}) or {}
         tech  = (run.get("tech_stack") or [])[:5]
+        reviewed   = bool(run.get("architect_reviewed", 0))
+        review_ts  = run.get("review_ts") or ""
+        rev_notes  = run.get("review_notes") or ""
         tech_pills = " ".join(
             f'<span style="background:#1e293b;border:1px solid #334155;border-radius:4px;'
             f'padding:1px 6px;font-size:.68rem;color:#94a3b8">{t}</span>'
             for t in tech
         )
+        # Architect-reviewed badge HTML
+        if reviewed:
+            rev_badge = (
+                '<span style="background:#06d6a022;color:#06d6a0;border:1px solid #06d6a055;'
+                'border-radius:20px;padding:2px 10px;font-size:.7rem;font-weight:700">'
+                '✅ Architect Reviewed</span>'
+            )
+            rev_line = (
+                f'<div style="font-size:.65rem;color:#06d6a0;margin-top:4px">'
+                f'Reviewed {review_ts}'
+                + (f' — {rev_notes[:60]}{"…" if len(rev_notes)>60 else ""}' if rev_notes else "")
+                + '</div>'
+            )
+        else:
+            rev_badge = (
+                '<span style="background:#ffd16622;color:#ffd166;border:1px solid #ffd16655;'
+                'border-radius:20px;padding:2px 10px;font-size:.7rem;font-weight:700">'
+                '⏳ Pending Review</span>'
+            )
+            rev_line = ""
+
         with col:
             st.markdown(
                 f'<div style="background:#111827;border:1px solid {c_col}44;border-radius:12px;'
-                f'padding:18px 20px;margin-bottom:14px;border-left:3px solid {c_col}">'
-                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'
-                f'  <div>{_cat_badge(cat)}</div>'
+                f'padding:18px 20px;margin-bottom:6px;border-left:3px solid {c_col}">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+                f'  <div style="display:flex;gap:6px;flex-wrap:wrap">{_cat_badge(cat)} {rev_badge}</div>'
                 f'  <div style="font-size:.7rem;color:#64748b">#{run["id"]} · {run.get("ts","")}</div>'
                 f'</div>'
                 f'<div style="font-size:1rem;font-weight:700;color:#e2e8f0;margin-bottom:6px">'
@@ -9097,12 +9227,13 @@ def tab_run_library():
                 f'    <div style="font-size:.65rem;color:#64748b">3-PT RANGE</div>'
                 f'  </div>'
                 f'</div>'
-                f'<div style="margin-bottom:10px">{tech_pills}</div>'
+                f'<div style="margin-bottom:8px">{tech_pills}</div>'
                 f'<div style="font-size:.68rem;color:#475569">Model: {run.get("model_used","")}</div>'
+                f'{rev_line}'
                 f'</div>',
                 unsafe_allow_html=True,
             )
-            act_cols = st.columns(3)
+            act_cols = st.columns(4)
             with act_cols[0]:
                 if st.button("📂 Restore", key=f"lib_restore_{run['id']}", use_container_width=True):
                     with st.spinner("Loading run from database…"):
@@ -9111,6 +9242,7 @@ def tab_run_library():
                         st.session_state.processing_results = full
                         st.session_state["_last_run_id"]    = run["id"]
                         st.session_state.chat_messages      = []
+                        st.session_state.feedback_log       = []
                         st.success(f"Run #{run['id']} restored — switch to ⚡ Business Estimation to view.")
                         st.rerun()
                     else:
@@ -9126,6 +9258,15 @@ def tab_run_library():
                     key=f"lib_dl_{run['id']}",
                 )
             with act_cols[2]:
+                if reviewed:
+                    if st.button("↩️ Unmark", key=f"lib_unrev_{run['id']}", use_container_width=True):
+                        _db_mark_reviewed(run["id"], unmark=True)
+                        st.rerun()
+                else:
+                    if st.button("✅ Approve", key=f"lib_rev_{run['id']}", use_container_width=True, type="primary"):
+                        _db_mark_reviewed(run["id"], notes="Approved via Run Library")
+                        st.rerun()
+            with act_cols[3]:
                 if st.button("🗑️ Delete", key=f"lib_del_{run['id']}", use_container_width=True):
                     _db_delete_run(run["id"])
                     st.rerun()
