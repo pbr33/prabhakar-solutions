@@ -4267,7 +4267,7 @@ class GeminiAI(AzureAI):
                 url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     return data["candidates"][0]["content"]["parts"][0]["text"]
             except urllib.error.HTTPError as e:
@@ -7210,6 +7210,8 @@ def _pick_ai_for_raw():
     gem = GeminiAI.from_session()
     if preferred == "azure" and az.is_live:
         return az
+    if preferred == "gemini" and gem.is_live:
+        return gem
     if ant.is_live:
         return ant
     if az.is_live:
