@@ -287,7 +287,7 @@ class AzureAI:
     def _token_kwargs(self, n: int) -> dict:
         """Return correct token-limit kwarg: newer models use max_completion_tokens."""
         name = self.deployment.lower()
-        if any(p in name for p in ("o1", "o3", "gpt-5")):
+        if any(p in name for p in ("o1", "o2", "o3", "o4", "gpt-5", "4.5")):
             return {"max_completion_tokens": n}
         return {"max_tokens": n}
 
@@ -308,18 +308,32 @@ class AzureAI:
         if not self._client:
             return None
         try:
-            resp = self._client.chat.completions.create(
+            name = self.deployment.lower()
+            # o1/o3/o4 models do not support temperature or response_format
+            is_reasoning = any(p in name for p in ("o1", "o2", "o3", "o4"))
+            create_kwargs = dict(
                 model=self.deployment,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
                 **self._token_kwargs(4096),
-                temperature=0.2,
-                response_format={"type": "json_object"},
             )
+            if not is_reasoning:
+                create_kwargs["temperature"] = 0.2
+                create_kwargs["response_format"] = {"type": "json_object"}
+            resp = self._client.chat.completions.create(**create_kwargs)
+            if not resp.choices:
+                return None
             txt = resp.choices[0].message.content
-            return json.loads(txt)
+            if not txt or not txt.strip():
+                return None
+            # Strip markdown code fences if model wrapped JSON in them
+            stripped = txt.strip()
+            if stripped.startswith("```"):
+                stripped = stripped.split("```", 2)[-1] if stripped.count("```") >= 2 else stripped
+                stripped = stripped.lstrip("json").strip()
+            return json.loads(stripped)
         except Exception as e:
             st.warning("Azure OpenAI: " + str(e)[:150])
             return None
