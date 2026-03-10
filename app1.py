@@ -3490,7 +3490,7 @@ class AzureAI:
     def _token_kwargs(self, n: int) -> dict:
         """Return correct token-limit kwarg: newer models use max_completion_tokens."""
         name = self.deployment.lower()
-        if any(name.startswith(p) for p in ("o1", "o3", "gpt-5")):
+        if any(p in name for p in ("o1", "o3", "gpt-5")):
             return {"max_completion_tokens": n}
         return {"max_tokens": n}
 
@@ -7955,7 +7955,7 @@ def _ai_chat(system: str, messages: list) -> str:
             resp = az._client.chat.completions.create(
                 model=az.deployment,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": full_user}],
-                max_tokens=1024,
+                **az._token_kwargs(1024),
                 temperature=0.4,
             )
             return resp.choices[0].message.content
