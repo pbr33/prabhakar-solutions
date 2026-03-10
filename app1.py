@@ -3487,6 +3487,13 @@ class AzureAI:
     def is_live(self):
         return self._client is not None
 
+    def _token_kwargs(self, n: int) -> dict:
+        """Return correct token-limit kwarg: newer models use max_completion_tokens."""
+        name = self.deployment.lower()
+        if any(name.startswith(p) for p in ("o1", "o3", "gpt-5")):
+            return {"max_completion_tokens": n}
+        return {"max_tokens": n}
+
     def test(self):
         if not self._client:
             return False, "Not configured. Enter API Key and Endpoint."
@@ -3494,7 +3501,7 @@ class AzureAI:
             self._client.chat.completions.create(
                 model=self.deployment,
                 messages=[{"role": "user", "content": "Reply OK"}],
-                max_tokens=5,
+                **self._token_kwargs(5),
             )
             return True, "Connected to " + self.deployment
         except Exception as e:
@@ -3510,7 +3517,7 @@ class AzureAI:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                max_tokens=4096,
+                **self._token_kwargs(4096),
                 temperature=0.2,
                 response_format={"type": "json_object"},
             )
@@ -4097,7 +4104,7 @@ class AzureAI:
                     {"role": "system", "content": system},
                     {"role": "user",   "content": user},
                 ],
-                max_tokens=max_tokens,
+                **self._token_kwargs(max_tokens),
                 temperature=0.4,
             )
             return resp.choices[0].message.content
