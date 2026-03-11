@@ -1237,6 +1237,692 @@ def generate_time_excel(time_est, semantic):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  LENOX-STYLE ESTIMATION EXCEL (All Formulas + Comprehensive)
+# ═══════════════════════════════════════════════════════════════════════
+
+def generate_lenox_excel(time_est, semantic, cost_est=None, risk_info=None, full_results=None):
+    """Generate a comprehensive Lenox-style estimation Excel with real Excel formulas."""
+    if not Workbook:
+        return None
+    wb = Workbook()
+
+    # ── Palette ──
+    C_NAVY   = "1B3A5C"
+    C_SKY    = "00B4D8"
+    C_TEAL   = "00D4AA"
+    C_PURPLE = "7B61FF"
+    C_GOLD   = "FFD166"
+    C_RED    = "FF6B6B"
+    C_LGRAY  = "F5F8FC"
+    C_DGRAY  = "E2EFDA"
+    C_WHITE  = "FFFFFF"
+
+    # ── Shared styles ──
+    def _font(bold=False, size=10, color=C_NAVY, name="Calibri"):
+        return Font(name=name, bold=bold, size=size, color=color)
+
+    def _fill(hex_color):
+        return PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+
+    def _border():
+        s = Side(style="thin", color="CCCCCC")
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    def _align(h="left", v="center", wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+
+    def _style(cell, bold=False, size=10, color=C_NAVY, fill_hex=None, halign="left", wrap=False):
+        cell.font = _font(bold=bold, size=size, color=color)
+        cell.border = _border()
+        cell.alignment = _align(h=halign, wrap=wrap)
+        if fill_hex:
+            cell.fill = _fill(fill_hex)
+
+    def _hdr(ws, row, cols, text=None, fill=C_NAVY, fsize=10):
+        """Style a header row; optionally write text in first cell."""
+        for c in range(1, cols + 1):
+            cell = ws.cell(row=row, column=c)
+            cell.font = Font(name="Calibri", bold=True, size=fsize, color=C_WHITE)
+            cell.fill = _fill(fill)
+            cell.border = _border()
+            cell.alignment = _align(h="center")
+        if text:
+            ws.cell(row=row, column=1).value = text
+
+    def _title_row(ws, text, span_cols, row=1, bg=C_NAVY):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span_cols)
+        c = ws.cell(row=row, column=1, value=text)
+        c.font = Font(name="Calibri", bold=True, size=16, color=C_WHITE)
+        c.fill = _fill(bg)
+        c.alignment = _align(h="center")
+        ws.row_dimensions[row].height = 38
+
+    def _sub_title(ws, text, span_cols, row=2, bg=C_SKY):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span_cols)
+        c = ws.cell(row=row, column=1, value=text)
+        c.font = Font(name="Calibri", bold=False, size=9, color=C_WHITE)
+        c.fill = _fill(bg)
+        c.alignment = _align(h="center")
+        ws.row_dimensions[row].height = 18
+
+    # ════════════════════════════════════════════════════
+    # SHEET 1 — Dashboard (formula-driven KPIs)
+    # ════════════════════════════════════════════════════
+    ws_dash = wb.active
+    ws_dash.title = "Dashboard"
+    ws_dash.sheet_properties.tabColor = C_NAVY
+    ws_dash.sheet_view.showGridLines = False
+
+    _title_row(ws_dash, "ECI — Project Estimation Dashboard", 6, row=1, bg=C_NAVY)
+    _sub_title(ws_dash, "Generated: " + datetime.now().strftime("%B %d, %Y %H:%M") + "  |  Powered by ECI BEAL", 6, row=2, bg=C_SKY)
+
+    # Project summary box (rows 4-10)
+    proj_labels = [
+        ("Project Type",       safe_str(semantic.get("project_type", "N/A"))),
+        ("Complexity Score",   str(safe_int(semantic.get("complexity_score", 0))) + " / 10"),
+        ("Total Requirements", str(len(safe_list(semantic.get("requirements"))))),
+        ("Technology Stack",   ", ".join(str(x) for x in safe_list(semantic.get("technology_stack"))[:6])),
+        ("Confidence Level",   safe_str(time_est.get("confidence", "N/A"))),
+        ("Risk Level",         safe_str(safe_dict(risk_info).get("overall_level", "N/A")) if risk_info else "N/A"),
+    ]
+    ws_dash.cell(row=4, column=1, value="PROJECT SUMMARY").font = Font(name="Calibri", bold=True, size=11, color=C_NAVY)
+    ws_dash.row_dimensions[4].height = 22
+    for i, (lbl, val) in enumerate(proj_labels, start=5):
+        ws_dash.cell(row=i, column=1, value=lbl).font = _font(bold=True, size=10, color=C_NAVY)
+        ws_dash.cell(row=i, column=2, value=val).font = _font(size=10, color="333333")
+        ws_dash.row_dimensions[i].height = 18
+
+    # KPI header (row 12)
+    ws_dash.cell(row=12, column=1, value="KPI SUMMARY").font = Font(name="Calibri", bold=True, size=11, color=C_NAVY)
+    kpi_headers = ["Metric", "Value", "Unit", "Source Sheet"]
+    for ci, h in enumerate(kpi_headers, 1):
+        c = ws_dash.cell(row=13, column=ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    # KPI rows with formula references to other sheets
+    total_hours = safe_int(time_est.get("total_hours", 0))
+    tp = safe_dict(time_est.get("three_point", {}))
+    phases = safe_list(time_est.get("phases", []))
+    monthly_cost = safe_int(safe_dict(cost_est).get("total_monthly_cost", 0)) if cost_est else 0
+    annual_cost  = safe_int(safe_dict(cost_est).get("total_annual_cost", 0))  if cost_est else 0
+    risk_score   = safe_int(safe_dict(risk_info).get("overall_score", 0))     if risk_info else 0
+
+    kpi_rows = [
+        ("Total Person-Hours",  "='Effort Estimation'!B4",  "Hours",    "Effort Estimation"),
+        ("Optimistic Hours",    "='Effort Estimation'!B5",  "Hours",    "Effort Estimation"),
+        ("Most Likely Hours",   "='Effort Estimation'!B6",  "Hours",    "Effort Estimation"),
+        ("Pessimistic Hours",   "='Effort Estimation'!B7",  "Hours",    "Effort Estimation"),
+        ("PERT Estimate",       "='Effort Estimation'!B8",  "Hours",    "Effort Estimation"),
+        ("Monthly Infra Cost",  "='Cost Estimation'!C4",    "USD/mo",   "Cost Estimation"),
+        ("Annual Infra Cost",   "='Cost Estimation'!C5",    "USD/yr",   "Cost Estimation"),
+        ("Risk Score",          "='Risk Register'!B4",      "/ 10",     "Risk Register"),
+        ("Total Phases",        "='Phase Detail'!B4",       "Phases",   "Phase Detail"),
+        ("Req. Count",          "='Requirements'!B4",       "Items",    "Requirements"),
+    ]
+    for i, (metric, formula, unit, src) in enumerate(kpi_rows, start=14):
+        _style(ws_dash.cell(row=i, column=1, value=metric), bold=True,
+               fill_hex=C_LGRAY if i % 2 == 0 else None)
+        c_val = ws_dash.cell(row=i, column=2, value=formula)
+        _style(c_val, halign="center", fill_hex=C_LGRAY if i % 2 == 0 else None)
+        _style(ws_dash.cell(row=i, column=3, value=unit), halign="center",
+               fill_hex=C_LGRAY if i % 2 == 0 else None)
+        _style(ws_dash.cell(row=i, column=4, value=src),
+               fill_hex=C_LGRAY if i % 2 == 0 else None)
+        ws_dash.row_dimensions[i].height = 18
+
+    ws_dash.column_dimensions["A"].width = 24
+    ws_dash.column_dimensions["B"].width = 20
+    ws_dash.column_dimensions["C"].width = 14
+    ws_dash.column_dimensions["D"].width = 22
+
+    # ════════════════════════════════════════════════════
+    # SHEET 2 — Effort Estimation (PERT formula engine)
+    # ════════════════════════════════════════════════════
+    ws_eff = wb.create_sheet("Effort Estimation")
+    ws_eff.sheet_properties.tabColor = C_SKY
+    ws_eff.sheet_view.showGridLines = False
+
+    _title_row(ws_eff, "Effort Estimation — Three-Point PERT Analysis", 7, row=1, bg=C_NAVY)
+    _sub_title(ws_eff, "PERT = (Optimistic + 4 × Most Likely + Pessimistic) / 6", 7, row=2, bg=C_SKY)
+
+    # Named constants area (rows 4-10) – used by Dashboard formulas
+    summary_labels = [
+        ("B4", "Total Hours",      total_hours),
+        ("B5", "Optimistic",       safe_int(tp.get("optimistic",  int(total_hours * 0.8)))),
+        ("B6", "Most Likely",      safe_int(tp.get("most_likely", total_hours))),
+        ("B7", "Pessimistic",      safe_int(tp.get("pessimistic", int(total_hours * 1.35)))),
+    ]
+    for addr, lbl, val in summary_labels:
+        row_n = int(addr[1:])
+        ws_eff.cell(row=row_n, column=1, value=lbl).font = _font(bold=True)
+        c = ws_eff.cell(row=row_n, column=2, value=val)
+        c.font = _font(bold=True, size=11)
+        c.fill = _fill(C_DGRAY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+        ws_eff.row_dimensions[row_n].height = 20
+
+    # PERT formula in B8
+    ws_eff.cell(row=8, column=1, value="PERT Estimate").font = _font(bold=True)
+    c_pert = ws_eff.cell(row=8, column=2, value="=(B5+4*B6+B7)/6")
+    c_pert.font = Font(name="Calibri", bold=True, size=12, color=C_WHITE)
+    c_pert.fill = _fill(C_NAVY)
+    c_pert.border = _border()
+    c_pert.alignment = _align(h="center")
+    c_pert.number_format = "0.0"
+    ws_eff.row_dimensions[8].height = 24
+
+    # SD and Variance
+    ws_eff.cell(row=9, column=1, value="Std Deviation (σ)").font = _font(bold=True)
+    c_sd = ws_eff.cell(row=9, column=2, value="=(B7-B5)/6")
+    c_sd.border = _border(); c_sd.alignment = _align(h="center"); c_sd.number_format = "0.0"
+
+    ws_eff.cell(row=10, column=1, value="Variance (σ²)").font = _font(bold=True)
+    c_var = ws_eff.cell(row=10, column=2, value="=B9^2")
+    c_var.border = _border(); c_var.alignment = _align(h="center"); c_var.number_format = "0.0"
+
+    # 90% CI
+    ws_eff.cell(row=11, column=1, value="90% Confidence (PERT+1.28σ)").font = _font(bold=True)
+    c_ci = ws_eff.cell(row=11, column=2, value="=B8+1.28*B9")
+    c_ci.border = _border(); c_ci.alignment = _align(h="center"); c_ci.number_format = "0.0"
+    c_ci.fill = _fill(C_LGRAY)
+
+    # Phase-level PERT table (row 13 onwards)
+    ws_eff.row_dimensions[13].height = 22
+    phase_hdr = ["Phase", "Most Likely (hrs)", "Optimistic (hrs)", "Pessimistic (hrs)",
+                 "PERT (hrs)", "Std Dev (σ)", "% of Total"]
+    for ci, h in enumerate(phase_hdr, 1):
+        c = ws_eff.cell(row=13, column=ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    data_start = 14
+    for pi, phase in enumerate(phases):
+        phase = safe_dict(phase)
+        ph_name  = safe_str(phase.get("name", "Phase " + str(pi + 1)))
+        ph_hours = safe_int(phase.get("hours", 0))
+        opt_h    = int(ph_hours * 0.8)
+        pes_h    = int(ph_hours * 1.35)
+        r_row    = data_start + pi
+
+        ws_eff.row_dimensions[r_row].height = 18
+        fill_hex = C_LGRAY if pi % 2 == 0 else None
+
+        _style(ws_eff.cell(r_row, 1, value=ph_name), bold=True, fill_hex=fill_hex)
+        # B = Most Likely
+        c_ml = ws_eff.cell(r_row, 2, value=ph_hours)
+        _style(c_ml, halign="center", fill_hex=fill_hex)
+        # C = Optimistic
+        c_op = ws_eff.cell(r_row, 3, value=opt_h)
+        _style(c_op, halign="center", fill_hex=fill_hex)
+        # D = Pessimistic
+        c_ps = ws_eff.cell(r_row, 4, value=pes_h)
+        _style(c_ps, halign="center", fill_hex=fill_hex)
+        # E = PERT formula
+        pert_formula = "=(C{r}+4*B{r}+D{r})/6".format(r=r_row)
+        c_pert_ph = ws_eff.cell(r_row, 5, value=pert_formula)
+        c_pert_ph.font = Font(name="Calibri", bold=True, size=10, color=C_NAVY)
+        c_pert_ph.fill = _fill(C_DGRAY)
+        c_pert_ph.border = _border()
+        c_pert_ph.alignment = _align(h="center")
+        c_pert_ph.number_format = "0.0"
+        # F = Std Dev
+        sd_formula = "=(D{r}-C{r})/6".format(r=r_row)
+        c_sd_ph = ws_eff.cell(r_row, 6, value=sd_formula)
+        _style(c_sd_ph, halign="center", fill_hex=fill_hex)
+        c_sd_ph.number_format = "0.0"
+        # G = % of Total
+        pct_formula = "=IF($B$4>0,B{r}/$B$4*100,0)".format(r=r_row)
+        c_pct = ws_eff.cell(r_row, 7, value=pct_formula)
+        _style(c_pct, halign="center", fill_hex=fill_hex)
+        c_pct.number_format = "0.0\"%\""
+
+    # Totals row
+    total_row = data_start + len(phases)
+    ws_eff.row_dimensions[total_row].height = 22
+    _style(ws_eff.cell(total_row, 1, value="GRAND TOTAL"), bold=True, size=11,
+           color=C_WHITE, fill_hex=C_NAVY, halign="center")
+    for col_idx, col_letter in [(2, "B"), (3, "C"), (4, "D"), (5, "E")]:
+        f = "=SUM({l}{s}:{l}{e})".format(l=col_letter, s=data_start, e=total_row - 1)
+        c = ws_eff.cell(total_row, col_idx, value=f)
+        c.font = Font(name="Calibri", bold=True, size=11, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+        c.number_format = "0.0"
+    _style(ws_eff.cell(total_row, 6, value=""), bold=True, color=C_WHITE, fill_hex=C_NAVY, halign="center")
+    _style(ws_eff.cell(total_row, 7, value="100%"), bold=True, color=C_WHITE, fill_hex=C_NAVY, halign="center")
+
+    for ci, w in [(1, 26), (2, 18), (3, 18), (4, 18), (5, 16), (6, 14), (7, 14)]:
+        ws_eff.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # SHEET 3 — Phase Detail
+    # ════════════════════════════════════════════════════
+    ws_ph = wb.create_sheet("Phase Detail")
+    ws_ph.sheet_properties.tabColor = C_TEAL
+    ws_ph.sheet_view.showGridLines = False
+
+    _title_row(ws_ph, "Phase & Task Detail", 7, row=1, bg=C_NAVY)
+    _sub_title(ws_ph, "Detailed task breakdown with roles and effort", 7, row=2, bg=C_TEAL)
+
+    # Summary cell for Dashboard ref
+    ws_ph.cell(row=4, column=1, value="Total Phases").font = _font(bold=True)
+    c_tp = ws_ph.cell(row=4, column=2, value=len(phases))
+    _style(c_tp, bold=True, halign="center", fill_hex=C_DGRAY)
+
+    # Table header
+    ph_cols = ["Phase", "Task / Description", "Role", "Est. Hours",
+               "% of Phase", "% of Total", "Notes"]
+    ws_ph.row_dimensions[6].height = 22
+    for ci, h in enumerate(ph_cols, 1):
+        c = ws_ph.cell(6, ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    ph_row = 7
+    total_h = safe_int(time_est.get("total_hours", 1)) or 1
+    for phase in phases:
+        phase = safe_dict(phase)
+        ph_name  = safe_str(phase.get("name", ""))
+        ph_hours = safe_int(phase.get("hours", 0))
+        tasks    = safe_list(phase.get("tasks", []))
+        pct_str  = safe_str(phase.get("percentage", ""))
+
+        # Phase banner row
+        ws_ph.merge_cells(start_row=ph_row, start_column=1, end_row=ph_row, end_column=7)
+        c_banner = ws_ph.cell(ph_row, 1, value="▶  " + ph_name + "  |  " + str(ph_hours) + " hrs")
+        c_banner.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c_banner.fill = _fill(C_SKY)
+        c_banner.border = _border()
+        ws_ph.row_dimensions[ph_row].height = 20
+        ph_row += 1
+
+        if tasks:
+            task_start = ph_row
+            for task in tasks:
+                task = safe_dict(task)
+                th = safe_int(task.get("hours", 0))
+                _style(ws_ph.cell(ph_row, 1, value=""), fill_hex=C_LGRAY)
+                _style(ws_ph.cell(ph_row, 2, value=safe_str(task.get("name", ""))),
+                       wrap=True, fill_hex=C_LGRAY)
+                _style(ws_ph.cell(ph_row, 3, value=safe_str(task.get("role", ""))),
+                       halign="center", fill_hex=C_LGRAY)
+                c_th = ws_ph.cell(ph_row, 4, value=th)
+                _style(c_th, halign="center", fill_hex=C_LGRAY)
+                # % of phase formula
+                pct_ph_f = "=IF({ph}>0,D{r}/{ph}*100,0)".format(ph=ph_hours or 1, r=ph_row)
+                c_ppct = ws_ph.cell(ph_row, 5, value=pct_ph_f)
+                _style(c_ppct, halign="center", fill_hex=C_LGRAY)
+                c_ppct.number_format = "0.0\"%\""
+                # % of total formula
+                pct_tot_f = "=IF({tot}>0,D{r}/{tot}*100,0)".format(tot=total_h, r=ph_row)
+                c_tpct = ws_ph.cell(ph_row, 6, value=pct_tot_f)
+                _style(c_tpct, halign="center", fill_hex=C_LGRAY)
+                c_tpct.number_format = "0.0\"%\""
+                _style(ws_ph.cell(ph_row, 7, value=""), fill_hex=C_LGRAY)
+                ws_ph.row_dimensions[ph_row].height = 18
+                ph_row += 1
+
+            # Phase subtotal with SUM formula
+            _style(ws_ph.cell(ph_row, 1, value=""), bold=True, fill_hex=C_DGRAY)
+            _style(ws_ph.cell(ph_row, 2, value="Subtotal — " + ph_name),
+                   bold=True, fill_hex=C_DGRAY)
+            _style(ws_ph.cell(ph_row, 3, value=""), fill_hex=C_DGRAY)
+            f_sub = "=SUM(D{s}:D{e})".format(s=task_start, e=ph_row - 1)
+            c_sub = ws_ph.cell(ph_row, 4, value=f_sub)
+            c_sub.font = Font(name="Calibri", bold=True, size=10, color=C_NAVY)
+            c_sub.fill = _fill(C_DGRAY)
+            c_sub.border = _border()
+            c_sub.alignment = _align(h="center")
+            _style(ws_ph.cell(ph_row, 5, value=pct_str), halign="center", fill_hex=C_DGRAY)
+            _style(ws_ph.cell(ph_row, 6, value=""), fill_hex=C_DGRAY)
+            _style(ws_ph.cell(ph_row, 7, value=""), fill_hex=C_DGRAY)
+            ws_ph.row_dimensions[ph_row].height = 20
+            ph_row += 1
+        else:
+            _style(ws_ph.cell(ph_row, 1, value=ph_name), bold=True)
+            _style(ws_ph.cell(ph_row, 2, value="(no sub-tasks)"), color="888888")
+            _style(ws_ph.cell(ph_row, 3, value=""))
+            _style(ws_ph.cell(ph_row, 4, value=ph_hours), halign="center")
+            _style(ws_ph.cell(ph_row, 5, value=pct_str), halign="center")
+            _style(ws_ph.cell(ph_row, 6, value=""))
+            _style(ws_ph.cell(ph_row, 7, value=""))
+            ws_ph.row_dimensions[ph_row].height = 18
+            ph_row += 1
+
+    # Grand total
+    _style(ws_ph.cell(ph_row, 1, value=""), bold=True, color=C_WHITE, fill_hex=C_NAVY)
+    _style(ws_ph.cell(ph_row, 2, value="GRAND TOTAL"), bold=True, size=11,
+           color=C_WHITE, fill_hex=C_NAVY)
+    _style(ws_ph.cell(ph_row, 3, value=""), color=C_WHITE, fill_hex=C_NAVY)
+    c_gt = ws_ph.cell(ph_row, 4, value=total_h)
+    c_gt.font = Font(name="Calibri", bold=True, size=11, color=C_WHITE)
+    c_gt.fill = _fill(C_NAVY)
+    c_gt.border = _border()
+    c_gt.alignment = _align(h="center")
+    _style(ws_ph.cell(ph_row, 5, value="100%"), bold=True, color=C_WHITE,
+           fill_hex=C_NAVY, halign="center")
+    _style(ws_ph.cell(ph_row, 6, value=""), color=C_WHITE, fill_hex=C_NAVY)
+    _style(ws_ph.cell(ph_row, 7, value=""), color=C_WHITE, fill_hex=C_NAVY)
+    ws_ph.row_dimensions[ph_row].height = 24
+
+    for ci, w in [(1, 20), (2, 32), (3, 18), (4, 14), (5, 12), (6, 12), (7, 22)]:
+        ws_ph.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # SHEET 4 — Cost Estimation
+    # ════════════════════════════════════════════════════
+    ws_cost = wb.create_sheet("Cost Estimation")
+    ws_cost.sheet_properties.tabColor = C_GOLD
+    ws_cost.sheet_view.showGridLines = False
+
+    _title_row(ws_cost, "Infrastructure & Cost Estimation", 5, row=1, bg=C_NAVY)
+    _sub_title(ws_cost, "Azure cloud services + third-party monthly/annual costs", 5, row=2, bg=C_GOLD)
+
+    # Summary anchors for Dashboard formulas
+    ws_cost.cell(4, 1, value="Total Monthly Cost").font = _font(bold=True)
+    c_mc = ws_cost.cell(4, 2, value="")
+    c_mc.font = _font(bold=True, size=11)
+    c_mc.fill = _fill(C_DGRAY)
+    c_mc.border = _border()
+    c_mc.alignment = _align(h="center")
+    c_mc.number_format = '"$"#,##0'
+
+    ws_cost.cell(5, 1, value="Total Annual Cost").font = _font(bold=True)
+    c_ac = ws_cost.cell(5, 2, value="")
+    c_ac.font = _font(bold=True, size=11)
+    c_ac.fill = _fill(C_DGRAY)
+    c_ac.border = _border()
+    c_ac.alignment = _align(h="center")
+    c_ac.number_format = '"$"#,##0'
+
+    # Azure services table
+    azure_svcs = safe_list(safe_dict(cost_est).get("azure_costs", [])) if cost_est else []
+    third_party = safe_list(safe_dict(cost_est).get("third_party_costs", [])) if cost_est else []
+
+    ws_cost.row_dimensions[7].height = 22
+    cost_cols = ["Service / Item", "Tier / Plan", "Monthly Cost (USD)",
+                 "Annual Cost (USD)", "Description"]
+    for ci, h in enumerate(cost_cols, 1):
+        c = ws_cost.cell(7, ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    cost_row = 8
+    azure_start = cost_row
+    for svc in azure_svcs:
+        svc = safe_dict(svc)
+        mc_val = safe_int(svc.get("monthly_cost", 0))
+        fill_h = C_LGRAY if (cost_row - azure_start) % 2 == 0 else None
+        _style(ws_cost.cell(cost_row, 1, value=safe_str(svc.get("service", ""))),
+               bold=True, fill_hex=fill_h)
+        _style(ws_cost.cell(cost_row, 2, value=safe_str(svc.get("tier", ""))),
+               halign="center", fill_hex=fill_h)
+        c_mc_cell = ws_cost.cell(cost_row, 3, value=mc_val)
+        _style(c_mc_cell, halign="center", fill_hex=fill_h)
+        c_mc_cell.number_format = '"$"#,##0'
+        # Annual = Monthly * 12 formula
+        c_ac_cell = ws_cost.cell(cost_row, 4, value="=C{r}*12".format(r=cost_row))
+        _style(c_ac_cell, halign="center", fill_hex=fill_h)
+        c_ac_cell.number_format = '"$"#,##0'
+        _style(ws_cost.cell(cost_row, 5, value=safe_str(svc.get("description", ""))),
+               wrap=True, fill_hex=fill_h)
+        ws_cost.row_dimensions[cost_row].height = 18
+        cost_row += 1
+    azure_end = cost_row - 1
+
+    # Third-party separator
+    if third_party:
+        ws_cost.merge_cells(start_row=cost_row, start_column=1, end_row=cost_row, end_column=5)
+        c_sep = ws_cost.cell(cost_row, 1, value="Third-Party Services")
+        c_sep.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c_sep.fill = _fill(C_PURPLE)
+        c_sep.border = _border()
+        ws_cost.row_dimensions[cost_row].height = 20
+        tp_start = cost_row + 1
+        cost_row += 1
+        for tp_svc in third_party:
+            tp_svc = safe_dict(tp_svc)
+            mc_val = safe_int(tp_svc.get("monthly_cost", 0))
+            fill_h = C_LGRAY if (cost_row - tp_start) % 2 == 0 else None
+            _style(ws_cost.cell(cost_row, 1, value=safe_str(tp_svc.get("name", ""))),
+                   bold=True, fill_hex=fill_h)
+            _style(ws_cost.cell(cost_row, 2, value="SaaS/API"), halign="center", fill_hex=fill_h)
+            c_mc_cell = ws_cost.cell(cost_row, 3, value=mc_val)
+            _style(c_mc_cell, halign="center", fill_hex=fill_h)
+            c_mc_cell.number_format = '"$"#,##0'
+            c_ac_cell = ws_cost.cell(cost_row, 4, value="=C{r}*12".format(r=cost_row))
+            _style(c_ac_cell, halign="center", fill_hex=fill_h)
+            c_ac_cell.number_format = '"$"#,##0'
+            _style(ws_cost.cell(cost_row, 5, value=safe_str(tp_svc.get("description", ""))),
+                   wrap=True, fill_hex=fill_h)
+            ws_cost.row_dimensions[cost_row].height = 18
+            cost_row += 1
+        tp_end = cost_row - 1
+        # Totals using SUM formulas
+        total_sum_formula_m = "=SUM(C{s}:C{e})".format(s=azure_start, e=tp_end)
+        total_sum_formula_a = "=SUM(D{s}:D{e})".format(s=azure_start, e=tp_end)
+    else:
+        total_sum_formula_m = "=SUM(C{s}:C{e})".format(s=azure_start, e=azure_end)
+        total_sum_formula_a = "=SUM(D{s}:D{e})".format(s=azure_start, e=azure_end)
+
+    # Totals row
+    ws_cost.merge_cells(start_row=cost_row, start_column=1, end_row=cost_row, end_column=2)
+    c_tlbl = ws_cost.cell(cost_row, 1, value="TOTAL")
+    c_tlbl.font = Font(name="Calibri", bold=True, size=11, color=C_WHITE)
+    c_tlbl.fill = _fill(C_NAVY)
+    c_tlbl.border = _border()
+    c_mc_tot = ws_cost.cell(cost_row, 3, value=total_sum_formula_m)
+    c_mc_tot.font = Font(name="Calibri", bold=True, size=11, color=C_WHITE)
+    c_mc_tot.fill = _fill(C_NAVY)
+    c_mc_tot.border = _border()
+    c_mc_tot.alignment = _align(h="center")
+    c_mc_tot.number_format = '"$"#,##0'
+    c_ac_tot = ws_cost.cell(cost_row, 4, value=total_sum_formula_a)
+    c_ac_tot.font = Font(name="Calibri", bold=True, size=11, color=C_WHITE)
+    c_ac_tot.fill = _fill(C_NAVY)
+    c_ac_tot.border = _border()
+    c_ac_tot.alignment = _align(h="center")
+    c_ac_tot.number_format = '"$"#,##0'
+    _style(ws_cost.cell(cost_row, 5, value=""), color=C_WHITE, fill_hex=C_NAVY)
+    ws_cost.row_dimensions[cost_row].height = 24
+
+    # Now update the summary anchors (C4, C5) to reference totals row
+    ws_cost.cell(4, 2).value = total_sum_formula_m
+    ws_cost.cell(5, 2).value = total_sum_formula_a
+
+    # Also put actual values if we have them (for Dashboard refs that use C4/C5)
+    # Rewrite as direct refs to total row
+    ws_cost.cell(4, 3, value=total_sum_formula_m).number_format = '"$"#,##0'
+    ws_cost.cell(5, 3, value=total_sum_formula_a).number_format = '"$"#,##0'
+
+    for ci, w in [(1, 28), (2, 16), (3, 20), (4, 20), (5, 35)]:
+        ws_cost.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # SHEET 5 — Risk Register
+    # ════════════════════════════════════════════════════
+    ws_risk = wb.create_sheet("Risk Register")
+    ws_risk.sheet_properties.tabColor = C_RED
+    ws_risk.sheet_view.showGridLines = False
+
+    _title_row(ws_risk, "Risk Register & Mitigation Plan", 6, row=1, bg=C_NAVY)
+    _sub_title(ws_risk, "Risk scoring: Impact × Likelihood (1-5 scale). Score ≤ 8 = Low, ≤ 15 = Medium, > 15 = High", 6, row=2, bg=C_RED)
+
+    # Summary anchor for Dashboard
+    ws_risk.cell(4, 1, value="Overall Risk Score").font = _font(bold=True)
+    c_rs = ws_risk.cell(4, 2, value=risk_score)
+    _style(c_rs, bold=True, halign="center", fill_hex=C_DGRAY)
+
+    risks = safe_list(safe_dict(risk_info).get("risks", [])) if risk_info else []
+
+    risk_cols = ["#", "Category", "Risk Title", "Severity", "Impact (1-5)",
+                 "Likelihood (1-5)", "Score (I×L)", "Mitigation Strategy"]
+    ws_risk.row_dimensions[6].height = 22
+    for ci, h in enumerate(risk_cols, 1):
+        c = ws_risk.cell(6, ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center", wrap=True)
+
+    SEV_MAP = {"Low": (1, 2), "Medium": (2, 3), "High": (4, 4), "Critical": (5, 5)}
+    risk_row = 7
+    for ri_i, rk in enumerate(risks, 1):
+        rk = safe_dict(rk)
+        sev = safe_str(rk.get("severity", "Medium"))
+        impact, likelihood = SEV_MAP.get(sev, (3, 3))
+        fill_sev = {"Low": "E2EFDA", "Medium": "FFF3CD", "High": "FDDEDE",
+                    "Critical": "FF6B6B"}.get(sev, C_LGRAY)
+
+        _style(ws_risk.cell(risk_row, 1, value=ri_i), halign="center", fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        _style(ws_risk.cell(risk_row, 2, value=safe_str(rk.get("category", ""))),
+               fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        _style(ws_risk.cell(risk_row, 3, value=safe_str(rk.get("title", ""))),
+               bold=True, fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        c_sev = ws_risk.cell(risk_row, 4, value=sev)
+        c_sev.font = Font(name="Calibri", bold=True, size=10, color="333333")
+        c_sev.fill = _fill(fill_sev)
+        c_sev.border = _border()
+        c_sev.alignment = _align(h="center")
+        c_imp = ws_risk.cell(risk_row, 5, value=impact)
+        _style(c_imp, halign="center", fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        c_lkh = ws_risk.cell(risk_row, 6, value=likelihood)
+        _style(c_lkh, halign="center", fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        # Score formula = Impact × Likelihood
+        c_score = ws_risk.cell(risk_row, 7, value="=E{r}*F{r}".format(r=risk_row))
+        c_score.font = Font(name="Calibri", bold=True, size=10, color=C_NAVY)
+        c_score.fill = _fill(fill_sev)
+        c_score.border = _border()
+        c_score.alignment = _align(h="center")
+        _style(ws_risk.cell(risk_row, 8, value=safe_str(rk.get("mitigation", ""))),
+               wrap=True, fill_hex=C_LGRAY if ri_i % 2 == 0 else None)
+        ws_risk.row_dimensions[risk_row].height = 32
+        risk_row += 1
+
+    for ci, w in [(1, 6), (2, 18), (3, 28), (4, 12), (5, 12), (6, 14), (7, 12), (8, 40)]:
+        ws_risk.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # SHEET 6 — Requirements
+    # ════════════════════════════════════════════════════
+    ws_req = wb.create_sheet("Requirements")
+    ws_req.sheet_properties.tabColor = C_PURPLE
+    ws_req.sheet_view.showGridLines = False
+
+    _title_row(ws_req, "Requirements Register", 5, row=1, bg=C_NAVY)
+    _sub_title(ws_req, "Functional • Non-Functional • Integration requirements extracted by AI", 5, row=2, bg=C_PURPLE)
+
+    # Summary anchor
+    reqs = safe_list(semantic.get("requirements", []))
+    ws_req.cell(4, 1, value="Total Requirements").font = _font(bold=True)
+    c_rq = ws_req.cell(4, 2, value=len(reqs))
+    _style(c_rq, bold=True, halign="center", fill_hex=C_DGRAY)
+
+    req_cols = ["#", "Type", "Title", "Complexity", "Description"]
+    ws_req.row_dimensions[6].height = 22
+    for ci, h in enumerate(req_cols, 1):
+        c = ws_req.cell(6, ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    TYPE_FILL = {"functional": "E8F4FD", "non-functional": "E8F8E8", "integration": "FDF3E8"}
+    req_row = 7
+    for ri_q, rq in enumerate(reqs, 1):
+        rq = safe_dict(rq)
+        rq_type = safe_str(rq.get("type", "functional"))
+        fill_h = TYPE_FILL.get(rq_type, C_LGRAY)
+        _style(ws_req.cell(req_row, 1, value=ri_q), halign="center", fill_hex=fill_h)
+        c_type = ws_req.cell(req_row, 2, value=rq_type.title())
+        c_type.font = Font(name="Calibri", bold=True, size=9, color="333333")
+        c_type.fill = _fill(fill_h)
+        c_type.border = _border()
+        c_type.alignment = _align(h="center")
+        _style(ws_req.cell(req_row, 3, value=safe_str(rq.get("title", ""))),
+               bold=True, fill_hex=fill_h)
+        _style(ws_req.cell(req_row, 4, value=safe_str(rq.get("complexity", ""))),
+               halign="center", fill_hex=fill_h)
+        _style(ws_req.cell(req_row, 5, value=safe_str(rq.get("description", ""))),
+               wrap=True, fill_hex=fill_h)
+        ws_req.row_dimensions[req_row].height = 40
+        req_row += 1
+
+    # Count formula per type
+    req_row += 1
+    for rq_type, fill_h in TYPE_FILL.items():
+        f = "=COUNTIF(B7:B{e},\"{t}\")".format(e=req_row - 2, t=rq_type.title())
+        ws_req.cell(req_row, 2, value=rq_type.title() + " Count:").font = _font(bold=True)
+        c_cnt = ws_req.cell(req_row, 3, value=f)
+        _style(c_cnt, bold=True, halign="center", fill_hex=fill_h)
+        req_row += 1
+
+    for ci, w in [(1, 6), (2, 18), (3, 30), (4, 14), (5, 55)]:
+        ws_req.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # SHEET 7 — Milestones
+    # ════════════════════════════════════════════════════
+    ws_ms = wb.create_sheet("Milestones")
+    ws_ms.sheet_properties.tabColor = C_TEAL
+    ws_ms.sheet_view.showGridLines = False
+
+    _title_row(ws_ms, "Project Milestones & Delivery Plan", 5, row=1, bg=C_NAVY)
+    _sub_title(ws_ms, "Delivery timeline with cumulative progress tracking", 5, row=2, bg=C_TEAL)
+
+    ms_cols = ["#", "Milestone", "Target Week", "Cumulative Hrs", "Description"]
+    ws_ms.row_dimensions[4].height = 22
+    for ci, h in enumerate(ms_cols, 1):
+        c = ws_ms.cell(4, ci, value=h)
+        c.font = Font(name="Calibri", bold=True, size=10, color=C_WHITE)
+        c.fill = _fill(C_NAVY)
+        c.border = _border()
+        c.alignment = _align(h="center")
+
+    milestones = safe_list(time_est.get("milestones", []))
+    ms_row = 5
+    cum_hrs = 0
+    for mi, m in enumerate(milestones, 1):
+        m = safe_dict(m)
+        wk = safe_int(m.get("week", 0))
+        # Approximate cumulative hours from weekly rate
+        total_wks = safe_int(str(safe_str(time_est.get("duration_weeks", "1"))).split()[0]) or 1
+        cum_hrs_val = int(total_h * wk / max(total_wks, 1))
+        fill_h = C_LGRAY if mi % 2 == 0 else None
+        _style(ws_ms.cell(ms_row, 1, value=mi), halign="center", fill_hex=fill_h)
+        _style(ws_ms.cell(ms_row, 2, value=safe_str(m.get("name", ""))), bold=True, fill_hex=fill_h)
+        _style(ws_ms.cell(ms_row, 3, value=wk), halign="center", fill_hex=fill_h)
+        c_cum = ws_ms.cell(ms_row, 4, value=cum_hrs_val)
+        _style(c_cum, halign="center", fill_hex=fill_h)
+        _style(ws_ms.cell(ms_row, 5, value=safe_str(m.get("description", ""))),
+               wrap=True, fill_hex=fill_h)
+        ws_ms.row_dimensions[ms_row].height = 28
+        ms_row += 1
+
+    for ci, w in [(1, 6), (2, 30), (3, 14), (4, 16), (5, 50)]:
+        ws_ms.column_dimensions[get_column_letter(ci)].width = w
+
+    # ════════════════════════════════════════════════════
+    # Save & return
+    # ════════════════════════════════════════════════════
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  PDF PROPOSAL GENERATOR (ECI Template)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2052,17 +2738,29 @@ def show_results():
         for m in milestones:
             m = safe_dict(m)
             st.markdown("- **Week " + str(safe_int(m.get("week"))) + "** — " + safe_str(m.get("name")) + ": " + safe_str(m.get("description")))
-        # Excel download
+        # Excel downloads
         st.markdown("---")
-        excel_data = generate_time_excel(te, se)
-        if excel_data:
-            st.download_button(
-                "📥 Download Time Estimate (Excel)",
-                data=excel_data,
-                file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True, type="primary", key="dl_time_xlsx",
-            )
+        dl_time_cols = st.columns(2)
+        with dl_time_cols[0]:
+            excel_data = generate_time_excel(te, se)
+            if excel_data:
+                st.download_button(
+                    "📥 Download Time Estimate (Excel)",
+                    data=excel_data,
+                    file_name="ECI_Time_Estimate_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True, type="primary", key="dl_time_xlsx",
+                )
+        with dl_time_cols[1]:
+            lenox_data = generate_lenox_excel(te, se, ce, ri, r)
+            if lenox_data:
+                st.download_button(
+                    "📊 Download Full Estimation (Lenox)",
+                    data=lenox_data,
+                    file_name="ECI_Estimation_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True, type="secondary", key="dl_lenox_time",
+                )
 
     # ── Cost (Infrastructure) ──
     with tab_list[2]:
@@ -2209,7 +2907,7 @@ def show_results():
 
     # Downloads row
     st.markdown('<div class="shdr" style="font-size:1rem;"><span class="shdr-i">📥</span> Downloads</div>', unsafe_allow_html=True)
-    dl_cols = st.columns(3)
+    dl_cols = st.columns(4)
     with dl_cols[0]:
         xl_data = generate_time_excel(te, se)
         if xl_data:
@@ -2218,13 +2916,20 @@ def show_results():
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                use_container_width=True, type="primary", key="bdl_xl")
     with dl_cols[1]:
+        lenox_data = generate_lenox_excel(te, se, ce, ri, r)
+        if lenox_data:
+            st.download_button("📋 Full Estimation (Lenox)", data=lenox_data,
+                               file_name="ECI_Estimation_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, type="primary", key="bdl_lenox")
+    with dl_cols[2]:
         pdf_data = generate_proposal_pdf(r)
         if pdf_data:
             st.download_button("📄 Proposal (PDF)", data=pdf_data,
                                file_name="ECI_Proposal_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".pdf",
                                mime="application/pdf",
                                use_container_width=True, type="primary", key="bdl_pdf")
-    with dl_cols[2]:
+    with dl_cols[3]:
         st.download_button("📋 Full Data (JSON)", data=json.dumps(r, indent=2, default=str),
                            file_name="ECI_Data_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json",
                            mime="application/json", use_container_width=True, key="bdl")
